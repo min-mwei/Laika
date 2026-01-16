@@ -1,15 +1,33 @@
-# Laika: AIBrowser for Safari (Design Doc)
+# Laika: Secure AI Agent Embedded in Safari (AIBrowser Design Doc)
 
-Laika is a macOS Safari extension + companion app that embeds a **secure AI agent** into Safari, turning intent into safe actions inside your existing browsing sessions. Safari still talks directly to websites; Laika keeps agent decisioning and safety filtering on-device by default. If you opt into BYO cloud models (OpenAI/Anthropic), Laika sends only redacted context packs—never cookies or session tokens—and keeps Policy Gate enforcement local.
+Laika is a macOS Safari extension + companion app that embeds a **secure AI agent** in Safari, turning intent into safe actions inside your existing browsing sessions. Safari still talks directly to websites; Laika keeps agent decisioning and safety filtering on-device by default. If you opt into BYO cloud models (OpenAI/Anthropic), Laika sends only redacted context packs—never cookies or session tokens—and keeps Policy Gate enforcement local.
+
+**What “on-device by default” means**
+
+- Safari talks directly to websites; Laika does not proxy your browsing through a cloud browser.
+- Your live session state (cookies/session tokens) and typed secrets stay on your Mac; Laika doesn’t upload your session to a cloud browser or model provider by default.
+- If you enable BYO cloud models, Laika sends only a **redacted context pack** (never cookies/session tokens) and keeps Policy Gate enforcement local.
 
 ## Status
 
 This is a design draft for an MVP. It focuses on security posture, system boundaries, and contracts. Specific implementation details (exact Safari APIs, storage schema, model selection) should be validated with prototypes.
 
+Convergence note: further changes should be driven by probe/prototype results (Safari/WebExtension behavior, IPC limits, sandboxed local inference), not more design expansion.
+
+Next steps (prototype checklist):
+
+- Run the Safari capability probe harness across Safari/macOS versions and update the feasibility matrix from observed results.
+- Prove sandboxed local inference viability in the intended process (app vs XPC worker) without extra entitlements.
+- Validate IPC constraints: payload caps/latency, chunking, and cancellation/backpressure end-to-end.
+- Walk permission UX flows on a clean Safari profile + Private windows and confirm the “permission failure ladder”.
+- Fault-inject Stop/Panic paths (tab close mid-step, worker suspended, Safari crash/reopen) and confirm “no surprise replays”.
+
 ## At a glance
 
 - Two execution surfaces: `Isolated` (default) + `My Browser` Connector (explicit opt-in)
 - On-device decisioning (default): planning + safety filtering run on your Mac; optional BYO OpenAI/Anthropic via redacted context packs
+- No cloud browser: automation executes locally (Safari tabs or local Isolated WKWebView); cloud inference is optional and uses redacted context packs
+- Compute placement: local inference runs in sandboxed Swift (app/XPC); the extension stays thin (observe/act + UI + routing)
 - Security moat: tool-only contract + Policy Gate + capability tokens + injection hardening
 - Resumable automation: append-only SQLite run log; pause/resume; no surprise replays
 - Context management: SQLite context store + checkpoints; no general RAG/vector DB
@@ -20,6 +38,16 @@ This is a design draft for an MVP. It focuses on security posture, system bounda
 - The most valuable work happens inside authenticated sessions (research tools, CRMs, finance portals) where you can’t safely “just paste everything into a chatbot”.
 - Agentic browsing is uniquely attackable: prompt injection and data exfiltration are the default failure modes unless the architecture enforces boundaries.
 - Real automation must be long-running and interruptible: humans step in, tabs suspend, pages change, and work has to resume safely.
+
+## Why Not A Cloud Browser
+
+Cloud-executed browsers can be useful, but they are harder to secure and harder to sell for sensitive workflows: remote browser instances, remote rendering/streaming, screenshot/DOM storage, auth bridging, and multi-tenant isolation all expand the attack surface and enterprise optics risk.
+
+Laika’s stance is “privacy by architecture”:
+
+- **No cloud browser**: automation executes locally in Safari (or the local Isolated surface), so your trusted sessions and IP stay on your Mac.
+- **Cloud models are optional BYO**: when enabled, Laika sends only redacted context packs and never sends cookies/session tokens.
+- **Security is visible in the UX**: Policy Gate reason codes, action previews, retention/redaction defaults, and “what gets sent” summaries are first-class UI.
 
 ## Goals
 
@@ -47,6 +75,7 @@ This is a design draft for an MVP. It focuses on security posture, system bounda
 - **Laika**: the macOS app + Safari extension product.
 - **AIBrowser**: the “agentic browser” capability inside Laika (observe + assist + autopilot).
 - **Agent Orchestrator**: Swift component that runs the plan/execute loop.
+- **Agent Core**: the Swift-side “engine” (Policy Gate + Orchestrator + Storage + Models) that is the source of truth and performs all privileged work (GPU inference, file parsing, encryption).
 - **Tool Router**: Swift component that dispatches validated tool calls to JS/native implementations.
 - **Policy Gate**: Swift policy engine that decides `allow` / `ask` / `deny` for each tool call.
 - **Tool**: a typed, versioned command the model can request (e.g., `browser.click`).
@@ -81,6 +110,7 @@ This is a design draft for an MVP. It focuses on security posture, system bounda
 ### 1) Security + Privacy (default posture)
 
 - **On-device decisioning (default)**: agent planning/tool use and safety filtering run on-device. Safari still loads websites normally; by default Laika does **not** send page content or Safari session state (cookies/session tokens/form values) to third-party model providers for agentic decisioning.
+- **No cloud browser**: Laika does not proxy your browsing through a remote browser by default; automation runs inside your local Safari sessions (Connector) or the local Isolated surface.
 - **Optional cloud models (explicit opt-in)**: users can connect their own OpenAI/Anthropic accounts for higher-quality planning/writing. When enabled, Laika sends only a redacted **context pack** (never cookies/tokens), and still enforces Policy Gate + local input/output classification to reduce exfiltration risk.
 - **Prompt injection resilience**:
   - Web pages are treated as *untrusted content*; they cannot directly instruct the agent.
@@ -166,6 +196,11 @@ For simplicity, the diagram below focuses on the Safari-integrated “My Browser
 └───────────────────────────────┬───────────────────────────┘
                                 │ native messaging (typed)
                                 ▼
+┌──── Native App Extension (native messaging handler) ────────┐
+│  Schema validation, routing, backpressure; no heavy work     │
+└───────────────────────────────┬─────────────────────────────┘
+                                │ XPC / app IPC (typed)
+                                ▼
 ┌────────────────── Laika macOS App (sandboxed) ─────────────┐
 │  UI (toolbar popover/overlay + companion window), Policy Gate, Audit Log │
 │  Agent Orchestrator (plan/execute loop)                    │
@@ -188,8 +223,9 @@ For simplicity, the diagram below focuses on the Safari-integrated “My Browser
   - Model Runtime: runs local models (text + optional vision) and manages context windows.
   - UI: companion window, approvals, action previews, audit views, settings, model management.
 - **Optional XPC Services (Swift)**
-  - “LLM Worker” service with **no network** entitlement.
-  - “Browser Tool Worker” service with limited, auditable command surface.
+  - “LLM Worker” service (GPU/Metal allowed) with **no network** entitlement for on-device inference.
+  - “Artifact/File Worker” service for parsing and handling user-selected files (security-scoped bookmarks), and for encrypting/decrypting stored artifacts.
+  - “Browser Tool Worker” service with limited, auditable command surface (optional extra isolation for DOM/action tooling logic).
 
 ## Data Flow / Trust Boundaries
 
@@ -199,7 +235,7 @@ Core rule: treat web content as untrusted; keep authorization and policy decisio
 Untrusted Web Page (DOM/text/visuals)
    │
    ▼
-Content Script (extract/act) ──► Background Script ──► Native Messaging ──► Swift App
+Content Script (extract/act) ──► Background Script ──► Native Messaging ──► Native Bridge ──► Swift App
    ▲                                                                      │
    └──────────────────── tool results / observations ◄────────────────────┤
                                                                           ▼
@@ -238,12 +274,14 @@ This mirrors the mental model users expect from modern “browser agent” produ
 2. **Authorize session**: Laika shows what it will access/do and requests one-time authorization (capability tokens + policy in effect).
 3. **Monitor/intervene**: Laika operates in a dedicated task tab (or dedicated Safari window). User can take over by interacting, or stop instantly by closing the task tab/window or hitting `Stop/Panic`.
 
-Authorization summary (must be user-facing, before step 2 completes):
+Authorization summary (must be user-facing, before step 2 completes). Reuse this exact layout in the popover, companion window, and any remote approval UI:
 
-- Verified `origin`(s) and the current site mode (`Assist` vs `Autopilot`).
-- Allowed action categories (click/type/submit/download/paste) and which ones still require per-step approval.
-- What will be logged (audit trail), what will be persisted (SQLite), and how to “forget this site/run”.
+- Verified attachment target (this Safari tab/window) and the verified `origin`(s).
+- Selected mode (`Observe`/`Assist`/`Autopilot`) and the allowed action categories (click/type/submit/download/paste).
+- What always requires approval (and what is gesture-required vs. background-safe).
+- What will be logged (audit trail) and what will be persisted (SQLite), plus the retention/“forget this run/site” controls.
 - What may be sent to any model provider: `on-device only` by default; if cloud is enabled, show a preview of the redacted context pack and explicitly state that cookies/session tokens never leave the device.
+- How to stop instantly (`Stop/Panic` and “close the task tab/window”), and how to revoke authorization.
 
 Implementation note: Safari Web Extensions do not currently expose Chrome-like tab group APIs. Preserve the same mental model via a dedicated window and/or a consistent tab-title prefix (e.g., `[Laika] <task>`), plus a “Laika Tasks” entry in the companion window.
 
@@ -336,11 +374,29 @@ Common transitions:
 
 UI mapping (principle): the toolbar popover shows the current state and “Stop/Resume”; the overlay is used only for previews/confirmations; the companion window is the primary place to view the full run log and queue.
 
+### Stop / Panic reliability (must always work)
+
+Stop is a product promise, not a button: it must work even when Safari suspends the extension, the task tab is gone, or the user is not looking at the popover.
+
+- **Stop (per-run)**: cancels the active run, revokes its capability tokens, and cancels in-flight tool work. It should not lock future runs.
+- **Panic (global)**: immediately cancels all runs, revokes all outstanding `My Browser` capability tokens, and puts the app into `locked` until the user explicitly unlocks/re-authorizes.
+- **Always-available entry points**:
+  - toolbar popover `Stop/Panic`
+  - companion window `Stop/Panic` (primary reliability surface)
+  - optional menubar item (quick Panic)
+  - optional global hotkey (if feasible within macOS/Safari constraints)
+  - remote control (if enabled) must always be able to Panic
+- **Watchdog on disconnects**: if the extension/content script disconnects mid-step (service worker suspension, tab close, navigation unload), the app transitions the run to `paused` (or `cancelled` if the task tab was explicitly closed), revokes tokens, and requires a fresh reattach + `observe_dom` before any further mutating action.
+- **“Close the task tab/window to stop” (Safari-tight)**:
+  - When Laika opens a task tab/window, record `{runId, windowId?, tabId, createdByLaika: true}` in the run log and display a clear `[Laika] <task>` title prefix.
+  - Treat `tabs.onRemoved` / window close events for that recorded target as an immediate Stop signal.
+  - If Safari crashes/restarts and events are missing, the run resumes as `paused` and requires the user to reattach; never “continue in the background” without an active, attached target.
+
 ### Single-writer Persistence (SQLite ownership)
 
-- The **macOS app** is the single writer to the SQLite database (run log, checkpoints, user decisions).
-- The extension (content/background/popup) **does not write** to SQLite; it sends events/requests via native messaging and renders state returned by the app.
-- Store the SQLite DB and encrypted artifacts in an **App Group container** so the app and its extension bridge can share persistence, but keep write coordination in the app to avoid corruption and complex locking.
+- The **Swift-side Agent Core** (Policy Gate + Orchestrator + Storage) is the single writer to SQLite (run log, checkpoints, user decisions).
+- The **Native Bridge** and the JS extension (content/background/popup) **do not write** to SQLite; they send events/requests via IPC and render state streamed from the Agent Core.
+- Store the SQLite DB and encrypted artifacts in an **App Group container** so the app and its bridge can access persistence, but keep write coordination in the Agent Core to avoid corruption and complex locking.
 
 ### App Group Data Security (encryption + access boundaries)
 
@@ -439,21 +495,56 @@ Safari’s constraints are real, but they can be a trust advantage for users and
 
 ### Safari Extension Architecture (Apple model)
 
-On macOS, treat a Safari Web Extension as three cooperating pieces with **separate sandboxes**:
+Apple explicitly models a Safari web extension as three parts that operate independently in their own **sandboxed environments** (see: https://developer.apple.com/documentation/safariservices/messaging-between-the-app-and-javascript-in-a-safari-web-extension):
 
 - **Containing macOS app**: durable storage (SQLite), model runtime (local), policy gate, and the primary “full” UI (companion window).
 - **Safari Web Extension (JS/HTML/CSS)**: content scripts + background/service worker + toolbar popover UI.
-- **Native app extension bridge**: the native message handler that receives extension messages and forwards them into the app (and optionally XPC workers).
+- **Native app extension (“Native Bridge”)**: mediates between the app and the extension’s JavaScript. It receives native messages (Swift entry point: `NSExtensionRequestHandling.beginRequest(with:)`), validates schemas, applies backpressure, and forwards typed requests into the app/XPC workers. Keep it thin; do not run heavy inference or file parsing here. (Xcode’s Safari Extension App template generates a `SafariWebExtensionHandler` for this role.)
 
-For cross-process persistence, prefer an **App Group container** so the app and extension can share the SQLite database and other artifacts safely.
+Safari-specific constraints that affect Laika’s design (same Apple doc):
+
+- **Content scripts cannot call native messaging**: route `content script → background/service worker → browser.runtime.sendNativeMessage()`.
+- Safari ignores the `application.id` argument for `sendNativeMessage()`/`connectNative()` and always targets the containing app’s native app extension.
+- In Safari 17+, messages can include a profile identifier (`SFExtensionProfileKey`) so you can scope stored state per Safari profile / web app.
+
+For cross-process persistence (app ↔ native app extension), use an **App Group container**. Apple notes the app and the native app extension can’t share data via their private containers and should use app groups to share data.
 
 Note: “share” refers to storage location and IPC boundaries, not decrypted access. Keep encryption keys in the app and stream only redacted state to extension UI surfaces.
+
+### Viability evidence (links)
+
+- Apple (packaging + distribution): https://developer.apple.com/documentation/safariservices/creating-a-safari-web-extension
+- Apple (native messaging + app groups): https://developer.apple.com/documentation/safariservices/messaging-between-the-app-and-javascript-in-a-safari-web-extension
+- Apple (permissions UX + per-site grants): https://developer.apple.com/documentation/safariservices/managing-safari-web-extension-permissions
+- Apple (MV3/service-worker lifecycle + nonpersistent background): https://developer.apple.com/documentation/safariservices/optimizing-your-web-extension-for-safari
+- Prior art (market shape): https://manus.im/blog/manus-browser-operator
+- Prior art (secure extension↔native connection patterns): https://support.1password.com/1password-browser-connection-security/
+- App Store examples (Safari extensions shipped as apps): https://apps.apple.com/us/app/adguard-mini/id1440147259, https://apps.apple.com/us/app/adblock-for-safari/id1402042596, https://apps.apple.com/us/app/adblock-plus-for-safari-abp/id1432731683
 
 ### Manifest Version Decision (MV3-first)
 
 - Prefer **Manifest V3** (service-worker background) to align with modern WebExtension lifecycles and to force durability into the macOS app (SQLite) rather than a long-lived background page.
+- Safari unloads nonpersistent background pages/service workers when the user isn’t interacting; treat extension memory as ephemeral and persist state in the app (see: https://developer.apple.com/documentation/safariservices/optimizing-your-web-extension-for-safari).
 - Treat the background as **ephemeral regardless**: even if MV2 is used temporarily for compatibility, do not rely on long-lived extension memory for correctness.
 - Avoid MV2-only patterns and APIs; Safari already disallows some common MV2-era approaches (e.g., blocking `webRequest`).
+
+### Safari API feasibility (prototype matrix)
+
+Several MVP-critical capabilities must be validated against Safari’s actual WebExtension behavior. Treat this table as the “truth contract”: if Safari can’t do X reliably, Laika ships the explicit fallback Y and stays honest about constraints.
+
+| Need | Safari API / permission (to validate) | Expected prompt | Failure mode | Fallback UX |
+| --- | --- | --- | --- | --- |
+| MV3 background suspend/wake | MV3 service worker lifecycle | none | worker suspended; messages dropped; timers stopped | app is source of truth; `run.sync` on reconnect; pause mutating steps until state is reattached |
+| Just-in-time site access | `activeTab` + optional host permissions | Safari per-site prompt | permission lapses on navigation/suspension | show `permission-needed`; re-grant CTA; stay in `Observe` until restored |
+| Dedicated task tab/window | `tabs.create` / `windows.create` | none | cannot create or focus reliably | open a regular task tab; fall back to companion window “Tasks” list + title prefixing |
+| Viewport capture | `tabs.captureVisibleTab` (or alternative) | capture prompt (varies) | API unavailable or blocked on sensitive/restricted pages | disable visual mode; rely on DOM extraction; offer “Open in Isolated surface” with explicit consent if screen capture is enabled |
+| Downloads | `downloads` API (or click-to-download) | download prompt (site/Safari) | downloads API unsupported; file save requires user | use click-to-download flows with explicit approval; manage artifacts in Isolated surface via app download manager |
+| Context menu actions | `contextMenus` | none | API missing/limited | keep popover as the primary entry point; use keyboard shortcut instead of context menu |
+| Private window detection | Safari/private APIs may be limited | none | cannot detect reliably | default to conservative: disable Connector unless explicitly enabled; never persist if Private is suspected/unknown |
+| Safari web apps (macOS 15+) | WebExtensions in web app containers | permission prompt differs | extension not available or partitioning differs | treat as separate `profileId`; if unsupported, show “Observe-only” with explanation and offer Isolated surface |
+| Chrome-only features (e.g., tab groups) | N/A on Safari | n/a | feature absent | dedicated task tab/window + companion “Tasks” list; avoid tab-group copy in UI |
+
+Prototype note: keep a small “capability probe” extension harness that records observed behavior per Safari version and drives documentation updates.
 
 ### Safari/WebExtension Constraints (design for “graceful failure”)
 
@@ -505,6 +596,8 @@ Gesture-gated actions are an implementation footgun unless treated as a hard con
 
 Treat **content scripts as untrusted-adjacent**: they should not talk to native code directly. Route all native communication through the background/popup layer.
 
+Safari-specific note (Apple): content scripts can’t call `browser.runtime.sendNativeMessage()`; only background scripts or extension pages can. Safari also ignores the `application.id` argument and routes native messages to the containing app’s native app extension. See: https://developer.apple.com/documentation/safariservices/messaging-between-the-app-and-javascript-in-a-safari-web-extension
+
 ```text
 Untrusted page
   │ (DOM read/act)
@@ -515,11 +608,44 @@ Content script (isolated world)
 Background/service worker + toolbar popover UI
   │ browser.runtime.sendNativeMessage()
   ▼
-Native app extension bridge (message handler)
-  │ XPC / direct calls
+Native app extension (native messaging handler)
+  │ IPC (typed; App Group queue or XPC)
   ▼
-macOS app (Policy Gate + Orchestrator + SQLite + Local Models)
+Agent Core (Swift: Policy Gate + Orchestrator + SQLite + Models)
+  │
+  ├─ XPC: LLM Worker (on-device inference; GPU/Metal allowed; no network)
+  └─ XPC: Artifact/File Worker (user-selected files; parsing; encryption)
 ```
+
+**App → extension push (macOS, optional)**: for immediate UI updates, the extension can open a native port with `browser.runtime.connectNative()`, and the containing app can push messages via `SFSafariApplication.dispatchMessage(withName:toExtensionWithIdentifier:userInfo:)` (see: https://developer.apple.com/documentation/safariservices/messaging-between-the-app-and-javascript-in-a-safari-web-extension). Treat pushes as best-effort; the extension should still be able to pull state via `sendNativeMessage()` after suspension/wake.
+
+### IPC for GPU compute + file system access (viability notes)
+
+Safari WebExtensions cannot access the GPU or the file system directly in a way that is suitable for local models and durable storage. Laika’s design keeps privileged operations in sandboxed Swift processes and uses Apple-supported IPC:
+
+- **Compute placement (non-negotiable)**:
+  - DOM reads/writes run in **content scripts** (`observe_dom`, handle resolution, click/type execution).
+  - Planning, policy, and all model inference run in the **Agent Core** and/or an **LLM Worker** XPC service.
+  - The extension must never depend on WebGPU/GPU availability for correctness; GPU acceleration is an internal optimization inside Swift processes (Core ML / MLX / Metal).
+- **JS → native bridge (supported)**: the extension uses `browser.runtime.sendNativeMessage()` to reach the containing app’s native app extension handler. This is the intended, App Store-safe path for WebExtension ↔ native communication on Safari.
+- **Native bridge → Agent Core (IPC)**: forward requests to the Agent Core over typed IPC. Use an App Group-backed request/response queue as the reliability baseline; add XPC for lower latency where it proves stable in prototypes.
+- **Native bridge must stay thin**: validate schemas, enforce backpressure, and forward. Avoid long-running inference or file parsing inside the bridge process to reduce the risk of Safari killing the extension host.
+- **GPU-backed local inference lives in the app (or an XPC worker)**:
+  - The Agent Core (single source of truth) calls an `LLM Worker` XPC service for inference. That worker may use Core ML / MLX / Metal for GPU acceleration and ships with **no network** entitlement.
+  - This keeps model execution out of the JS environment and makes compute scheduling/budgets enforceable in one place.
+- **File system access lives in the app (or an XPC worker)**:
+  - The extension never receives raw file paths or security-scoped bookmarks.
+  - User file reads/writes (PDF parsing, exports) go through an `Artifact/File Worker` that holds security-scoped access and writes encrypted artifacts into the app container/App Group.
+  - The extension UI only references artifacts by opaque IDs and renders app-streamed, redacted previews.
+- **Where the Agent Core runs**: MVP can run it inside the Laika app process (kept running while tasks execute). A hardened deployment can move the Agent Core into a dedicated helper process so the UI can quit without breaking runs; in both cases, the bridge talks to the Agent Core over typed IPC and never exposes GPU/FS access to JS.
+- **IPC budgets (hard limits)**:
+  - Treat native messaging as “small typed JSON”, not a bulk transport. Enforce strict size caps per message and per tool result.
+  - `observe_dom` must be aggressively budgeted (cap candidate elements, truncate text, omit raw HTML, omit form values).
+  - Screenshots (if enabled) must be downsampled/compressed in JS before any transfer; large blobs should be chunked with `{requestId, chunkIndex, totalChunks, sha256}` and reassembled/verified in Swift.
+  - Prefer “store in Swift, reference by ID” over sending large payloads repeatedly; the extension should reference `artifactId`s and render app-streamed redacted previews.
+- **Cancellation/backpressure across IPC**:
+  - Cancellation is end-to-end: `tool.cancel(requestId)` must propagate Agent Core → native bridge → background → content script; each hop should stop work and return `CANCELLED` if possible.
+  - If MV3 suspension prevents delivery, Agent Core treats the disconnect as `UNAVAILABLE`, revokes capability tokens, and pauses the run (no retries of side effects). On reconnect, JS must treat unknown `requestId`s as “do not execute” unless re-issued by the Agent Core.
 
 ### Lifecycle & Performance Notes
 
@@ -527,12 +653,65 @@ macOS app (Policy Gate + Orchestrator + SQLite + Local Models)
 - Persist run state in SQLite so long-running automations can pause/resume; rehydrate state by replaying events from the run log.
 - Keep content scripts stateless; on resume, re-observe and reacquire handles rather than trusting stale references.
 
+### App lifecycle semantics (App Store-friendly)
+
+Long-running automation is only “durable” if lifecycle behavior is explicit. Laika should make it clear what continues and what pauses.
+
+- **Agent Core must be running**: all planning, policy, logging, and (optionally) local inference live in the Agent Core. If it is not running, the extension enters `app-offline` and stays in observe-only UI with a one-click `Open Laika`.
+- **“My Browser” runs require Safari + an attached tab**:
+  - If Safari quits, the task tab closes, or the tab can’t be reattached, the run transitions to `paused` (never “continue headless”).
+  - On resume, require a fresh `observe_dom` and explicit re-authorization for `My Browser` (capability tokens are not persisted across restarts).
+- **Mac sleep / screen lock / user logout**:
+  - Treat sleep/lock/logout as a pause boundary for mutating actions. On wake/unlock/login, reattach and re-observe before acting.
+  - Never queue up side effects “to run later” while the machine is asleep; timeouts should fail safe and require user confirmation to continue.
+- **Always-on vs only-while-open (user choice)**:
+  - Default: runs execute only while Laika is open (simple, App Store-friendly).
+  - Optional: “Always available” mode as a user-enabled login item/menubar app so the Agent Core stays available for remote monitoring/start. This must be explicit opt-in with clear battery/privacy implications and a one-click Panic/disable.
+
 ### Permissions Strategy (Safari-first)
 
 - Prefer minimal `host_permissions`; avoid `all_urls` unless there is a clear user benefit and a strong safety story.
 - Use `activeTab` for just-in-time access and `optional_permissions` for escalation (e.g., enabling `Assist`/`Autopilot` on a site).
 - Mirror Safari’s permission UX: show “permission needed” state in the toolbar popover and route the user to Safari’s per-site grant UI.
 - Treat `activeTab` access as **ephemeral**: permissions can lapse across navigation, suspension, or time. Tool calls should fail with `PERMISSION_REQUIRED` and the UI should offer a one-click “re-grant” path.
+
+### Permission UX flows (Safari-specific; exact paths)
+
+Safari permission UX differs from Chrome/Firefox and can be hard to deep-link. Laika should ship explicit flows with graceful fallbacks.
+
+**First-run: read-only on current site (default)**
+
+1. User opens the toolbar popover → sees `Observe/Summarize`.
+2. If the site is not yet granted, show `permission-needed` with a single CTA: `Enable on this website`.
+3. If Safari shows a prompt/menu, the user grants per-site access (typically with choices like single-use / “for the day” / all websites); otherwise show step-by-step instructions: `Safari → Settings… → Extensions → Laika → Allow on <site>` (keep copy short; provide a `Copy instructions` link).
+4. Once granted, run `observe_dom` and answer in Read-only mode.
+
+**Enable Connector: “Connect to this site”**
+
+1. User asks for an action → Laika proposes enabling control and shows the authorization summary (origins, allowed actions, logging, what gets sent).
+2. CTA: `Connect to this site` (requests the needed site permission / optional host permission if applicable; Safari may offer “allow once/for the day/always” choices).
+3. CTA: `Authorize once` (mints capability tokens scoped to `{origin, tabId, mode, allowedTools, ttl}`).
+4. Laika opens/attaches to the task tab/window and starts Assist/Autopilot under Policy Gate.
+
+**Re-grant after `activeTab` lapses**
+
+1. A tool call returns `PERMISSION_REQUIRED`.
+2. Popover switches to `permission-needed` with a single CTA: `Restore access`.
+3. On click, request access again (or route to Safari settings if the prompt can’t be shown); once restored, re-`observe_dom` and continue (never re-execute the previous mutating tool call blindly).
+
+**When Safari won’t deep-link to the right settings page**
+
+- The popover should fall back to clear, short copy (“Open Safari Settings → Extensions → Laika”) and keep the user in a usable Read-only mode.
+- Provide a safe alternative path: `Open in Workspace` (Isolated surface) or `Tell me what to do manually`.
+
+**Permission failure ladder (users never feel stuck)**
+
+```text
+Blocked by Safari / missing permission / restricted page
+  → Stay Read-only (Observe/Summarize)
+  → Offer “Open in Workspace” (Isolated surface)
+  → Offer step-by-step manual guidance (with safe citations)
+```
 
 ### Profiles and Multi-window Behavior
 
@@ -551,7 +730,7 @@ Private browsing should behave like a hard “no persistence” boundary:
   - No SQLite/App Group writes (no run log, no checkpoints, no artifacts).
   - No cross-run memory; no exports unless the user explicitly saves a redacted summary to a non-private run.
   - Prefer local-only models; if a cloud model is enabled globally, require a separate opt-in for Private windows.
-- UX: detect Private context (if available) and show a “Private window” banner explaining what is disabled and why.
+- UX: Private detection may be unreliable; default to conservative behavior when unsure (Connector off; observe-only). When Private is detected (or explicitly enabled), show a “Private window” banner that states: “No logs, no saved artifacts, no cloud calls unless you opt in for Private.”
 
 ### Restricted Pages and Special URL Schemes
 
@@ -567,12 +746,28 @@ Some Safari surfaces are non-scriptable or intentionally blocked (e.g., `safari:
 - If an exception is required, scope it to specific extension IDs and require an authenticated handshake at the tool protocol layer.
 - Treat all inbound messages as untrusted and validate schemas; never accept tool requests originating from the page.
 
-### Operator UX (authorization + monitoring)
+### Connector UX (authorization + monitoring)
 
 - Use dedicated task tab(s) for “My Browser” runs so the user can monitor and intervene.
 - Make “Stop” immediate (revoke capability tokens; cancel outstanding tool work). Also provide a global **Panic** control that revokes tokens, cancels runs, and temporarily locks “My Browser” until re-authorized.
 - Treat user interaction with the tab as takeover; pause automation until explicitly resumed.
 - Show approvals/denials in trusted UI (popover/companion) with a clear Laika visual signature and the verified target `origin`; use the in-page overlay for previews/highlights, not as an authority source.
+
+### User-facing language (make it feel native)
+
+Users should not have to learn internal architecture terms (“surfaces”, “tokens”, “AgentFlow”). The UI labels should carry the meaning:
+
+- `Isolated` surface (internal) → **Workspace** (app-owned; safe default; separate from Safari sessions)
+- `My Browser` Connector (internal) → **Connect to this site** (toggle) + **Authorize** (one-time)
+- `Observe` mode → **Read-only**
+- `Assist` mode → **Ask before acting**
+- `Autopilot` mode → **Auto (safe actions only)**
+
+Default popover path (one primary interaction):
+
+1. User opens the popover and asks a question → Laika runs **Read-only** `Observe/Summarize`.
+2. If the user asks Laika to *do* something, Laika prompts: **Connect to this site** (explains the Connector + shows the authorization summary).
+3. User taps **Authorize** → Laika opens/attaches to the task tab/window, previews actions, and requests approvals as needed.
 
 ### Toolbar Popover Layout (default entry points)
 
@@ -605,14 +800,14 @@ The toolbar item should communicate state even when the popover is closed:
 
 - `idle`: no badge; click opens popover.
 - `permission-needed`: badge `!`; popover shows what’s missing and routes to Safari per-site grants.
-- `app-offline`: badge `×`; popover shows `Open Laika` and explains that automation requires the macOS app to be running.
+- `app-offline`: badge `×`; popover shows `Open Laika` and explains that automation requires Laika (Agent Core) to be running.
 - `running`: badge indicates active run (e.g., `RUN` or step count) and the current mode.
 - `paused` / `awaiting_approval`: badge indicates a wait (e.g., `…`); popover offers the pending approval/gesture action.
 - `takeover`: badge indicates manual control (e.g., `||`); popover offers `Resume automation`.
 
 Update rules:
 
-- Badge is derived from the run state in the macOS app (single source of truth).
+- Badge is derived from the run state in the Agent Core (single source of truth).
 - Permission-needed state overrides mode/running badges.
 
 ### First-run Onboarding (in Safari)
@@ -626,9 +821,35 @@ On first open of the popover (and whenever Laika is disabled), show a 1–2 step
 
 The toolbar popover, in-page overlay, and companion window must render the same run state.
 
-- **Source of truth**: the macOS app (derived from the SQLite run/event log).
-- **Ownership**: the companion window owns the run queue; the popover is a remote control; the overlay is display + lightweight confirmation UI.
-- **Conflict resolution**: the app serializes commands; takeover and stop are highest priority and preempt pending actions.
+- **Source of truth**: the Agent Core (derived from the SQLite run/event log).
+- **Ownership**: the Agent Core owns the run queue; the companion window is the primary UI; the popover is a remote control; the overlay is display + lightweight confirmation UI.
+- **Conflict resolution**: the Agent Core serializes commands; takeover and stop are highest priority and preempt pending actions.
+
+### Agent Core ⇄ extension state streaming (redacted + cache-safe)
+
+The extension must be able to render the full UX (popover/overlay badges, run card, pending approvals) without reading SQLite/App Group files directly.
+
+**Agent Core → extension: minimal run-state payload (redacted)**
+
+- Transport: pushed on changes (preferred) and/or pulled via `run.sync(lastSeenEventId)`.
+- Size budget: keep each payload small (e.g., ≤ 32–64 KB) so popover opens instantly.
+- Must include (illustrative fields):
+  - `appState`: `online|offline|locked`
+  - `site`: `{origin, mode, connectorEnabled, permissionState}`
+  - `run`: `{runId, status, attachedTarget?, lastActionSummary?, nextStepPreview?, pendingApproval?, lastReasonCode?}`
+  - `controls`: `{canStop, canResume, needsGesture?, openLaikaAvailable}`
+  - `policy`: `{decision?, reasonCode?, requiresGesture?}` for the *next* action only (not the full log)
+- Must never include:
+  - cookies/session tokens, request headers, or raw network data
+  - `capabilityToken`s, encryption keys, or Keychain material
+  - raw DOM/HTML, full-page text dumps, screenshots, or typed form values (unless the user explicitly enables a specific “share visual context” feature and the payload is still redacted/budgeted)
+
+**Extension caching rules**
+
+- Default: memory-only cache, cleared when the service worker/popup is torn down.
+- Optional: `storage.session` may store only non-sensitive routing pointers (e.g., `runId`, `lastSeenEventId`, `uiPrefs`), never redacted content or approvals.
+- Never use `storage.sync` for run state; avoid `storage.local` for anything tied to browsing/session data.
+- Private windows: hard no-persist (memory-only; no App Group writes; no `storage.session`).
 
 ### Run Concurrency (tabs + runs)
 
@@ -656,7 +877,7 @@ Laika can be implemented in two common Safari-supported shapes; the recommended 
 
 - **Safari Web Extension + Swift host app (recommended)**:
   - JavaScript uses standard WebExtension APIs (`browser.*`) for content scripts, background scripts, tab state, and storage.
-  - Swift host app handles native functionality (models, storage, policy) via Safari’s native messaging bridge (e.g., a `SafariWebExtensionHandler`).
+  - Swift host app handles native functionality (models, storage, policy) via Safari’s native messaging bridge (the native app extension handler generated by the Safari Extension App template).
 - **Safari App Extension (macOS-only)**:
   - Swift extension code can communicate with injected scripts using Safari App Extension messaging APIs (e.g., page-level message passing).
   - Useful when you want a tighter coupling to Safari’s native extension model, at the cost of portability.
@@ -696,9 +917,9 @@ All JS⇄Swift communication uses a **strictly typed, versioned tool protocol**,
 
 **Connection lifecycle + resync**
 
-- Use a long-lived `runtime.connect` port (popover/overlay ↔ background) and a single native-messaging channel (background ↔ app).
+- Use a long-lived `runtime.connect` port (popover/overlay ↔ background) and a single native-messaging channel (background ↔ native bridge).
 - On reconnect (service worker suspension, UI reopen), send `run.sync(lastSeenEventId)`; Swift replies with missing events + current authoritative run state.
-- If the macOS app is not running, enter `app-offline`: disable automation, keep observe-only UI copy, and offer a one-click “Open Laika”.
+- If the native side (Laika app/agent core) is not reachable, enter `app-offline`: disable automation, keep observe-only UI copy, and offer a one-click “Open Laika”.
 - **“Open Laika” mechanics (App Store-safe)**: on user click, attempt a deterministic bring-to-front flow:
   - Preferred: open an app-registered URL scheme (e.g., `laika://open?source=safari`) or Universal Link that the app handles, so the OS launches/activates Laika.
   - Fallback: show clear instructions (“Open Laika.app to continue”) and keep the extension in observe-only mode.
@@ -870,6 +1091,20 @@ These are intentionally short; the full source of truth should be JSON Schema in
 - Exclude hidden/inert nodes (`display:none`, `visibility:hidden`, `aria-hidden`, zero-size) unless explicitly requested for accessibility debugging.
 - On sensitive sites, prefer derived aggregates (tables/sums) over raw text; optionally disable screenshots.
 
+**Performance notes (Safari/battery-friendly)**
+
+`observe_dom` must be cheap enough to run repeatedly on real pages:
+
+- **Cap candidates**: select only the top N interactive elements (e.g., 100–300) prioritized by visibility, clickability, and proximity to the viewport; avoid “everything in the DOM”.
+- **Avoid layout thrash**: minimize `getBoundingClientRect()` calls; compute bounding boxes only for shortlisted candidates and batch reads in a single frame when possible.
+- **Incremental by default**: prefer `scope=viewport` (or a known container) for re-observations; widen to `scope=document` only when needed (e.g., repeated `NOT_FOUND`, pagination, or an explicit user request).
+- **Huge DOMs / virtualized lists**: treat results as partial; rely on `find` + scroll + re-observe loops rather than trying to snapshot the whole list at once.
+
+**Iframe policy (explicit)**
+
+- Same-origin iframes: extract normally (within budgets) and attribute citations to the frame origin.
+- Cross-origin iframes: include a placeholder entry with `{frameOrigin?, blocked: true, reasonCode}` and never attempt extraction/actions inside the frame unless a dedicated, explicitly allowed frame script exists. The planner must treat blocked frames as “manual step required” surfaces.
+
 **Non-DOM surfaces (PDF/canvas/iframes)**
 
 - **PDF viewers**: prefer explicit download → parse locally in the app; store artifacts encrypted with retention controls.
@@ -930,14 +1165,35 @@ When Laika explains a proposed click/type target, it should ground the explanati
 Laika’s default configuration minimizes escape hatches:
 
 - **No network for the LLM worker** (local inference only).
+- **GPU-backed local inference**: the LLM worker may use Core ML / MLX / Metal; no network entitlement is required for GPU acceleration.
 - If cloud models are enabled, run them in a separate “Cloud Model” worker with the minimum network entitlements, and require redaction/egress filtering before any request leaves the device.
 - **No arbitrary file system access**: only app container + user-selected files via security-scoped bookmarks.
 - **Keychain isolation**: secrets are stored only in Keychain items scoped to the app.
 - **Separated processes**:
   - UI/app process (handles user interaction)
-  - LLM worker (runs inference; no network)
+  - LLM worker (runs inference; no network; GPU/Metal allowed)
+  - Artifact/File worker (parsing, exports, encryption; security-scoped file access)
   - Optional Cloud Model worker (network; BYO key; redaction + audit)
   - Optional “Indexer” worker (SQLite maintenance + compaction; optional embeddings; no network)
+
+### Network entitlements (make them explicit)
+
+Safari itself loads websites; Laika’s native processes should request network access only when a feature truly needs it, and keep “no-network” boundaries meaningful:
+
+- **Must be no-network**:
+  - LLM worker (local inference)
+  - Policy Gate (decisioning)
+  - Indexer/compaction worker (SQLite maintenance)
+- **May require network (feature-gated)**:
+  - Isolated surface (WKWebView) if Laika is acting as a browser in-app
+  - Optional Cloud Model worker (BYO OpenAI/Anthropic)
+  - Model updates/downloadable models (if supported)
+  - Remote start/monitor relay (if supported)
+
+Recommended placement:
+
+- Put networked features into their own process boundaries (e.g., Cloud Model worker; optional Isolated surface worker) so the Agent Core + LLM worker can remain no-network.
+- If MVP runs Agent Core inside the UI app process, treat “no network” as a **policy** constraint (defense-in-depth) until the Agent Core is moved into a no-network helper process.
 
 ### Capability-Based Permissions
 
@@ -994,6 +1250,18 @@ Site classification inputs (highest precedence first):
 - Heuristics (URL patterns, presence of password fields, “payment”/“transfer” affordances)
 - Optional curated lists (local, signed, updatable)
 
+### Policy Gate implementation (v1: testable, not magic)
+
+Start with a concrete, reproducible v1:
+
+- **Hard-coded invariants**: a small set of “never allow” rules (e.g., credential exfil, payments/transfers, cross-site carry from sensitive origins) that ship as code and are unit-tested.
+- **Data-driven matrix**: a compact allow/ask/deny matrix stored as JSON (versioned in-repo) with user overrides stored in SQLite (`site_policy_override`). This keeps behavior explainable and patchable without inventing a full DSL on day one.
+- **Minimal site classification**:
+  - User labels (always win) exposed in the popover/companion as a simple “This is a sensitive site” toggle.
+  - Heuristics: password fields, common auth/payment affordances, and known “bank/health/identity” URL patterns.
+  - Optional curated lists: signed, local, updatable (enterprise policy packs later).
+- **Deterministic decision function**: every decision is reproducible from `{origin, mode, tool, requiresGesture, context}` → `{allow|ask|deny, reasonCode, requiresGesture}`. This is required for unit tests and for explaining decisions to users.
+
 ### Policy Reason Codes (stable + queryable)
 
 Every policy decision should include:
@@ -1021,11 +1289,41 @@ Approvals should be explicit, revocable, and scoped so users don’t have to cli
 - **Rollback/branching**: implemented by moving the run head to a prior checkpoint/event (history is preserved unless the user wipes it).
 - **User controls**: per-site “forget” (wipe SQLite rows + artifacts), global retention window, export.
 
+#### Typed text logging (`browser.type`) (audit-usable, secret-safe)
+
+By default, Laika should never persist raw typed text. For audit usefulness, log a redacted representation:
+
+- `tool`: `browser.type`
+- `target`: `{origin, tabId, documentId, navigationGeneration, handleFingerprint}`
+- `field`: `{inputType?, autocomplete?, labelHint?, formHint?}` (untrusted metadata, length-capped)
+- `text`: `{redacted: true, length: N, newlineCount?, charClassHint?}` (no plaintext)
+- `sensitivity`: `{fieldClass, textClass, combinedClass}` (see classifier below)
+- `approval`: `{decision, reasonCode, requiresGesture, approvedByUser: bool}`
+- Optional (only when `combinedClass=non_sensitive` and user enables “verbose audits”): a short prefix preview (e.g., first 8 chars) and/or a keyed HMAC for dedupe. Never store previews/hashes for credential-like fields.
+
 ### Credentials / PII Handling
 
 - Treat password fields and common PII fields (SSN, DOB, account numbers) as sensitive; never log their values and avoid sending them to the model by default.
 - For `browser.type`, require explicit user approval when typing into any credential-like field; prefer user manual entry or system autofill.
 - Never store raw credentials; rely on system Keychain/autofill where possible.
+
+#### Sensitive field classifier (pre-type / pre-log / pre-egress)
+
+Before Laika types, logs, or includes user-entered values in any model context pack, run a deterministic classifier on the *field* and a lightweight classifier on the *text*.
+
+- **Field classifier inputs** (handle metadata from trusted extraction):
+  - `input.type` (`password`, `email`, `tel`, `number`), `autocomplete` (`current-password`, `one-time-code`, `cc-number`, `cc-csc`, etc.)
+  - label/placeholder/name/id patterns (e.g., `password`, `otp`, `ssn`, `routing`, `account`)
+  - form context (presence of password fields nearby, login URLs, payment affordances)
+- **Text classifier inputs** (local-only):
+  - simple heuristics (length, digit patterns, email/phone detection) and/or a small local Guard/Filter model
+- **Outputs**:
+  - `fieldClass`: `credential|payment|pii|sso|generic`
+  - `textClass`: `secret_like|pii_like|normal`
+  - `combinedClass` and a stable `reasonCode` used by the Policy Gate (e.g., `P_ASK_CREDENTIAL_FIELD`, `P_DENY_PAYMENT_FIELD_AUTOPILOT`)
+- **User overrides**:
+  - per-site override: “treat this site as sensitive” / “read-only by default”
+  - per-field allowlist: user can approve a specific field fingerprint for this origin/run (durably logged and revocable)
 
 ### Entitlements & System Permissions (principles)
 
@@ -1296,6 +1594,38 @@ Overlays must not hijack the page or leak data across origins:
 - Restricted pages/schemes (`safari://`, settings/new-tab, extension pages): verify “cannot automate here” messaging and safe fallbacks.
 - App Group boundaries: extension cannot read decrypted artifacts or keys; state is streamed redacted from the app.
 - Safari web apps (macOS 15+): confirm profileId scoping, permission prompts, and graceful failure when unsupported.
+- Safari capability probe: maintain a small harness that exercises required APIs/permissions per Safari version and records expected fallbacks (keeps the feasibility matrix honest).
+- Fault injection: service worker suspension, tab close mid-step, app restart, Safari crash/reopen; validate “no surprise replays” and reliable Stop/Panic.
+- `observe_dom` stress: huge DOMs, virtualized tables, many iframes; confirm budgets, incremental scoping, and CPU/battery guardrails.
+
+### Safari capability probe plan (source of truth)
+
+Turn the feasibility matrix into something executable:
+
+- A small “probe” extension mode that runs a fixed suite and writes a JSON report `{safariVersion, macOSVersion, results[]}`.
+- Probe categories (minimum):
+  - MV3 suspend/wake behavior and message delivery guarantees
+  - `activeTab` / optional permission prompts and re-grant behavior
+  - `windows.create` / `tabs.create` (dedicated task window/tab)
+  - viewport capture (`tabs.captureVisibleTab` or confirmed alternatives)
+  - downloads behavior (API vs click-to-download)
+  - context menu support and limitations
+  - private window detection reliability
+  - Safari web app container behavior / partitioning
+  - local inference sandbox viability (Core ML / Metal): confirm it runs in the intended process (app vs XPC) with acceptable latency and without additional entitlements
+- Each probe must record: required permission, expected prompt, observed behavior, failure mode, and the fallback UX that Laika will use.
+- The doc should be updated from probe results (not memory): when Safari behavior differs by version, the matrix must call it out explicitly.
+
+### Prototype acceptance targets (initial; validate and tune)
+
+Set measurable goals so “feels native” and “safe” are testable:
+
+- Popover time-to-interactive (P95): ≤ 150 ms (cached) / ≤ 300 ms (cold).
+- `observe_dom` runtime (P95): ≤ 250 ms for viewport scope on typical pages; ≤ 800 ms on heavy pages (bounded by budgets).
+- Stop/Panic latency (P95): ≤ 200 ms from user action → token revocation + UI state update (best effort if Safari is suspended).
+- Message payload caps: run-state payload ≤ 64 KB; tool results ≤ 256 KB; larger data must be chunked or stored as artifacts referenced by ID.
+- Screenshot budgets (if enabled): downsampled to a fixed max dimension; hard cap on captures per minute; no screenshots on sensitive sites by default.
+- Battery guardrails: bounded model calls per minute, bounded DOM scans per minute, and a “low power mode” that forces Read-only + disables visual capture.
 
 ### Policy + tool contract validation
 
@@ -1317,6 +1647,8 @@ Overlays must not hijack the page or leak data across origins:
 ## Appendix: Training/Fine-Tuning SLMs (Jamba, Qwen3 Small) for Tool Use
 
 Laika benefits from a small, fast “tool-using” model that can robustly operate the browser tools under tight constraints. This section outlines a practical path to train/fine-tune models such as **Jamba** or **Qwen3 small** variants for reliable tool use.
+
+For on-device model hosting/runtimes, model management, and the cloud training → signed model update pipeline, see `docs/local_llm.md`.
 
 ### 1) Define the Tool Contract (the “API surface”)
 
