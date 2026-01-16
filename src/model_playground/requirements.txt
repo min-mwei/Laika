@@ -1,0 +1,4 @@
+torch>=2.2
+transformers>=4.54.0
+accelerate>=0.33.0
+safetensors>=0.4.5

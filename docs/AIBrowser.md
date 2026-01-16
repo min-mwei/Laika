@@ -1415,7 +1415,8 @@ If the user connects OpenAI/Anthropic (or other providers), treat cloud calls as
 ### Runtime Options (Apple Silicon-friendly)
 
 - Core ML models for tight OS integration and sandboxed deployment.
-- MLX / llama.cpp / MLC as development backends; ship as Core ML when stable.
+- MLX for early validation: package 4-bit MLX models produced by `src/local_llm_quantizer` and load them in the LLM Worker via `mlx-swift`.
+- llama.cpp / MLC as alternative development backends; ship as Core ML when stable.
 - Quantization for on-device performance (e.g., 4–8 bit), with per-model quality/perf profiles.
 
 ### Model Updates
