@@ -21,6 +21,8 @@
 		6285AFB42F1AFB46004C2F8B /* popover.html in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAD2F1AFB46004C2F8B /* popover.html */; };
 		6285AFB52F1AFB46004C2F8B /* tests in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAE2F1AFB46004C2F8B /* tests */; };
 		6285AFB62F1AFB46004C2F8B /* popover.js in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAF2F1AFB46004C2F8B /* popover.js */; };
+		B6F0A2C5D4E5F60718293A71 /* options.html in Resources */ = {isa = PBXBuildFile; fileRef = B6F0A2C7D4E5F60718293A71 /* options.html */; };
+		B6F0A2C6D4E5F60718293A71 /* options.js in Resources */ = {isa = PBXBuildFile; fileRef = B6F0A2C8D4E5F60718293A71 /* options.js */; };
 		6285AFB72F1AFB46004C2F8B /* content_script.js in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFB02F1AFB46004C2F8B /* content_script.js */; };
 		6285AFB82F1AFB46004C2F8B /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFB12F1AFB46004C2F8B /* manifest.json */; };
 		6285AFB92F1AFB46004C2F8B /* lib in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFB22F1AFB46004C2F8B /* lib */; };
@@ -69,8 +71,10 @@
 		6285AFA12F1AFB45004C2F8B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		6285AFAC2F1AFB46004C2F8B /* background.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = background.js; path = ../../../extension/background.js; sourceTree = "<group>"; };
 		6285AFAD2F1AFB46004C2F8B /* popover.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = popover.html; path = ../../../extension/popover.html; sourceTree = "<group>"; };
+		B6F0A2C7D4E5F60718293A71 /* options.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = options.html; path = ../../../extension/options.html; sourceTree = "<group>"; };
 		6285AFAE2F1AFB46004C2F8B /* tests */ = {isa = PBXFileReference; lastKnownFileType = folder; name = tests; path = ../../../extension/tests; sourceTree = "<group>"; };
 		6285AFAF2F1AFB46004C2F8B /* popover.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = popover.js; path = ../../../extension/popover.js; sourceTree = "<group>"; };
+		B6F0A2C8D4E5F60718293A71 /* options.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = options.js; path = ../../../extension/options.js; sourceTree = "<group>"; };
 		6285AFB02F1AFB46004C2F8B /* content_script.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = content_script.js; path = ../../../extension/content_script.js; sourceTree = "<group>"; };
 		6285AFB12F1AFB46004C2F8B /* manifest.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = manifest.json; path = ../../../extension/manifest.json; sourceTree = "<group>"; };
 		6285AFB22F1AFB46004C2F8B /* lib */ = {isa = PBXFileReference; lastKnownFileType = folder; name = lib; path = ../../../extension/lib; sourceTree = "<group>"; };
@@ -154,8 +158,10 @@
 			children = (
 				6285AFAC2F1AFB46004C2F8B /* background.js */,
 				6285AFAD2F1AFB46004C2F8B /* popover.html */,
+				B6F0A2C7D4E5F60718293A71 /* options.html */,
 				6285AFAE2F1AFB46004C2F8B /* tests */,
 				6285AFAF2F1AFB46004C2F8B /* popover.js */,
+				B6F0A2C8D4E5F60718293A71 /* options.js */,
 				6285AFB02F1AFB46004C2F8B /* content_script.js */,
 				6285AFB12F1AFB46004C2F8B /* manifest.json */,
 				6285AFB22F1AFB46004C2F8B /* lib */,
@@ -276,6 +282,8 @@
 				6285AFB72F1AFB46004C2F8B /* content_script.js in Resources */,
 				6285AFB52F1AFB46004C2F8B /* tests in Resources */,
 				6285AFB42F1AFB46004C2F8B /* popover.html in Resources */,
+				B6F0A2C5D4E5F60718293A71 /* options.html in Resources */,
+				B6F0A2C6D4E5F60718293A71 /* options.js in Resources */,
 				6285AFB92F1AFB46004C2F8B /* lib in Resources */,
 				6285AFB82F1AFB46004C2F8B /* manifest.json in Resources */,
 				6285AFB32F1AFB46004C2F8B /* background.js in Resources */,

@@ -5,6 +5,8 @@ var statusEl = document.getElementById("native-status");
 var goalInput = document.getElementById("goal");
 var sendButton = document.getElementById("send");
 var chatLog = document.getElementById("chat-log");
+var settingsButton = document.getElementById("open-settings");
+var closeButton = document.getElementById("close-sidecar");
 
 var lastObservation = null;
 var planValidator = window.LaikaPlanValidator || {
@@ -17,6 +19,27 @@ function logDebug(text) {
   if (typeof console !== "undefined" && console.debug) {
     console.debug("[Laika]", text);
   }
+}
+
+function openSettings() {
+  if (typeof browser !== "undefined" && browser.runtime) {
+    if (browser.runtime.openOptionsPage) {
+      browser.runtime.openOptionsPage();
+      return;
+    }
+    if (browser.runtime.getURL && browser.tabs && browser.tabs.create) {
+      browser.tabs.create({ url: browser.runtime.getURL("options.html") });
+      return;
+    }
+  }
+  appendMessage("system", "Unable to open settings.");
+}
+
+function closeSidecar() {
+  if (typeof browser === "undefined" || !browser.runtime) {
+    return;
+  }
+  browser.runtime.sendMessage({ type: "laika.sidecar.hide" });
 }
 
 function setStatus(text) {
@@ -243,5 +266,11 @@ sendButton.addEventListener("click", async function () {
 });
 
 (function init() {
+  if (settingsButton) {
+    settingsButton.addEventListener("click", openSettings);
+  }
+  if (closeButton) {
+    closeButton.addEventListener("click", closeSidecar);
+  }
   checkNative();
 })();

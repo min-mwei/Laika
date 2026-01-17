@@ -13,6 +13,9 @@
 
   var handleCounter = 0;
   var handleMap = new Map();
+  var SIDECAR_ID = "laika-sidecar";
+  var SIDECAR_FRAME_ID = "laika-sidecar-frame";
+  var SIDECAR_WIDTH = 360;
 
   function ensureHandle(element) {
     if (!element) {
@@ -61,6 +64,80 @@
       width: rect.width,
       height: rect.height
     };
+  }
+
+  function applySidecarPlacement(container, side) {
+    var placement = side === "left" ? "left" : "right";
+    container.setAttribute("data-sidecar-side", placement);
+    container.style.left = placement === "left" ? "0" : "auto";
+    container.style.right = placement === "right" ? "0" : "auto";
+    if (placement === "left") {
+      container.style.borderRight = "1px solid rgba(0, 0, 0, 0.12)";
+      container.style.borderLeft = "none";
+    } else {
+      container.style.borderLeft = "1px solid rgba(0, 0, 0, 0.12)";
+      container.style.borderRight = "none";
+    }
+  }
+
+  function ensureSidecar(side) {
+    var root = document.body || document.documentElement;
+    if (!root) {
+      return null;
+    }
+    var container = document.getElementById(SIDECAR_ID);
+    if (!container) {
+      container = document.createElement("div");
+      container.id = SIDECAR_ID;
+      container.style.position = "fixed";
+      container.style.top = "0";
+      container.style.bottom = "0";
+      container.style.width = SIDECAR_WIDTH + "px";
+      container.style.maxWidth = "70vw";
+      container.style.zIndex = "2147483647";
+      container.style.background = "#f7f9fc";
+      container.style.boxShadow = "0 0 24px rgba(0, 0, 0, 0.2)";
+      container.style.pointerEvents = "auto";
+      container.style.boxSizing = "border-box";
+      var frame = document.createElement("iframe");
+      frame.id = SIDECAR_FRAME_ID;
+      frame.title = "Laika AIAgent";
+      frame.style.width = "100%";
+      frame.style.height = "100%";
+      frame.style.border = "0";
+      frame.style.background = "transparent";
+      if (typeof browser !== "undefined" && browser.runtime && browser.runtime.getURL) {
+        frame.src = browser.runtime.getURL("popover.html");
+      }
+      container.appendChild(frame);
+      root.appendChild(container);
+    }
+    applySidecarPlacement(container, side);
+    container.style.display = "block";
+    return container;
+  }
+
+  function toggleSidecar(side) {
+    var container = document.getElementById(SIDECAR_ID);
+    if (container && container.style.display !== "none") {
+      container.style.display = "none";
+      return { status: "ok", visible: false };
+    }
+    ensureSidecar(side);
+    return { status: "ok", visible: true };
+  }
+
+  function showSidecar(side) {
+    ensureSidecar(side);
+    return { status: "ok", visible: true };
+  }
+
+  function hideSidecar() {
+    var container = document.getElementById(SIDECAR_ID);
+    if (container) {
+      container.style.display = "none";
+    }
+    return { status: "ok", visible: false };
   }
 
   function collectVisibleText(root, maxChars) {
@@ -189,6 +266,15 @@
       }
       if (message.type === "laika.tool") {
         return Promise.resolve(applyTool(message.toolName, message.args || {}));
+      }
+      if (message.type === "laika.sidecar.toggle") {
+        return Promise.resolve(toggleSidecar(message.side));
+      }
+      if (message.type === "laika.sidecar.show") {
+        return Promise.resolve(showSidecar(message.side));
+      }
+      if (message.type === "laika.sidecar.hide") {
+        return Promise.resolve(hideSidecar());
       }
       return Promise.resolve({ status: "error", error: "unknown_type" });
     });
