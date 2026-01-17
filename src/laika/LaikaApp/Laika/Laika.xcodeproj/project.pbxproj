@@ -194,6 +194,7 @@
 			buildPhases = (
 				6285AF962F1AFB45004C2F8B /* Sources */,
 				6285AF972F1AFB45004C2F8B /* Frameworks */,
+				B6F0A2C1D4E5F60718293A70 /* Ensure Model Assets */,
 				6285AF982F1AFB45004C2F8B /* Resources */,
 			);
 			buildRules = (
@@ -282,6 +283,27 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		B6F0A2C1D4E5F60718293A70 /* Ensure Model Assets */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/../../extension/lib/models/.gitkeep",
+				"$(SRCROOT)/../../../local_llm_quantizer/convert_qwen3_to_mlx_4bit.py",
+				"$(SRCROOT)/../../../local_llm_quantizer/requirements.txt",
+			);
+			name = "Ensure Model Assets";
+			outputPaths = (
+				"$(SRCROOT)/../../extension/lib/models/Qwen3-0.6B-MLX-4bit/model.safetensors",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nEXTENSION_ROOT=\"${SRCROOT}/../../extension\"\nMODEL_DIR=\"${EXTENSION_ROOT}/lib/models/Qwen3-0.6B-MLX-4bit\"\nif [ -f \"${MODEL_DIR}/model.safetensors\" ]; then\n  echo \"Laika: MLX model already present at ${MODEL_DIR}\"\n  exit 0\nfi\n\nif [ ! -d \"${EXTENSION_ROOT}\" ]; then\n  echo \"Laika: extension root not found at ${EXTENSION_ROOT}\"\n  exit 1\nfi\n\nREPO_ROOT=\"$(cd \"${EXTENSION_ROOT}/../..\" && pwd)\"\nQUANTIZER_DIR=\"${REPO_ROOT}/local_llm_quantizer\"\nif [ ! -d \"${QUANTIZER_DIR}\" ]; then\n  ALT_DIR=\"${SRCROOT}/../../../local_llm_quantizer\"\n  if [ -d \"${ALT_DIR}\" ]; then\n    QUANTIZER_DIR=\"${ALT_DIR}\"\n  else\n    echo \"Laika: local_llm_quantizer not found at ${QUANTIZER_DIR}\"\n    exit 1\n  fi\nfi\n\nmkdir -p \"${EXTENSION_ROOT}/lib/models\"\n\nVENV=\"${QUANTIZER_DIR}/.venv\"\nPYTHON=\"${PYTHON:-python3}\"\nif ! command -v \"${PYTHON}\" >/dev/null 2>&1; then\n  echo \"Laika: python not found (set PYTHON or install python3)\"\n  exit 1\nfi\n\nif [ ! -x \"${VENV}/bin/python\" ]; then\n  echo \"Laika: creating venv at ${VENV}\"\n  \"${PYTHON}\" -m venv \"${VENV}\"\n  \"${VENV}/bin/pip\" install -r \"${QUANTIZER_DIR}/requirements.txt\"\nfi\n\necho \"Laika: generating MLX model into ${MODEL_DIR}\"\n\"${VENV}/bin/python\" \"${QUANTIZER_DIR}/convert_qwen3_to_mlx_4bit.py\" --out-dir \"${MODEL_DIR}\" --overwrite\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		6285AF7B2F1AFB45004C2F8B /* Sources */ = {

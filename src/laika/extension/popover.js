@@ -24,11 +24,21 @@ function setStatus(text) {
   logDebug("status: " + text);
 }
 
+function labelForRole(role) {
+  if (role === "user") {
+    return "you";
+  }
+  if (role === "system") {
+    return "Laika";
+  }
+  return role;
+}
+
 function appendMessage(role, text) {
   var message = document.createElement("div");
   message.className = "message";
   var label = document.createElement("strong");
-  label.textContent = role;
+  label.textContent = labelForRole(role);
   var body = document.createElement("div");
   body.textContent = text;
   message.appendChild(label);
@@ -36,6 +46,20 @@ function appendMessage(role, text) {
   chatLog.appendChild(message);
   chatLog.scrollTop = chatLog.scrollHeight;
   return message;
+}
+
+function explainMissingContext() {
+  appendMessage("system", "No page context available. Open a webpage and try again, or paste the key info here.");
+}
+
+function isObservationEmpty(observation) {
+  if (!observation) {
+    return true;
+  }
+  var text = (observation.text || "").trim();
+  var title = (observation.title || "").trim();
+  var elements = Array.isArray(observation.elements) ? observation.elements : [];
+  return text.length === 0 && title.length === 0 && elements.length === 0;
 }
 
 function formatToolCall(action) {
@@ -112,12 +136,23 @@ async function checkNative() {
 }
 
 async function observePage() {
-  var result = await browser.runtime.sendMessage({
-    type: "laika.observe",
-    options: { maxChars: 1600, maxElements: 40 }
-  });
+  var result;
+  try {
+    result = await browser.runtime.sendMessage({
+      type: "laika.observe",
+      options: { maxChars: 1600, maxElements: 40 }
+    });
+  } catch (error) {
+    throw new Error("no_context");
+  }
+  if (!result || typeof result.status === "undefined") {
+    throw new Error("no_context");
+  }
   if (result.status !== "ok") {
     throw new Error(result.error || "observe_failed");
+  }
+  if (isObservationEmpty(result.observation)) {
+    throw new Error("no_context");
   }
   return result.observation;
 }
@@ -172,7 +207,6 @@ sendButton.addEventListener("click", async function () {
   goalInput.value = "";
   sendButton.disabled = true;
 
-  appendMessage("system", "Observing page...");
   try {
     lastObservation = await observePage();
     appendMessage("system", "Planning with local model...");
@@ -198,7 +232,11 @@ sendButton.addEventListener("click", async function () {
       }
     });
   } catch (error) {
-    appendMessage("system", "Error: " + error.message);
+    if (error && (error.message === "no_context" || error.message === "no_active_tab")) {
+      explainMissingContext();
+    } else {
+      appendMessage("system", "Error: " + error.message);
+    }
   } finally {
     sendButton.disabled = false;
   }

@@ -19,6 +19,9 @@ Copy the model directory into the extension bundle assets:
 
 - `src/laika/extension/lib/models/Qwen3-0.6B-MLX-4bit`
 
+If the model directory is missing, the extension build runs `src/local_llm_quantizer/convert_qwen3_to_mlx_4bit.py`
+to populate it (requires Python + dependencies and an HF download on first run).
+
 ## 2) Build and run the macOS app + extension
 
 Open the Xcode project:

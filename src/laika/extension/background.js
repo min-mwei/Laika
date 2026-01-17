@@ -17,7 +17,15 @@ async function handleObserve(options) {
   if (!tab || typeof tab.id === "undefined") {
     return { status: "error", error: "no_active_tab" };
   }
-  return browser.tabs.sendMessage(tab.id, { type: "laika.observe", options: options || {} });
+  try {
+    var result = await browser.tabs.sendMessage(tab.id, { type: "laika.observe", options: options || {} });
+    if (!result || typeof result.status === "undefined") {
+      return { status: "error", error: "no_context" };
+    }
+    return result;
+  } catch (error) {
+    return { status: "error", error: "no_context" };
+  }
 }
 
 async function handleTool(toolName, args) {
