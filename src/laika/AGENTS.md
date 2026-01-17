@@ -6,7 +6,7 @@ This directory is reserved for the Safari extension, macOS companion app, and th
 ## Primary references
 - `docs/AIBrowser.md` for architecture and safety expectations.
 - `src/laika/PLAN.md` for the validation plan.
-- `src/model_playground/README.md` for local model setup.
+- `src/local_llm_quantizer/README.md` for MLX 4-bit model conversion details.
 
 ## Constraints to preserve
 - Treat all web content as untrusted input.
@@ -19,7 +19,9 @@ This directory is reserved for the Safari extension, macOS companion app, and th
 - `src/laika/app` for Swift app code.
 - `src/laika/extension` for Safari Web Extension code.
 - `src/laika/model` for local model bridge glue.
+- `src/laika/app/Sources/LaikaServer` for the legacy local HTTP bridge (no longer used by the extension).
+- `src/laika/LaikaApp` for the Xcode macOS app + Safari extension project.
 
 ## Model integration defaults
-- Prefer local inference via `src/model_playground` over cloud inference.
+- Prefer local inference via `mlx-swift` with MLX 4-bit model assets produced by `src/local_llm_quantizer`.
 - If a cloud fallback is requested, make it opt-in and pass only redacted context packs.

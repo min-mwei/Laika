@@ -1,0 +1,668 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		6285AF832F1AFB45004C2F8B /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6285AF822F1AFB45004C2F8B /* AppDelegate.swift */; };
+		6285AF872F1AFB45004C2F8B /* Main.html in Resources */ = {isa = PBXBuildFile; fileRef = 6285AF852F1AFB45004C2F8B /* Main.html */; };
+		6285AF892F1AFB45004C2F8B /* Icon.png in Resources */ = {isa = PBXBuildFile; fileRef = 6285AF882F1AFB45004C2F8B /* Icon.png */; };
+		6285AF8B2F1AFB45004C2F8B /* Style.css in Resources */ = {isa = PBXBuildFile; fileRef = 6285AF8A2F1AFB45004C2F8B /* Style.css */; };
+		6285AF8D2F1AFB45004C2F8B /* Script.js in Resources */ = {isa = PBXBuildFile; fileRef = 6285AF8C2F1AFB45004C2F8B /* Script.js */; };
+		6285AF8F2F1AFB45004C2F8B /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6285AF8E2F1AFB45004C2F8B /* ViewController.swift */; };
+		6285AF922F1AFB45004C2F8B /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 6285AF902F1AFB45004C2F8B /* Main.storyboard */; };
+		6285AF942F1AFB45004C2F8B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6285AF932F1AFB45004C2F8B /* Assets.xcassets */; };
+		6285AF9B2F1AFB45004C2F8B /* Laika Extension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 6285AF9A2F1AFB45004C2F8B /* Laika Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		6285AFA02F1AFB45004C2F8B /* SafariWebExtensionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6285AF9F2F1AFB45004C2F8B /* SafariWebExtensionHandler.swift */; };
+		6285AFB32F1AFB46004C2F8B /* background.js in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAC2F1AFB46004C2F8B /* background.js */; };
+		6285AFB42F1AFB46004C2F8B /* popover.html in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAD2F1AFB46004C2F8B /* popover.html */; };
+		6285AFB52F1AFB46004C2F8B /* tests in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAE2F1AFB46004C2F8B /* tests */; };
+		6285AFB62F1AFB46004C2F8B /* popover.js in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAF2F1AFB46004C2F8B /* popover.js */; };
+		6285AFB72F1AFB46004C2F8B /* content_script.js in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFB02F1AFB46004C2F8B /* content_script.js */; };
+		6285AFB82F1AFB46004C2F8B /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFB12F1AFB46004C2F8B /* manifest.json */; };
+		6285AFB92F1AFB46004C2F8B /* lib in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFB22F1AFB46004C2F8B /* lib */; };
+		A1B2C3D4E5F60718293A4B70 /* LaikaShared in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F60718293A4B60 /* LaikaShared */; };
+		A1B2C3D4E5F60718293A4B71 /* LaikaModel in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F60718293A4B61 /* LaikaModel */; };
+		A1B2C3D4E5F60718293A4B72 /* LaikaAgentCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F60718293A4B62 /* LaikaAgentCore */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		6285AF9C2F1AFB45004C2F8B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6285AF772F1AFB45004C2F8B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6285AF992F1AFB45004C2F8B;
+			remoteInfo = "Laika Extension";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		6285AFA72F1AFB45004C2F8B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				6285AF9B2F1AFB45004C2F8B /* Laika Extension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		6285AF7F2F1AFB45004C2F8B /* Laika.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Laika.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6285AF822F1AFB45004C2F8B /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		6285AF862F1AFB45004C2F8B /* Base */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = Base; path = Base.lproj/Main.html; sourceTree = "<group>"; };
+		6285AF882F1AFB45004C2F8B /* Icon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Icon.png; sourceTree = "<group>"; };
+		6285AF8A2F1AFB45004C2F8B /* Style.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = Style.css; sourceTree = "<group>"; };
+		6285AF8C2F1AFB45004C2F8B /* Script.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Script.js; sourceTree = "<group>"; };
+		6285AF8E2F1AFB45004C2F8B /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
+		6285AF912F1AFB45004C2F8B /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
+		6285AF932F1AFB45004C2F8B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		6285AF952F1AFB45004C2F8B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		6285AF9A2F1AFB45004C2F8B /* Laika Extension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Laika Extension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		6285AF9F2F1AFB45004C2F8B /* SafariWebExtensionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariWebExtensionHandler.swift; sourceTree = "<group>"; };
+		6285AFA12F1AFB45004C2F8B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		6285AFAC2F1AFB46004C2F8B /* background.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = background.js; path = ../../../extension/background.js; sourceTree = "<group>"; };
+		6285AFAD2F1AFB46004C2F8B /* popover.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = popover.html; path = ../../../extension/popover.html; sourceTree = "<group>"; };
+		6285AFAE2F1AFB46004C2F8B /* tests */ = {isa = PBXFileReference; lastKnownFileType = folder; name = tests; path = ../../../extension/tests; sourceTree = "<group>"; };
+		6285AFAF2F1AFB46004C2F8B /* popover.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = popover.js; path = ../../../extension/popover.js; sourceTree = "<group>"; };
+		6285AFB02F1AFB46004C2F8B /* content_script.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = content_script.js; path = ../../../extension/content_script.js; sourceTree = "<group>"; };
+		6285AFB12F1AFB46004C2F8B /* manifest.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = manifest.json; path = ../../../extension/manifest.json; sourceTree = "<group>"; };
+		6285AFB22F1AFB46004C2F8B /* lib */ = {isa = PBXFileReference; lastKnownFileType = folder; name = lib; path = ../../../extension/lib; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		6285AF7C2F1AFB45004C2F8B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6285AF972F1AFB45004C2F8B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D4E5F60718293A4B70 /* LaikaShared in Frameworks */,
+				A1B2C3D4E5F60718293A4B71 /* LaikaModel in Frameworks */,
+				A1B2C3D4E5F60718293A4B72 /* LaikaAgentCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		6285AF762F1AFB45004C2F8B = {
+			isa = PBXGroup;
+			children = (
+				6285AF812F1AFB45004C2F8B /* Laika */,
+				6285AF9E2F1AFB45004C2F8B /* Laika Extension */,
+				6285AF802F1AFB45004C2F8B /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		6285AF802F1AFB45004C2F8B /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				6285AF7F2F1AFB45004C2F8B /* Laika.app */,
+				6285AF9A2F1AFB45004C2F8B /* Laika Extension.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		6285AF812F1AFB45004C2F8B /* Laika */ = {
+			isa = PBXGroup;
+			children = (
+				6285AF822F1AFB45004C2F8B /* AppDelegate.swift */,
+				6285AF8E2F1AFB45004C2F8B /* ViewController.swift */,
+				6285AF902F1AFB45004C2F8B /* Main.storyboard */,
+				6285AF932F1AFB45004C2F8B /* Assets.xcassets */,
+				6285AF952F1AFB45004C2F8B /* Info.plist */,
+				6285AF842F1AFB45004C2F8B /* Resources */,
+			);
+			path = Laika;
+			sourceTree = "<group>";
+		};
+		6285AF842F1AFB45004C2F8B /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				6285AF852F1AFB45004C2F8B /* Main.html */,
+				6285AF882F1AFB45004C2F8B /* Icon.png */,
+				6285AF8A2F1AFB45004C2F8B /* Style.css */,
+				6285AF8C2F1AFB45004C2F8B /* Script.js */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		6285AF9E2F1AFB45004C2F8B /* Laika Extension */ = {
+			isa = PBXGroup;
+			children = (
+				6285AFAB2F1AFB46004C2F8B /* Resources */,
+				6285AF9F2F1AFB45004C2F8B /* SafariWebExtensionHandler.swift */,
+				6285AFA12F1AFB45004C2F8B /* Info.plist */,
+			);
+			path = "Laika Extension";
+			sourceTree = "<group>";
+		};
+		6285AFAB2F1AFB46004C2F8B /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				6285AFAC2F1AFB46004C2F8B /* background.js */,
+				6285AFAD2F1AFB46004C2F8B /* popover.html */,
+				6285AFAE2F1AFB46004C2F8B /* tests */,
+				6285AFAF2F1AFB46004C2F8B /* popover.js */,
+				6285AFB02F1AFB46004C2F8B /* content_script.js */,
+				6285AFB12F1AFB46004C2F8B /* manifest.json */,
+				6285AFB22F1AFB46004C2F8B /* lib */,
+			);
+			name = Resources;
+			path = "Laika Extension";
+			sourceTree = SOURCE_ROOT;
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		6285AF7E2F1AFB45004C2F8B /* Laika */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6285AFA82F1AFB45004C2F8B /* Build configuration list for PBXNativeTarget "Laika" */;
+			buildPhases = (
+				6285AF7B2F1AFB45004C2F8B /* Sources */,
+				6285AF7C2F1AFB45004C2F8B /* Frameworks */,
+				6285AF7D2F1AFB45004C2F8B /* Resources */,
+				6285AFA72F1AFB45004C2F8B /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				6285AF9D2F1AFB45004C2F8B /* PBXTargetDependency */,
+			);
+			name = Laika;
+			packageProductDependencies = (
+			);
+			productName = Laika;
+			productReference = 6285AF7F2F1AFB45004C2F8B /* Laika.app */;
+			productType = "com.apple.product-type.application";
+		};
+		6285AF992F1AFB45004C2F8B /* Laika Extension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6285AFA42F1AFB45004C2F8B /* Build configuration list for PBXNativeTarget "Laika Extension" */;
+			buildPhases = (
+				6285AF962F1AFB45004C2F8B /* Sources */,
+				6285AF972F1AFB45004C2F8B /* Frameworks */,
+				6285AF982F1AFB45004C2F8B /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "Laika Extension";
+			packageProductDependencies = (
+				A1B2C3D4E5F60718293A4B60 /* LaikaShared */,
+				A1B2C3D4E5F60718293A4B61 /* LaikaModel */,
+				A1B2C3D4E5F60718293A4B62 /* LaikaAgentCore */,
+			);
+			productName = "Laika Extension";
+			productReference = 6285AF9A2F1AFB45004C2F8B /* Laika Extension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		6285AF772F1AFB45004C2F8B /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2620;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					6285AF7E2F1AFB45004C2F8B = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					6285AF992F1AFB45004C2F8B = {
+						CreatedOnToolsVersion = 26.2;
+					};
+				};
+			};
+			buildConfigurationList = 6285AF7A2F1AFB45004C2F8B /* Build configuration list for PBXProject "Laika" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 6285AF762F1AFB45004C2F8B;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A1B2C3D4E5F60718293A4B5C /* XCLocalSwiftPackageReference "shared" */,
+				A1B2C3D4E5F60718293A4B5D /* XCLocalSwiftPackageReference "model" */,
+				A1B2C3D4E5F60718293A4B5E /* XCLocalSwiftPackageReference "app" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 6285AF802F1AFB45004C2F8B /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				6285AF7E2F1AFB45004C2F8B /* Laika */,
+				6285AF992F1AFB45004C2F8B /* Laika Extension */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		6285AF7D2F1AFB45004C2F8B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6285AF892F1AFB45004C2F8B /* Icon.png in Resources */,
+				6285AF922F1AFB45004C2F8B /* Main.storyboard in Resources */,
+				6285AF8D2F1AFB45004C2F8B /* Script.js in Resources */,
+				6285AF872F1AFB45004C2F8B /* Main.html in Resources */,
+				6285AF942F1AFB45004C2F8B /* Assets.xcassets in Resources */,
+				6285AF8B2F1AFB45004C2F8B /* Style.css in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6285AF982F1AFB45004C2F8B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6285AFB62F1AFB46004C2F8B /* popover.js in Resources */,
+				6285AFB72F1AFB46004C2F8B /* content_script.js in Resources */,
+				6285AFB52F1AFB46004C2F8B /* tests in Resources */,
+				6285AFB42F1AFB46004C2F8B /* popover.html in Resources */,
+				6285AFB92F1AFB46004C2F8B /* lib in Resources */,
+				6285AFB82F1AFB46004C2F8B /* manifest.json in Resources */,
+				6285AFB32F1AFB46004C2F8B /* background.js in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		6285AF7B2F1AFB45004C2F8B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6285AF8F2F1AFB45004C2F8B /* ViewController.swift in Sources */,
+				6285AF832F1AFB45004C2F8B /* AppDelegate.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6285AF962F1AFB45004C2F8B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6285AFA02F1AFB45004C2F8B /* SafariWebExtensionHandler.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		6285AF9D2F1AFB45004C2F8B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6285AF992F1AFB45004C2F8B /* Laika Extension */;
+			targetProxy = 6285AF9C2F1AFB45004C2F8B /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXVariantGroup section */
+		6285AF852F1AFB45004C2F8B /* Main.html */ = {
+			isa = PBXVariantGroup;
+			children = (
+				6285AF862F1AFB45004C2F8B /* Base */,
+			);
+			name = Main.html;
+			sourceTree = "<group>";
+		};
+		6285AF902F1AFB45004C2F8B /* Main.storyboard */ = {
+			isa = PBXVariantGroup;
+			children = (
+				6285AF912F1AFB45004C2F8B /* Base */,
+			);
+			name = Main.storyboard;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A1B2C3D4E5F60718293A4B5C /* XCLocalSwiftPackageReference "shared" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../shared;
+		};
+		A1B2C3D4E5F60718293A4B5D /* XCLocalSwiftPackageReference "model" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../model;
+		};
+		A1B2C3D4E5F60718293A4B5E /* XCLocalSwiftPackageReference "app" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../app;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A1B2C3D4E5F60718293A4B60 /* LaikaShared */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60718293A4B5C /* XCLocalSwiftPackageReference "shared" */;
+			productName = LaikaShared;
+		};
+		A1B2C3D4E5F60718293A4B61 /* LaikaModel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60718293A4B5D /* XCLocalSwiftPackageReference "model" */;
+			productName = LaikaModel;
+		};
+		A1B2C3D4E5F60718293A4B62 /* LaikaAgentCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60718293A4B5E /* XCLocalSwiftPackageReference "app" */;
+			productName = LaikaAgentCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+
+/* Begin XCBuildConfiguration section */
+		6285AFA22F1AFB45004C2F8B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		6285AFA32F1AFB45004C2F8B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		6285AFA52F1AFB45004C2F8B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Laika Extension/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Laika Extension";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.laika.Laika.Extension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		6285AFA62F1AFB45004C2F8B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Laika Extension/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Laika Extension";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.laika.Laika.Extension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		6285AFA92F1AFB45004C2F8B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Laika/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Laika;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMainStoryboardFile = Main;
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+					"-framework",
+					WebKit,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.laika.Laika;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		6285AFAA2F1AFB45004C2F8B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Laika/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Laika;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMainStoryboardFile = Main;
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+					"-framework",
+					WebKit,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.laika.Laika;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		6285AF7A2F1AFB45004C2F8B /* Build configuration list for PBXProject "Laika" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6285AFA22F1AFB45004C2F8B /* Debug */,
+				6285AFA32F1AFB45004C2F8B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		6285AFA42F1AFB45004C2F8B /* Build configuration list for PBXNativeTarget "Laika Extension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6285AFA52F1AFB45004C2F8B /* Debug */,
+				6285AFA62F1AFB45004C2F8B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		6285AFA82F1AFB45004C2F8B /* Build configuration list for PBXNativeTarget "Laika" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6285AFA92F1AFB45004C2F8B /* Debug */,
+				6285AFAA2F1AFB45004C2F8B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 6285AF772F1AFB45004C2F8B /* Project object */;
+}

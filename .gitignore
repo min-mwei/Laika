@@ -25,6 +25,9 @@ pnpm-debug.log*
 dist/
 .cache/
 
+# Safari extension model assets
+src/laika/extension/lib/models/
+
 # Python
 __pycache__/
 *.py[cod]

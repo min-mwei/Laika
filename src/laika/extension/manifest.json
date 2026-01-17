@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Laika AIAgent",
+  "version": "0.1.0",
+  "description": "Laika AIAgent prototype",
+  "icons": {
+    "16": "lib/icons/laika-space-dog-16.png",
+    "32": "lib/icons/laika-space-dog-32.png",
+    "48": "lib/icons/laika-space-dog-48.png",
+    "128": "lib/icons/laika-space-dog-128.png"
+  },
+  "permissions": ["activeTab", "tabs", "scripting", "nativeMessaging"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Laika",
+    "default_popup": "popover.html",
+    "default_icon": {
+      "16": "lib/icons/laika-space-dog-16.png",
+      "32": "lib/icons/laika-space-dog-32.png",
+      "48": "lib/icons/laika-space-dog-48.png",
+      "128": "lib/icons/laika-space-dog-128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["lib/text_utils.js", "content_script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
