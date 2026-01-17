@@ -1,34 +1,54 @@
-# Laika AIBrowser — VC Pitch Card (What / Why / How)
+# Laika AIBrowser — Pitch Card (Why / What / How)
 
-## One-liner
+**Understand your intents, Do the work. Keep it private.**
 
-Laika is a secure AI agent embedded in Safari that turns intent into safe, automated actions inside your existing web sessions — policy-gated, on-device by default, and fully auditable.
+## Why customers care
+
+- **Web portals are digital fortresses**: your money, identity, housing, and work live behind logins — you won’t hand the keys to a black-box agent.
+- **“Answers” aren’t the job**: the job is navigating filters, downloading statements, reconciling numbers, cross-checking details, and filling forms correctly.
+- **Sensitive workflows can’t be copy/pasted**: if the task touches bank statements, tax docs, medical claims, or internal tools, shipping it to a chatbot is a non-starter.
+- **The cost is real**: missed details compound, and mistakes can be expensive.
 
 ## What
 
-- A secure AI agent embedded in Safari that can observe, extract, and act inside your real, authenticated web sessions.
-- Built for long-running automation with human-in-the-loop controls and an audit trail.
+Laika is a security- and privacy-first AI Browser agent (embedded in Safari initially) that can safely complete multi-step tasks inside the websites and portals you already use — with explicit per-site permissions and a complete audit trail.
 
-## Why
+## Why now
 
-- Websites are interactive workflows: answers and actions are buried behind navigation, filters, and multi-step forms.
-- The most valuable work is behind trusted sessions (research tools, CRMs, finance portals) and can’t be safely delegated to “copy/paste into a chatbot”.
-- Agentic browsing is uniquely attackable: prompt injection and data exfiltration are default failure modes without strict boundaries.
+- **AI is moving into the browser**: tools like Perplexity’s Comet are positioning the browser as an AI assistant, and general agents like Manus demonstrate the value of autonomous web research.
+- **Trust is the blocker**: the moment a workflow touches money, identity, or sensitive enterprise data, you need local enforcement, scoped permissions, and transparent logs — not a magic black box.
 
-## How
+## What Laika does
 
-- Two execution surfaces: **Workspace** (isolated, safe default) + **Connect to this site** (explicit opt-in to operate inside Safari tabs).
-- On-device by default: planning + safety filtering run locally; optional BYO cloud models use redacted context packs (never cookies/session tokens) with Policy Gate enforcement kept local.
-- Security-by-design: typed tool protocol, Policy Gate (allow/ask/deny), scoped capability tokens, injection hardening, and sensitive-field filtering before typing/logging/egress.
-- Resumable long-running automation: pause/resume with an append-only run log and explicit checkpoints.
-- Transparent UX: action previews, reason-coded decisions, and an auditable history of what happened and why.
+- **Autodrives web portals**: reads what’s on the page, extracts structured data, and takes actions (navigate, click, fill, download) inside your existing authenticated sessions.
+- **Keeps you in control**: safe-by-default **Workspace** + opt-in **Connect to this site** so it can’t silently roam across tabs or domains.
+- **Turns workflows into outcomes**: produces reviewable outputs like anomaly reports, tables, memos, evidence packets, and step-by-step “what happened and why”.
+- **Stays usable for long tasks**: pause/resume, checkpoints, and an append-only run log so you can pick up where you left off.
 
-## Moat (Security)
+## Where it shines (examples)
 
-- Security is the product: strict boundaries, local enforcement, and visible controls are harder to copy than “automation demos”.
-- Prompt injection resistance is architectural: data/instruction separation, autonomy downgrade on suspicious content, and tool-only execution with explicit approvals.
+- **Banking & credit cards**: analyze transactions, flag suspicious patterns, generate a dispute-ready packet, and draft the message — ask before submitting anything.
+- **Health & medical research (PubMed / guidelines / clinical trials)**: pull relevant studies, extract key outcomes into a table, summarize consensus vs. disagreement, and produce a “questions for my doctor” brief with citations (not medical advice).
+- **Real estate (Zillow/Redfin/MLS portals)**: scan listings, pull comps, track price cuts, and build a ranked shortlist with links and notes.
+- **Company research (SEC EDGAR)**: gather filings, extract material changes, and produce an investor-ready brief with source links.
+- **Anything behind a login**: benefits portals, insurance claims, procurement sites, admin consoles, CRMs — the places you can’t “just ask the internet”.
+
+## Why Laika (trust model)
+
+- **On-device by default**: planning + safety filtering run locally; optional BYO cloud models only see redacted context packs (never cookies/session tokens).
+- **Explicit permissions, not implicit access**: a local Policy Gate (allow/ask/deny) and scoped capability tokens protect write-actions.
+- **Designed to resist data loss**: sensitive-field filtering before typing/logging/egress, injection hardening, and autonomy downgrade on suspicious content.
+- **Auditable by design**: action previews, reason-coded decisions, and a complete history of what happened and why.
+
+## A few “try this” prompts
+
+- “Review my last 90 days of card transactions, flag anything suspicious, and prepare a dispute-ready summary. Ask before submitting anything.”
+- “Find 2BR listings in my target neighborhoods, pull comps, and build a ranked shortlist with links and notes.”
+- “Pull the latest 10-K/10-Q/8-K for $COMPANY, summarize material changes, and produce a 1-page brief with citations.”
+- “Research $TOPIC on PubMed and clinical guidelines, summarize the evidence, and draft questions I should ask my doctor.”
 
 ## Business
 
-- Subscription per seat; enterprise tiers for policy controls, audit retention, and admin governance.
-- Local inference lowers COGS and supports strong margins at scale.
+- **Freemium**: Free tier for local-first, low-risk automation; Premium tier for the latest model pack (updated faster), higher limits, and included cloud credits for hard workflows.
+- **Cost control**: pay-as-you-go credits for additional cloud usage; BYO model key for power users who want maximum control.
+- **Teams/Enterprise**: per-seat pricing with centralized policy controls, shared usage pools, audit retention, and admin governance.

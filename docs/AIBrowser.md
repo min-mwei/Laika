@@ -12,6 +12,8 @@ Laika is a macOS Safari extension + companion app that embeds a **secure AI agen
 
 This is a design draft for an MVP. It focuses on security posture, system boundaries, and contracts. Specific implementation details (exact Safari APIs, storage schema, model selection) should be validated with prototypes.
 
+Prototype UI note: the current build uses an in-page **sidecar panel** toggled by the toolbar icon (position configurable in Settings). References to a “popover” below should be read as “sidecar panel” for the prototype UI.
+
 Convergence note: further changes should be driven by probe/prototype results (Safari/WebExtension behavior, IPC limits, sandboxed local inference), not more design expansion.
 
 Next steps (prototype checklist):
@@ -175,7 +177,7 @@ Privacy boundary (what leaves the device):
 
 ## MVP Scope / Milestones
 
-- **MVP 0 (Observe-only)**: isolated surface, `observe_dom`, `extract_table`, citations, toolbar popover + companion UI, per-site mode selector, SQLite run log (audit + context).
+    - **MVP 0 (Observe-only)**: isolated surface, `observe_dom`, `extract_table`, citations, toolbar sidecar panel + companion UI, per-site mode selector, SQLite run log (audit + context).
 - **MVP 1 (Assist)**: “My Browser” authorization, `find`, `click`, `type`, element highlighting, per-step approvals, dedicated task tab(s), pause on takeover.
 - **MVP 2 (Autopilot on low-risk sites)**: policy matrix defaults, durable pause/resume + cancellation, timeouts/retries, rollback to checkpoints, recovery + verification loops.
 - **MVP 3 (Multi-modal)**: viewport capture + region selection, voice input, optional vision grounding.
@@ -202,7 +204,7 @@ For simplicity, the diagram below focuses on the Safari-integrated “My Browser
                                 │ XPC / app IPC (typed)
                                 ▼
 ┌────────────────── Laika macOS App (sandboxed) ─────────────┐
-│  UI (toolbar popover/overlay + companion window), Policy Gate, Audit Log │
+│  UI (toolbar sidecar panel/overlay + companion window), Policy Gate, Audit Log │
 │  Agent Orchestrator (plan/execute loop)                    │
 │     ├─ Local Model Runtime (LLM/VLM)                        │
 │     ├─ Tool Router (browser tools, local tools)             │
@@ -216,7 +218,7 @@ For simplicity, the diagram below focuses on the Safari-integrated “My Browser
 
 - **Safari Extension (JavaScript)**
   - Content scripts: DOM reading, element targeting, safe interactions, page overlays/highlights.
-  - Background/service worker + popover UI: session routing, tool dispatch, permission prompts, native messaging.
+  - Background/service worker + sidecar UI: session routing, tool dispatch, permission prompts, native messaging.
 - **macOS App (Swift)**
   - Agent Orchestrator: runs the autonomy loop; coordinates tools and model calls.
   - Policy Gate: enforces security rules and user-configured permissions; blocks unsafe tool calls.
@@ -274,7 +276,7 @@ This mirrors the mental model users expect from modern “browser agent” produ
 2. **Authorize session**: Laika shows what it will access/do and requests one-time authorization (capability tokens + policy in effect).
 3. **Monitor/intervene**: Laika operates in a dedicated task tab (or dedicated Safari window). User can take over by interacting, or stop instantly by closing the task tab/window or hitting `Stop/Panic`.
 
-Authorization summary (must be user-facing, before step 2 completes). Reuse this exact layout in the popover, companion window, and any remote approval UI:
+Authorization summary (must be user-facing, before step 2 completes). Reuse this exact layout in the sidecar panel, companion window, and any remote approval UI:
 
 - Verified attachment target (this Safari tab/window) and the verified `origin`(s).
 - Selected mode (`Observe`/`Assist`/`Autopilot`) and the allowed action categories (click/type/submit/download/paste).
@@ -372,16 +374,16 @@ Common transitions:
 - `takeover → paused` (user leaves page / timeout) or `takeover → observing` (explicit resume)
 - `* → cancelled|failed` (stop/error)
 
-UI mapping (principle): the toolbar popover shows the current state and “Stop/Resume”; the overlay is used only for previews/confirmations; the companion window is the primary place to view the full run log and queue.
+UI mapping (principle): the toolbar sidecar panel shows the current state and “Stop/Resume”; the overlay is used only for previews/confirmations; the companion window is the primary place to view the full run log and queue.
 
 ### Stop / Panic reliability (must always work)
 
-Stop is a product promise, not a button: it must work even when Safari suspends the extension, the task tab is gone, or the user is not looking at the popover.
+Stop is a product promise, not a button: it must work even when Safari suspends the extension, the task tab is gone, or the user is not looking at the sidecar panel.
 
 - **Stop (per-run)**: cancels the active run, revokes its capability tokens, and cancels in-flight tool work. It should not lock future runs.
 - **Panic (global)**: immediately cancels all runs, revokes all outstanding `My Browser` capability tokens, and puts the app into `locked` until the user explicitly unlocks/re-authorizes.
 - **Always-available entry points**:
-  - toolbar popover `Stop/Panic`
+  - toolbar sidecar `Stop/Panic`
   - companion window `Stop/Panic` (primary reliability surface)
   - optional menubar item (quick Panic)
   - optional global hotkey (if feasible within macOS/Safari constraints)
@@ -498,7 +500,7 @@ Safari’s constraints are real, but they can be a trust advantage for users and
 Apple explicitly models a Safari web extension as three parts that operate independently in their own **sandboxed environments** (see: https://developer.apple.com/documentation/safariservices/messaging-between-the-app-and-javascript-in-a-safari-web-extension):
 
 - **Containing macOS app**: durable storage (SQLite), model runtime (local), policy gate, and the primary “full” UI (companion window).
-- **Safari Web Extension (JS/HTML/CSS)**: content scripts + background/service worker + toolbar popover UI.
+- **Safari Web Extension (JS/HTML/CSS)**: content scripts + background/service worker + toolbar sidecar UI.
 - **Native app extension (“Native Bridge”)**: mediates between the app and the extension’s JavaScript. It receives native messages (Swift entry point: `NSExtensionRequestHandling.beginRequest(with:)`), validates schemas, applies backpressure, and forwards typed requests into the app/XPC workers. Keep it thin; do not run heavy inference or file parsing here. (Xcode’s Safari Extension App template generates a `SafariWebExtensionHandler` for this role.)
 
 Safari-specific constraints that affect Laika’s design (same Apple doc):
@@ -539,7 +541,7 @@ Several MVP-critical capabilities must be validated against Safari’s actual We
 | Dedicated task tab/window | `tabs.create` / `windows.create` | none | cannot create or focus reliably | open a regular task tab; fall back to companion window “Tasks” list + title prefixing |
 | Viewport capture | `tabs.captureVisibleTab` (or alternative) | capture prompt (varies) | API unavailable or blocked on sensitive/restricted pages | disable visual mode; rely on DOM extraction; offer “Open in Isolated surface” with explicit consent if screen capture is enabled |
 | Downloads | `downloads` API (or click-to-download) | download prompt (site/Safari) | downloads API unsupported; file save requires user | use click-to-download flows with explicit approval; manage artifacts in Isolated surface via app download manager |
-| Context menu actions | `contextMenus` | none | API missing/limited | keep popover as the primary entry point; use keyboard shortcut instead of context menu |
+| Context menu actions | `contextMenus` | none | API missing/limited | keep the sidecar as the primary entry point; use keyboard shortcut instead of context menu |
 | Private window detection | Safari/private APIs may be limited | none | cannot detect reliably | default to conservative: disable Connector unless explicitly enabled; never persist if Private is suspected/unknown |
 | Safari web apps (macOS 15+) | WebExtensions in web app containers | permission prompt differs | extension not available or partitioning differs | treat as separate `profileId`; if unsupported, show “Observe-only” with explanation and offer Isolated surface |
 | Chrome-only features (e.g., tab groups) | N/A on Safari | n/a | feature absent | dedicated task tab/window + companion “Tasks” list; avoid tab-group copy in UI |
@@ -572,7 +574,7 @@ Set expectations explicitly and pair each limitation with an intentional UX path
 
 Some actions must be backed by a real user gesture or explicit user participation:
 
-- **Clipboard/paste**: require explicit user approval; when executed, trigger from a popover/overlay button click so Safari treats it as user-initiated.
+- **Clipboard/paste**: require explicit user approval; when executed, trigger from a sidecar/overlay button click so Safari treats it as user-initiated.
 - **Downloads**: require explicit approval; prefer “ask then click to download” flows and log the destination choice if a file picker is involved.
 - **Uploads**: do not attempt to programmatically select files; require the user to choose the file (or complete the upload step manually) and treat automation as guidance.
 
@@ -585,7 +587,7 @@ Gesture-gated actions are an implementation footgun unless treated as a hard con
 - **User activation is fragile**: any approval that must count as a “user gesture” must execute the browser action **synchronously** inside a trusted UI click handler. Avoid `await`/async gaps before triggering paste/download/clipboard writes, or the browser may drop user activation.
 - **Trust only real user input**: require `event.isTrusted` checks for:
   - takeover detection (`ui.takeover`) signals in the content script, and
-  - any “gesture-required” CTA click handler (popover/companion).
+  - any “gesture-required” CTA click handler (sidecar/companion).
   Ignore synthetic events dispatched by the page.
 - **Concrete handshake: `ui.gesture_required`**
   - App emits `ui.gesture_required` with `{requestId, gestureKind, origin, summary, expiresAtMs}`.
@@ -605,7 +607,7 @@ Untrusted page
 Content script (isolated world)
   │ browser.runtime.sendMessage()
   ▼
-Background/service worker + toolbar popover UI
+Background/service worker + toolbar sidecar UI
   │ browser.runtime.sendNativeMessage()
   ▼
 Native app extension (native messaging handler)
@@ -672,7 +674,7 @@ Long-running automation is only “durable” if lifecycle behavior is explicit.
 
 - Prefer minimal `host_permissions`; avoid `all_urls` unless there is a clear user benefit and a strong safety story.
 - Use `activeTab` for just-in-time access and `optional_permissions` for escalation (e.g., enabling `Assist`/`Autopilot` on a site).
-- Mirror Safari’s permission UX: show “permission needed” state in the toolbar popover and route the user to Safari’s per-site grant UI.
+- Mirror Safari’s permission UX: show “permission needed” state in the toolbar sidecar and route the user to Safari’s per-site grant UI.
 - Treat `activeTab` access as **ephemeral**: permissions can lapse across navigation, suspension, or time. Tool calls should fail with `PERMISSION_REQUIRED` and the UI should offer a one-click “re-grant” path.
 
 ### Permission UX flows (Safari-specific; exact paths)
@@ -681,7 +683,7 @@ Safari permission UX differs from Chrome/Firefox and can be hard to deep-link. L
 
 **First-run: read-only on current site (default)**
 
-1. User opens the toolbar popover → sees `Observe/Summarize`.
+1. User opens the toolbar sidecar → sees `Observe/Summarize`.
 2. If the site is not yet granted, show `permission-needed` with a single CTA: `Enable on this website`.
 3. If Safari shows a prompt/menu, the user grants per-site access (typically with choices like single-use / “for the day” / all websites); otherwise show step-by-step instructions: `Safari → Settings… → Extensions → Laika → Allow on <site>` (keep copy short; provide a `Copy instructions` link).
 4. Once granted, run `observe_dom` and answer in Read-only mode.
@@ -701,7 +703,7 @@ Safari permission UX differs from Chrome/Firefox and can be hard to deep-link. L
 
 **When Safari won’t deep-link to the right settings page**
 
-- The popover should fall back to clear, short copy (“Open Safari Settings → Extensions → Laika”) and keep the user in a usable Read-only mode.
+- The sidecar should fall back to clear, short copy (“Open Safari Settings → Extensions → Laika”) and keep the user in a usable Read-only mode.
 - Provide a safe alternative path: `Open in Workspace` (Isolated surface) or `Tell me what to do manually`.
 
 **Permission failure ladder (users never feel stuck)**
@@ -751,7 +753,7 @@ Some Safari surfaces are non-scriptable or intentionally blocked (e.g., `safari:
 - Use dedicated task tab(s) for “My Browser” runs so the user can monitor and intervene.
 - Make “Stop” immediate (revoke capability tokens; cancel outstanding tool work). Also provide a global **Panic** control that revokes tokens, cancels runs, and temporarily locks “My Browser” until re-authorized.
 - Treat user interaction with the tab as takeover; pause automation until explicitly resumed.
-- Show approvals/denials in trusted UI (popover/companion) with a clear Laika visual signature and the verified target `origin`; use the in-page overlay for previews/highlights, not as an authority source.
+- Show approvals/denials in trusted UI (sidecar/companion) with a clear Laika visual signature and the verified target `origin`; use the in-page overlay for previews/highlights, not as an authority source.
 
 ### User-facing language (make it feel native)
 
@@ -763,15 +765,15 @@ Users should not have to learn internal architecture terms (“surfaces”, “t
 - `Assist` mode → **Ask before acting**
 - `Autopilot` mode → **Auto (safe actions only)**
 
-Default popover path (one primary interaction):
+Default sidecar path (one primary interaction):
 
-1. User opens the popover and asks a question → Laika runs **Read-only** `Observe/Summarize`.
+1. User opens the sidecar panel and asks a question → Laika runs **Read-only** `Observe/Summarize`.
 2. If the user asks Laika to *do* something, Laika prompts: **Connect to this site** (explains the Connector + shows the authorization summary).
 3. User taps **Authorize** → Laika opens/attaches to the task tab/window, previews actions, and requests approvals as needed.
 
-### Toolbar Popover Layout (default entry points)
+### Toolbar Sidecar Layout (default entry points)
 
-The toolbar popover is the default entry point. It should be usable in 1 click:
+The toolbar sidecar panel is the default entry point. It should be usable in 1 click:
 
 - **Top row**: current site + mode (`Observe`/`Assist`/`Autopilot`) and a clear permission indicator.
 - **Primary actions**: `Observe/Summarize` (always available) + optional context actions (e.g., `Extract table`, `Find on page`).
@@ -783,7 +785,7 @@ Additional entry points (to reduce friction, not to add power):
 - **Context menu**: “Ask Laika about selection” / “Extract table” on highlighted regions (read-only by default).
 - **Keyboard shortcut**: open the companion window / toggle overlay; supports keyboard-first workflows.
 
-### Trusted UI Rendering Rules (popover + companion)
+### Trusted UI Rendering Rules (sidecar + companion)
 
 Treat anything derived from a webpage as untrusted content and render it accordingly:
 
@@ -796,14 +798,14 @@ Treat anything derived from a webpage as untrusted content and render it accordi
 
 ### Toolbar Item States (badge + update rules)
 
-The toolbar item should communicate state even when the popover is closed:
+The toolbar item should communicate state even when the sidecar panel is closed:
 
-- `idle`: no badge; click opens popover.
-- `permission-needed`: badge `!`; popover shows what’s missing and routes to Safari per-site grants.
-- `app-offline`: badge `×`; popover shows `Open Laika` and explains that automation requires Laika (Agent Core) to be running.
+- `idle`: no badge; click opens the sidecar.
+- `permission-needed`: badge `!`; sidecar shows what’s missing and routes to Safari per-site grants.
+- `app-offline`: badge `×`; sidecar shows `Open Laika` and explains that automation requires Laika (Agent Core) to be running.
 - `running`: badge indicates active run (e.g., `RUN` or step count) and the current mode.
-- `paused` / `awaiting_approval`: badge indicates a wait (e.g., `…`); popover offers the pending approval/gesture action.
-- `takeover`: badge indicates manual control (e.g., `||`); popover offers `Resume automation`.
+- `paused` / `awaiting_approval`: badge indicates a wait (e.g., `…`); sidecar offers the pending approval/gesture action.
+- `takeover`: badge indicates manual control (e.g., `||`); sidecar offers `Resume automation`.
 
 Update rules:
 
@@ -812,27 +814,27 @@ Update rules:
 
 ### First-run Onboarding (in Safari)
 
-On first open of the popover (and whenever Laika is disabled), show a 1–2 step onboarding:
+On first open of the sidecar (and whenever Laika is disabled), show a 1–2 step onboarding:
 
 1. Explain modes (`Observe` is safe default; `Assist` requires approvals; `Autopilot` is constrained). Emphasize that `My Browser` is **explicit opt-in** via a Connector toggle: turn it on → authorize once → watch in a dedicated task tab/window you can close to stop instantly.
 2. Explain Safari per-site permissions and provide a single CTA to enable for the current site (or remain in `Observe`).
 
 ### UI State Sync (single source of truth)
 
-The toolbar popover, in-page overlay, and companion window must render the same run state.
+The toolbar sidecar, in-page overlay, and companion window must render the same run state.
 
 - **Source of truth**: the Agent Core (derived from the SQLite run/event log).
-- **Ownership**: the Agent Core owns the run queue; the companion window is the primary UI; the popover is a remote control; the overlay is display + lightweight confirmation UI.
+- **Ownership**: the Agent Core owns the run queue; the companion window is the primary UI; the sidecar is a remote control; the overlay is display + lightweight confirmation UI.
 - **Conflict resolution**: the Agent Core serializes commands; takeover and stop are highest priority and preempt pending actions.
 
 ### Agent Core ⇄ extension state streaming (redacted + cache-safe)
 
-The extension must be able to render the full UX (popover/overlay badges, run card, pending approvals) without reading SQLite/App Group files directly.
+The extension must be able to render the full UX (sidecar/overlay badges, run card, pending approvals) without reading SQLite/App Group files directly.
 
 **Agent Core → extension: minimal run-state payload (redacted)**
 
 - Transport: pushed on changes (preferred) and/or pulled via `run.sync(lastSeenEventId)`.
-- Size budget: keep each payload small (e.g., ≤ 32–64 KB) so popover opens instantly.
+- Size budget: keep each payload small (e.g., ≤ 32–64 KB) so the sidecar opens instantly.
 - Must include (illustrative fields):
   - `appState`: `online|offline|locked`
   - `site`: `{origin, mode, connectorEnabled, permissionState}`
@@ -917,7 +919,7 @@ All JS⇄Swift communication uses a **strictly typed, versioned tool protocol**,
 
 **Connection lifecycle + resync**
 
-- Use a long-lived `runtime.connect` port (popover/overlay ↔ background) and a single native-messaging channel (background ↔ native bridge).
+- Use a long-lived `runtime.connect` port (sidecar/overlay ↔ background) and a single native-messaging channel (background ↔ native bridge).
 - On reconnect (service worker suspension, UI reopen), send `run.sync(lastSeenEventId)`; Swift replies with missing events + current authoritative run state.
 - If the native side (Laika app/agent core) is not reachable, enter `app-offline`: disable automation, keep observe-only UI copy, and offer a one-click “Open Laika”.
 - **“Open Laika” mechanics (App Store-safe)**: on user click, attempt a deterministic bring-to-front flow:
@@ -1257,7 +1259,7 @@ Start with a concrete, reproducible v1:
 - **Hard-coded invariants**: a small set of “never allow” rules (e.g., credential exfil, payments/transfers, cross-site carry from sensitive origins) that ship as code and are unit-tested.
 - **Data-driven matrix**: a compact allow/ask/deny matrix stored as JSON (versioned in-repo) with user overrides stored in SQLite (`site_policy_override`). This keeps behavior explainable and patchable without inventing a full DSL on day one.
 - **Minimal site classification**:
-  - User labels (always win) exposed in the popover/companion as a simple “This is a sensitive site” toggle.
+  - User labels (always win) exposed in the sidecar/companion as a simple “This is a sensitive site” toggle.
   - Heuristics: password fields, common auth/payment affordances, and known “bank/health/identity” URL patterns.
   - Optional curated lists: signed, local, updatable (enterprise policy packs later).
 - **Deterministic decision function**: every decision is reproducible from `{origin, mode, tool, requiresGesture, context}` → `{allow|ask|deny, reasonCode, requiresGesture}`. This is required for unit tests and for explaining decisions to users.
@@ -1279,7 +1281,7 @@ Approvals should be explicit, revocable, and scoped so users don’t have to cli
 
 - Scope by **action type** (e.g., “allow submit on this site”) and **target** (specific form or origin).
 - Scope by **time** (e.g., 5 minutes) and/or **navigation boundary** (expires when `(documentId, navigationGeneration)` changes).
-- Always show active scopes in the popover/companion window with one-click revoke; record grants/revokes as durable events.
+- Always show active scopes in the sidecar/companion window with one-click revoke; record grants/revokes as durable events.
 
 ### Data Retention, Logging, and Redaction
 
@@ -1449,7 +1451,7 @@ Every tool should define explicit preconditions/postconditions so verification i
 ### User Takeover Heuristics
 
 - Treat user input (typing, scrolling, pointer interactions) as a takeover signal: emit `ui.takeover`, pause automation, and require explicit resume.
-- Provide a clear “Resume automation” control in the toolbar popover/companion window; never auto-resume after takeover.
+- Provide a clear “Resume automation” control in the toolbar sidecar/companion window; never auto-resume after takeover.
 - If the user continues interacting for a while, keep the run in `paused` until a fresh `observe_dom` confirms the page is stable.
 
 ### Manual Handoff (login / 2FA / consent)
@@ -1489,7 +1491,7 @@ When the workflow hits a step Laika should not automate (login, 2FA, consent dia
 
 ### UX Surfaces
 
-- **Safari toolbar popover**: quick actions, per-site mode indicator, permission-needed state, “open full panel”.
+- **Safari toolbar sidecar**: quick actions, per-site mode indicator, permission-needed state, “open full panel”.
 - **Companion window (macOS app)**: chat + plan + action queue + citations + run controls (works alongside Safari).
 - **In-page overlay**: opt-in highlights, “click preview”, region selection, inline confirmations; always easy to dismiss.
 - **Keyboard-first controls**: command palette + selection-based actions; keep common flows one-click from the toolbar.

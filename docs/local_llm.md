@@ -238,7 +238,7 @@ Provide an explicit “Long context” mode for power users and specific tasks:
 ### Streaming
 
 - LLM Worker streams tokens to Agent Core.
-- Agent Core streams only small, safe UI deltas to extension/popover.
+- Agent Core streams only small, safe UI deltas to the extension/sidecar panel.
 
 ### Concurrency
 
@@ -383,4 +383,3 @@ Laika can improve local tool-use reliability over time via an offline cloud pipe
   - Qwen3-4B at 32K+ contexts,
   - Jamba 3B at 64K/128K/256K contexts.
 - Whether to ship LoRA/adapters vs full merged models for the first cloud training iteration.
-

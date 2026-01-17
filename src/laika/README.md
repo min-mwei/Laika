@@ -22,6 +22,12 @@ Copy the model directory into the extension bundle assets:
 If the model directory is missing, the extension build runs `src/local_llm_quantizer/convert_qwen3_to_mlx_4bit.py`
 to populate it (requires Python + dependencies and an HF download on first run).
 
+Shortcut to build/publish the model into the extension assets:
+
+```bash
+./src/laika_model_build.sh
+```
+
 ## 2) Build and run the macOS app + extension
 
 Open the Xcode project:
@@ -30,16 +36,23 @@ Open the Xcode project:
 
 Build and run the `Laika` app target. The app hosts the extension; you must run it once to enable the extension in Safari.
 
+Shortcut build script:
+
+```bash
+./src/laika_build.sh
+```
+
 ## 3) Enable the Safari extension
 
 1. Open Safari and enable the Develop menu (`Safari` -> `Settings` -> `Advanced` -> "Show Develop menu").
 2. Open `Safari` -> `Settings` -> `Extensions` and enable "Laika AIAgent".
 
-## 4) Use the popover
+## 4) Use the sidecar
 
-1. Click the Laika toolbar icon.
+1. Click the Laika toolbar icon to toggle the sidecar panel.
 2. Ask a question (e.g., "summarize this page") and click "Send".
 3. Approve or reject any proposed actions inline in the chat.
+4. Use the Settings button in the header to choose left/right placement.
 
 ## Notes
 
