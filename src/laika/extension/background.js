@@ -8,35 +8,104 @@ var ALLOWED_TOOLS = {
 };
 
 var DEFAULT_SIDECAR_SIDE = "right";
-var PANEL_WINDOW_ID = null;
-var PANEL_TAB_ID = null;
-var PANEL_OPEN_PROMISE = null;
+var PANEL_STATE_BY_OWNER = {};
+var PANEL_TAB_TO_OWNER = {};
+var PANEL_OPEN_PROMISES = {};
+var MAX_TAB_CONTEXT = 12;
+var MAX_TAB_TITLE = 120;
 
-function isPanelUrl(url) {
+function isNumericId(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function getOwnerKey(windowId) {
+  if (!isNumericId(windowId)) {
+    return "unknown";
+  }
+  return String(windowId);
+}
+
+function getPanelState(ownerWindowId) {
+  return PANEL_STATE_BY_OWNER[getOwnerKey(ownerWindowId)] || null;
+}
+
+function setPanelState(ownerWindowId, state) {
+  var key = getOwnerKey(ownerWindowId);
+  PANEL_STATE_BY_OWNER[key] = state;
+  if (state && isNumericId(state.panelTabId)) {
+    PANEL_TAB_TO_OWNER[String(state.panelTabId)] = key;
+  }
+}
+
+function clearPanelState(ownerWindowId) {
+  var key = getOwnerKey(ownerWindowId);
+  var existing = PANEL_STATE_BY_OWNER[key];
+  if (existing && isNumericId(existing.panelTabId)) {
+    delete PANEL_TAB_TO_OWNER[String(existing.panelTabId)];
+  }
+  delete PANEL_STATE_BY_OWNER[key];
+}
+
+function getPanelStateByTabId(tabId) {
+  var key = PANEL_TAB_TO_OWNER[String(tabId)];
+  if (!key) {
+    return null;
+  }
+  return PANEL_STATE_BY_OWNER[key] || null;
+}
+
+function getPanelMeta(url) {
   if (!url || !browser.runtime || !browser.runtime.getURL) {
-    return false;
+    return null;
   }
   try {
     var base = browser.runtime.getURL("popover.html");
     if (typeof base !== "string" || url.indexOf(base) !== 0) {
-      return false;
+      return null;
     }
     var parsed = new URL(url);
-    return parsed.searchParams.get("panel") === "1";
+    if (parsed.searchParams.get("panel") !== "1") {
+      return null;
+    }
+    var ownerWindowId = parseInt(parsed.searchParams.get("ownerWindow") || "", 10);
+    var ownerTabId = parseInt(parsed.searchParams.get("ownerTab") || "", 10);
+    return {
+      ownerWindowId: Number.isNaN(ownerWindowId) ? null : ownerWindowId,
+      ownerTabId: Number.isNaN(ownerTabId) ? null : ownerTabId
+    };
   } catch (error) {
-    return false;
+    return null;
   }
 }
 
-async function findPanelTab() {
+function isPanelUrl(url) {
+  return !!getPanelMeta(url);
+}
+
+async function findPanelTab(ownerWindowId) {
   if (!browser.tabs || !browser.tabs.query) {
     return null;
   }
-  var tabs = await browser.tabs.query({});
+  var tabs;
+  try {
+    tabs = await browser.tabs.query({});
+  } catch (error) {
+    return null;
+  }
+  var matchUnknownOwner = !isNumericId(ownerWindowId);
   for (var i = 0; i < tabs.length; i += 1) {
-    if (isPanelUrl(tabs[i].url)) {
-      return tabs[i];
+    var meta = getPanelMeta(tabs[i].url);
+    if (!meta) {
+      continue;
     }
+    if (matchUnknownOwner) {
+      if (isNumericId(meta.ownerWindowId)) {
+        continue;
+      }
+    } else if (!isNumericId(meta.ownerWindowId) || meta.ownerWindowId !== ownerWindowId) {
+      continue;
+    }
+    return { tab: tabs[i], meta: meta };
   }
   return null;
 }
@@ -59,20 +128,33 @@ async function focusTab(tab) {
   }
 }
 
-async function getActiveTab() {
-  var tabs = await browser.tabs.query({ active: true, currentWindow: true });
-  return tabs && tabs.length ? tabs[0] : null;
+async function getActiveTab(windowId) {
+  var query = { active: true };
+  if (isNumericId(windowId)) {
+    query.windowId = windowId;
+  } else {
+    query.currentWindow = true;
+  }
+  try {
+    var tabs = await browser.tabs.query(query);
+    return tabs && tabs.length ? tabs[0] : null;
+  } catch (error) {
+    return null;
+  }
 }
 
-async function handleObserve(options) {
-  var tab = await getActiveTab();
-  if (!tab || typeof tab.id === "undefined") {
+async function handleObserve(options, sender, tabOverride) {
+  var tabId = await resolveTargetTabId(sender, tabOverride);
+  if (!isNumericId(tabId)) {
     return { status: "error", error: "no_active_tab" };
   }
   try {
-    var result = await browser.tabs.sendMessage(tab.id, { type: "laika.observe", options: options || {} });
+    var result = await browser.tabs.sendMessage(tabId, { type: "laika.observe", options: options || {} });
     if (!result || typeof result.status === "undefined") {
       return { status: "error", error: "no_context" };
+    }
+    if (result && typeof result === "object") {
+      result.tabId = tabId;
     }
     return result;
   } catch (error) {
@@ -88,49 +170,238 @@ async function getSidecarSide() {
   return stored.sidecarSide === "left" ? "left" : DEFAULT_SIDECAR_SIDE;
 }
 
-async function sendSidecarMessage(type, sideOverride) {
-  var tab = await getActiveTab();
-  if (!tab || typeof tab.id === "undefined") {
+async function tabExists(tabId) {
+  if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.get) {
+    return false;
+  }
+  try {
+    await browser.tabs.get(tabId);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function getTabWindowId(tabId) {
+  if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.get) {
+    return null;
+  }
+  try {
+    var tab = await browser.tabs.get(tabId);
+    return isNumericId(tab.windowId) ? tab.windowId : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function resolveOwnerWindowId(sender, fallbackWindowId) {
+  if (isNumericId(fallbackWindowId)) {
+    return fallbackWindowId;
+  }
+  if (sender && sender.tab) {
+    if (isPanelUrl(sender.tab.url || sender.url)) {
+      var panelState = getPanelStateByTabId(sender.tab.id);
+      if (panelState && isNumericId(panelState.ownerWindowId)) {
+        return panelState.ownerWindowId;
+      }
+      var meta = getPanelMeta(sender.tab.url || sender.url);
+      if (meta && isNumericId(meta.ownerWindowId)) {
+        return meta.ownerWindowId;
+      }
+    }
+    if (isNumericId(sender.tab.windowId)) {
+      return sender.tab.windowId;
+    }
+  }
+  return null;
+}
+
+async function resolveTargetTabId(sender, explicitTabId) {
+  if (isNumericId(explicitTabId)) {
+    if (await tabExists(explicitTabId)) {
+      return explicitTabId;
+    }
+  }
+  if (sender && sender.tab && isPanelUrl(sender.tab.url || sender.url)) {
+    var panelState = getPanelStateByTabId(sender.tab.id);
+    var attachedTabId = panelState && isNumericId(panelState.attachedTabId) ? panelState.attachedTabId : null;
+    if (isNumericId(attachedTabId) && (await tabExists(attachedTabId))) {
+      return attachedTabId;
+    }
+    var ownerWindowId = resolveOwnerWindowId(sender, null);
+    var activeInOwner = await getActiveTab(ownerWindowId);
+    return activeInOwner ? activeInOwner.id : null;
+  }
+  if (sender && sender.tab && isNumericId(sender.tab.id)) {
+    return sender.tab.id;
+  }
+  var activeTab = await getActiveTab();
+  return activeTab ? activeTab.id : null;
+}
+
+async function sendSidecarMessage(type, sideOverride, sender, tabOverride) {
+  var tabId = await resolveTargetTabId(sender, tabOverride);
+  if (!isNumericId(tabId)) {
     return { status: "error", error: "no_active_tab" };
   }
   var side = sideOverride || (await getSidecarSide());
   try {
-    return await browser.tabs.sendMessage(tab.id, { type: type, side: side });
+    return await browser.tabs.sendMessage(tabId, { type: type, side: side });
   } catch (error) {
     return { status: "error", error: "no_context" };
   }
 }
 
-async function openPanelWindowInner() {
+function sanitizeTabUrl(url) {
+  if (!url) {
+    return "";
+  }
+  try {
+    var parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    return parsed.origin;
+  } catch (error) {
+    return "";
+  }
+}
+
+function sanitizeOpenUrl(url) {
+  if (!url) {
+    return "";
+  }
+  try {
+    var parsed = new URL(String(url));
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    return parsed.toString();
+  } catch (error) {
+    return "";
+  }
+}
+
+function normalizeWhitespace(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function budgetText(text, maxChars) {
+  var normalized = normalizeWhitespace(text);
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return normalized.slice(0, maxChars);
+}
+
+function normalizeTabTitle(title) {
+  return budgetText(title, MAX_TAB_TITLE);
+}
+
+function buildTabSummary(tab) {
+  var url = sanitizeTabUrl(tab.url || "");
+  if (!url) {
+    return null;
+  }
+  return {
+    title: normalizeTabTitle(tab.title || ""),
+    url: url,
+    origin: url,
+    isActive: !!tab.active
+  };
+}
+
+async function listTabsForWindow(ownerWindowId) {
+  if (!browser.tabs || !browser.tabs.query) {
+    return [];
+  }
+  var query = {};
+  if (isNumericId(ownerWindowId)) {
+    query.windowId = ownerWindowId;
+  } else {
+    query.currentWindow = true;
+  }
+  var tabs;
+  try {
+    tabs = await browser.tabs.query(query);
+  } catch (error) {
+    return [];
+  }
+  tabs.sort(function (a, b) {
+    if (a.active === b.active) {
+      return (a.index || 0) - (b.index || 0);
+    }
+    return a.active ? -1 : 1;
+  });
+  var summaries = [];
+  for (var i = 0; i < tabs.length; i += 1) {
+    if (summaries.length >= MAX_TAB_CONTEXT) {
+      break;
+    }
+    if (isPanelUrl(tabs[i].url)) {
+      continue;
+    }
+    var summary = buildTabSummary(tabs[i]);
+    if (summary) {
+      summaries.push(summary);
+    }
+  }
+  return summaries;
+}
+
+function buildPanelUrl(ownerWindowId) {
+  if (!browser.runtime || !browser.runtime.getURL) {
+    return "";
+  }
+  var base = browser.runtime.getURL("popover.html");
+  if (!isNumericId(ownerWindowId)) {
+    return base + "?panel=1";
+  }
+  return base + "?panel=1&ownerWindow=" + String(ownerWindowId);
+}
+
+async function openPanelWindowInner(ownerWindowId, ownerTabId) {
   if (!browser.runtime || !browser.runtime.getURL) {
     return { status: "error", error: "panel_unavailable" };
   }
-  if (PANEL_TAB_ID && browser.tabs && browser.tabs.get) {
+  var state = getPanelState(ownerWindowId);
+  if (state && isNumericId(state.panelTabId) && browser.tabs && browser.tabs.get) {
     try {
-      var existing = await browser.tabs.get(PANEL_TAB_ID);
+      var existing = await browser.tabs.get(state.panelTabId);
       if (existing && isPanelUrl(existing.url)) {
-        PANEL_WINDOW_ID = typeof existing.windowId === "undefined" ? PANEL_WINDOW_ID : existing.windowId;
+        state.panelWindowId = isNumericId(existing.windowId) ? existing.windowId : state.panelWindowId;
+        if (isNumericId(ownerTabId)) {
+          state.attachedTabId = ownerTabId;
+        } else if (ownerTabId === null) {
+          state.attachedTabId = null;
+        }
+        setPanelState(ownerWindowId, state);
         await focusTab(existing);
-        return { status: "ok", reused: true, tabId: PANEL_TAB_ID, windowId: PANEL_WINDOW_ID };
+        return { status: "ok", reused: true, tabId: state.panelTabId, windowId: state.panelWindowId };
       }
     } catch (error) {
-      PANEL_WINDOW_ID = null;
-      PANEL_TAB_ID = null;
+      clearPanelState(ownerWindowId);
     }
   }
 
   try {
-    var found = await findPanelTab();
-    if (found) {
-      PANEL_TAB_ID = found.id;
-      PANEL_WINDOW_ID = typeof found.windowId === "undefined" ? PANEL_WINDOW_ID : found.windowId;
-      await focusTab(found);
-      return { status: "ok", reused: true, tabId: PANEL_TAB_ID, windowId: PANEL_WINDOW_ID };
+    var found = await findPanelTab(ownerWindowId);
+    if (found && found.tab) {
+      var attachedTabId = isNumericId(ownerTabId) ? ownerTabId : null;
+      var nextState = {
+        ownerWindowId: ownerWindowId,
+        panelWindowId: isNumericId(found.tab.windowId) ? found.tab.windowId : null,
+        panelTabId: found.tab.id,
+        attachedTabId: attachedTabId
+      };
+      setPanelState(ownerWindowId, nextState);
+      await focusTab(found.tab);
+      return { status: "ok", reused: true, tabId: nextState.panelTabId, windowId: nextState.panelWindowId };
     }
   } catch (error) {
   }
 
-  var url = browser.runtime.getURL("popover.html?panel=1");
+  var url = buildPanelUrl(ownerWindowId);
   if (browser.windows && browser.windows.create) {
     var height = 720;
     try {
@@ -148,115 +419,216 @@ async function openPanelWindowInner() {
         height: height,
         focused: true
       });
-      PANEL_WINDOW_ID = panel.id || null;
-      PANEL_TAB_ID = panel.tabs && panel.tabs[0] ? panel.tabs[0].id : null;
-      return { status: "ok", windowId: PANEL_WINDOW_ID, tabId: PANEL_TAB_ID };
+      var panelTabId = panel.tabs && panel.tabs[0] ? panel.tabs[0].id : null;
+      var panelState = {
+        ownerWindowId: ownerWindowId,
+        panelWindowId: panel.id || null,
+        panelTabId: panelTabId,
+        attachedTabId: isNumericId(ownerTabId) ? ownerTabId : null
+      };
+      setPanelState(ownerWindowId, panelState);
+      return { status: "ok", windowId: panelState.panelWindowId, tabId: panelState.panelTabId };
     } catch (error) {
-      PANEL_WINDOW_ID = null;
-      PANEL_TAB_ID = null;
+      clearPanelState(ownerWindowId);
     }
   }
   if (browser.tabs && browser.tabs.create) {
-    var tab = await browser.tabs.create({ url: url, active: true });
-    PANEL_TAB_ID = tab.id;
-    PANEL_WINDOW_ID = typeof tab.windowId === "undefined" ? null : tab.windowId;
-    return { status: "ok", tabId: PANEL_TAB_ID, windowId: PANEL_WINDOW_ID };
+    var createOptions = { url: url, active: true };
+    if (isNumericId(ownerWindowId)) {
+      createOptions.windowId = ownerWindowId;
+    }
+    var tab = await browser.tabs.create(createOptions);
+    var panelState = {
+      ownerWindowId: ownerWindowId,
+      panelWindowId: isNumericId(tab.windowId) ? tab.windowId : null,
+      panelTabId: tab.id,
+      attachedTabId: isNumericId(ownerTabId) ? ownerTabId : null
+    };
+    setPanelState(ownerWindowId, panelState);
+    return { status: "ok", tabId: panelState.panelTabId, windowId: panelState.panelWindowId };
   }
   return { status: "error", error: "panel_unavailable" };
 }
 
-function openPanelWindow() {
-  if (PANEL_OPEN_PROMISE) {
-    return PANEL_OPEN_PROMISE;
+function openPanelWindow(ownerWindowId, ownerTabId) {
+  var key = getOwnerKey(ownerWindowId);
+  if (PANEL_OPEN_PROMISES[key]) {
+    return PANEL_OPEN_PROMISES[key];
   }
-  PANEL_OPEN_PROMISE = openPanelWindowInner();
-  if (PANEL_OPEN_PROMISE && PANEL_OPEN_PROMISE.finally) {
-    PANEL_OPEN_PROMISE.finally(function () {
-      PANEL_OPEN_PROMISE = null;
+  var promise = openPanelWindowInner(ownerWindowId, ownerTabId);
+  PANEL_OPEN_PROMISES[key] = promise;
+  if (promise && promise.finally) {
+    promise.finally(function () {
+      if (PANEL_OPEN_PROMISES[key] === promise) {
+        delete PANEL_OPEN_PROMISES[key];
+      }
     });
   }
-  return PANEL_OPEN_PROMISE;
+  return promise;
 }
 
-async function closePanelWindow(sender) {
-  var tabId = null;
-  if (sender && sender.tab && typeof sender.tab.id !== "undefined") {
-    if (isPanelUrl(sender.url) || isPanelUrl(sender.tab.url)) {
-      tabId = sender.tab.id;
+async function closePanelWindow(sender, ownerWindowOverride) {
+  var senderPanelTabId = null;
+  var senderPanelMeta = null;
+  if (sender && sender.tab && isNumericId(sender.tab.id) && isPanelUrl(sender.tab.url || sender.url)) {
+    senderPanelTabId = sender.tab.id;
+    senderPanelMeta = getPanelMeta(sender.tab.url || sender.url);
+  }
+
+  var panelState = null;
+  if (isNumericId(senderPanelTabId)) {
+    panelState = getPanelStateByTabId(senderPanelTabId);
+  }
+  var ownerWindowId = resolveOwnerWindowId(sender, ownerWindowOverride);
+  if (!panelState) {
+    if (isNumericId(ownerWindowId)) {
+      panelState = getPanelState(ownerWindowId);
     }
   }
-
-  if (!tabId && PANEL_TAB_ID) {
-    tabId = PANEL_TAB_ID;
+  if (!panelState) {
+    if (isNumericId(senderPanelTabId) && browser.tabs && browser.tabs.remove) {
+      try {
+        await browser.tabs.remove(senderPanelTabId);
+      } catch (error) {
+      }
+      if (senderPanelMeta && isNumericId(senderPanelMeta.ownerWindowId)) {
+        clearPanelState(senderPanelMeta.ownerWindowId);
+      }
+      return;
+    }
+    if (isNumericId(ownerWindowId)) {
+      try {
+        var found = await findPanelTab(ownerWindowId);
+        if (found && found.tab && isNumericId(found.tab.id) && browser.tabs && browser.tabs.remove) {
+          await browser.tabs.remove(found.tab.id);
+        }
+      } catch (error) {
+      }
+      clearPanelState(ownerWindowId);
+    }
+    return;
   }
 
-  if (!tabId) {
+  var panelTabId = isNumericId(panelState.panelTabId) ? panelState.panelTabId : senderPanelTabId;
+  var panelWindowId = isNumericId(panelState.panelWindowId) ? panelState.panelWindowId : null;
+  if (isNumericId(panelTabId) && browser.tabs && browser.tabs.get) {
     try {
-      var found = await findPanelTab();
-      if (found && typeof found.id !== "undefined") {
-        tabId = found.id;
+      var candidate = await browser.tabs.get(panelTabId);
+      if (!candidate || !isPanelUrl(candidate.url)) {
+        clearPanelState(panelState.ownerWindowId);
+        return;
       }
     } catch (error) {
+      clearPanelState(panelState.ownerWindowId);
+      return;
     }
   }
 
-  if (tabId && browser.tabs && browser.tabs.remove) {
+  if (isNumericId(panelTabId) && browser.tabs && browser.tabs.remove) {
     try {
-      await browser.tabs.remove(tabId);
+      await browser.tabs.remove(panelTabId);
     } catch (error) {
     }
-  } else if (PANEL_WINDOW_ID && browser.windows && browser.windows.remove) {
+  } else if (isNumericId(panelWindowId) && browser.windows && browser.windows.remove) {
     try {
-      await browser.windows.remove(PANEL_WINDOW_ID);
+      await browser.windows.remove(panelWindowId);
     } catch (error) {
     }
   }
 
-  PANEL_WINDOW_ID = null;
-  PANEL_TAB_ID = null;
+  clearPanelState(panelState.ownerWindowId);
 }
 
-async function handleTool(toolName, args) {
+async function handleTool(toolName, args, sender, tabOverride) {
   if (!ALLOWED_TOOLS[toolName]) {
     return { status: "error", error: "unsupported_tool" };
   }
   if (toolName === "browser.open_tab") {
     if (args && args.url) {
-      await browser.tabs.create({ url: args.url });
-      return { status: "ok" };
+      var safeUrl = sanitizeOpenUrl(args.url);
+      if (!safeUrl) {
+        return { status: "error", error: "invalid_url" };
+      }
+      if (!browser.tabs || !browser.tabs.create) {
+        return { status: "error", error: "tabs_unavailable" };
+      }
+      var targetWindowId = await getTabWindowId(tabOverride);
+      if (!isNumericId(targetWindowId)) {
+        targetWindowId = resolveOwnerWindowId(sender, null);
+      }
+      var createOptions = { url: safeUrl, active: true };
+      if (isNumericId(targetWindowId)) {
+        createOptions.windowId = targetWindowId;
+      }
+      try {
+        await browser.tabs.create(createOptions);
+        return { status: "ok" };
+      } catch (error) {
+        if (isNumericId(createOptions.windowId)) {
+          try {
+            await browser.tabs.create({ url: safeUrl, active: true });
+            return { status: "ok" };
+          } catch (innerError) {
+          }
+        }
+        return { status: "error", error: "open_tab_failed" };
+      }
     }
     return { status: "error", error: "missing_url" };
   }
 
-  var tab = await getActiveTab();
-  if (!tab || typeof tab.id === "undefined") {
+  var tabId = null;
+  if (isNumericId(tabOverride)) {
+    if (await tabExists(tabOverride)) {
+      tabId = tabOverride;
+    } else {
+      return { status: "error", error: "no_target_tab" };
+    }
+  } else {
+    tabId = await resolveTargetTabId(sender, null);
+  }
+  if (!isNumericId(tabId)) {
     return { status: "error", error: "no_active_tab" };
   }
-  return browser.tabs.sendMessage(tab.id, { type: "laika.tool", toolName: toolName, args: args || {} });
+  try {
+    return await browser.tabs.sendMessage(tabId, { type: "laika.tool", toolName: toolName, args: args || {} });
+  } catch (error) {
+    return { status: "error", error: "no_context" };
+  }
 }
 
 function registerActionClick() {
   if (browser.action && browser.action.onClicked) {
-    browser.action.onClicked.addListener(function () {
-      handleToolbarClick().catch(function () {
-        openPanelWindow();
+    browser.action.onClicked.addListener(function (tab) {
+      handleToolbarClick(tab).catch(function () {
+        if (tab) {
+          openPanelWindow(tab.windowId, null);
+        } else {
+          openPanelWindow(null, null);
+        }
       });
     });
     return;
   }
   if (browser.browserAction && browser.browserAction.onClicked) {
-    browser.browserAction.onClicked.addListener(function () {
-      handleToolbarClick().catch(function () {
-        openPanelWindow();
+    browser.browserAction.onClicked.addListener(function (tab) {
+      handleToolbarClick(tab).catch(function () {
+        if (tab) {
+          openPanelWindow(tab.windowId, null);
+        } else {
+          openPanelWindow(null, null);
+        }
       });
     });
   }
 }
 
-async function handleToolbarClick() {
-  var result = await sendSidecarMessage("laika.sidecar.toggle");
+async function handleToolbarClick(tab) {
+  var tabId = tab && isNumericId(tab.id) ? tab.id : null;
+  var windowId = tab && isNumericId(tab.windowId) ? tab.windowId : null;
+  var result = await sendSidecarMessage("laika.sidecar.toggle", null, null, tabId);
   if (!result || result.status !== "ok") {
-    return openPanelWindow();
+    return openPanelWindow(windowId, null);
   }
   return result;
 }
@@ -266,25 +638,34 @@ browser.runtime.onMessage.addListener(function (message, sender) {
     return Promise.resolve({ status: "error", error: "invalid_message" });
   }
   if (message.type === "laika.observe") {
-    return handleObserve(message.options);
+    return handleObserve(message.options, sender, message.tabId);
   }
   if (message.type === "laika.tool") {
-    return handleTool(message.toolName, message.args || {});
+    return handleTool(message.toolName, message.args || {}, sender, message.tabId);
   }
   if (message.type === "laika.sidecar.hide") {
-    return sendSidecarMessage("laika.sidecar.hide", message.side);
+    return sendSidecarMessage("laika.sidecar.hide", message.side, sender, message.tabId);
   }
   if (message.type === "laika.sidecar.show") {
-    return sendSidecarMessage("laika.sidecar.show", message.side);
+    return sendSidecarMessage("laika.sidecar.show", message.side, sender, message.tabId);
   }
   if (message.type === "laika.sidecar.toggle") {
-    return sendSidecarMessage("laika.sidecar.toggle", message.side);
+    return sendSidecarMessage("laika.sidecar.toggle", message.side, sender, message.tabId);
+  }
+  if (message.type === "laika.tabs.list") {
+    var ownerWindowId = resolveOwnerWindowId(sender, message.windowId);
+    return listTabsForWindow(ownerWindowId).then(function (tabs) {
+      return { status: "ok", tabs: tabs };
+    });
   }
   if (message.type === "laika.panel.open") {
-    return openPanelWindow();
+    return resolveTargetTabId(sender, message.tabId).then(function (tabId) {
+      var ownerWindowId = resolveOwnerWindowId(sender, message.windowId);
+      return openPanelWindow(ownerWindowId, tabId);
+    });
   }
   if (message.type === "laika.panel.close") {
-    return closePanelWindow(sender).then(function () {
+    return closePanelWindow(sender, message.windowId).then(function () {
       return { status: "ok" };
     });
   }
@@ -295,18 +676,50 @@ registerActionClick();
 
 if (browser.windows && browser.windows.onRemoved) {
   browser.windows.onRemoved.addListener(function (windowId) {
-    if (PANEL_WINDOW_ID === windowId) {
-      PANEL_WINDOW_ID = null;
-      PANEL_TAB_ID = null;
+    var keys = Object.keys(PANEL_STATE_BY_OWNER);
+    for (var i = 0; i < keys.length; i += 1) {
+      var state = PANEL_STATE_BY_OWNER[keys[i]];
+      if (!state) {
+        continue;
+      }
+      if (state.ownerWindowId === windowId) {
+        if (isNumericId(state.panelWindowId) && state.panelWindowId !== windowId && browser.windows && browser.windows.remove) {
+          var windowRemoval = browser.windows.remove(state.panelWindowId);
+          if (windowRemoval && windowRemoval.catch) {
+            windowRemoval.catch(function () {
+            });
+          }
+        } else if (isNumericId(state.panelTabId) && browser.tabs && browser.tabs.remove) {
+          var tabRemoval = browser.tabs.remove(state.panelTabId);
+          if (tabRemoval && tabRemoval.catch) {
+            tabRemoval.catch(function () {
+            });
+          }
+        }
+        clearPanelState(state.ownerWindowId);
+        continue;
+      }
+      if (state.panelWindowId === windowId) {
+        clearPanelState(state.ownerWindowId);
+      }
     }
   });
 }
 
 if (browser.tabs && browser.tabs.onRemoved) {
   browser.tabs.onRemoved.addListener(function (tabId) {
-    if (PANEL_TAB_ID === tabId) {
-      PANEL_WINDOW_ID = null;
-      PANEL_TAB_ID = null;
+    var state = getPanelStateByTabId(tabId);
+    if (state) {
+      clearPanelState(state.ownerWindowId);
+      return;
+    }
+    var keys = Object.keys(PANEL_STATE_BY_OWNER);
+    for (var i = 0; i < keys.length; i += 1) {
+      var entry = PANEL_STATE_BY_OWNER[keys[i]];
+      if (entry && entry.attachedTabId === tabId) {
+        entry.attachedTabId = null;
+        setPanelState(entry.ownerWindowId, entry);
+      }
     }
   });
 }

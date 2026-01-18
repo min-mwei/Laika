@@ -10,6 +10,7 @@ var closeButton = document.getElementById("close-sidecar");
 var isPanelWindow = false;
 
 var lastObservation = null;
+var lastObservationTabId = null;
 var planValidator = window.LaikaPlanValidator || {
   validatePlanResponse: function () {
     return { ok: true };
@@ -120,7 +121,7 @@ function formatToolCall(action) {
   return name + (argText ? " (" + argText + ")" : "");
 }
 
-function appendActionPrompt(action) {
+function appendActionPrompt(action, tabId) {
   var message = document.createElement("div");
   message.className = "message";
   var label = document.createElement("strong");
@@ -137,7 +138,7 @@ function appendActionPrompt(action) {
   approveButton.addEventListener("click", function () {
     approveButton.disabled = true;
     rejectButton.disabled = true;
-    runTool(action);
+    runTool(action, tabId);
   });
   rejectButton.addEventListener("click", function () {
     approveButton.disabled = true;
@@ -201,10 +202,29 @@ async function observePage() {
   if (isObservationEmpty(result.observation)) {
     throw new Error("no_context");
   }
+  if (typeof result.tabId === "number") {
+    lastObservationTabId = result.tabId;
+  } else {
+    lastObservationTabId = null;
+  }
   return result.observation;
 }
 
-async function requestPlan(goal, observation) {
+async function listTabContext() {
+  if (typeof browser === "undefined" || !browser.runtime || !browser.runtime.sendMessage) {
+    return [];
+  }
+  try {
+    var response = await browser.runtime.sendMessage({ type: "laika.tabs.list" });
+    if (response && response.status === "ok" && Array.isArray(response.tabs)) {
+      return response.tabs;
+    }
+  } catch (error) {
+  }
+  return [];
+}
+
+async function requestPlan(goal, observation, tabs) {
   var origin = "";
   try {
     origin = new URL(observation.url).origin;
@@ -219,21 +239,26 @@ async function requestPlan(goal, observation) {
         origin: origin,
         mode: "assist",
         observation: observation,
-        recentToolCalls: []
+        recentToolCalls: [],
+        tabs: Array.isArray(tabs) ? tabs : []
       }
     }
   };
   return await sendNativeMessage(payload);
 }
 
-async function runTool(action) {
+async function runTool(action, tabId) {
   appendMessage("system", "Running " + action.toolCall.name + "...");
   try {
-    var result = await browser.runtime.sendMessage({
+    var payload = {
       type: "laika.tool",
       toolName: action.toolCall.name,
       args: action.toolCall.arguments || {}
-    });
+    };
+    if (typeof tabId === "number") {
+      payload.tabId = tabId;
+    }
+    var result = await browser.runtime.sendMessage(payload);
     if (result.status !== "ok") {
       appendMessage("system", "Tool failed: " + (result.error || "unknown"));
       return;
@@ -253,11 +278,15 @@ sendButton.addEventListener("click", async function () {
   appendMessage("user", goal);
   goalInput.value = "";
   sendButton.disabled = true;
+  lastObservationTabId = null;
 
   try {
+    var tabsPromise = listTabContext();
     lastObservation = await observePage();
+    var tabIdForPlan = lastObservationTabId;
+    var tabsContext = await tabsPromise;
     appendMessage("system", "Planning with local model...");
-    var response = await requestPlan(goal, lastObservation);
+    var response = await requestPlan(goal, lastObservation, tabsContext);
     if (!response || response.ok !== true) {
       appendMessage("system", "Plan failed: " + (response && response.error ? response.error : "unknown"));
       return;
@@ -273,9 +302,9 @@ sendButton.addEventListener("click", async function () {
       if (action.policy.decision === "deny") {
         appendMessage("system", "Blocked: " + action.policy.reasonCode);
       } else if (action.policy.decision === "allow") {
-        runTool(action);
+        runTool(action, tabIdForPlan);
       } else {
-        appendActionPrompt(action);
+        appendActionPrompt(action, tabIdForPlan);
       }
     });
   } catch (error) {

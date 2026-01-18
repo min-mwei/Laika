@@ -26,6 +26,15 @@ If no action is needed, return an empty tool_calls array.
         lines.append("Goal: \(goal)")
         lines.append("Origin: \(context.origin)")
         lines.append("Mode: \(context.mode.rawValue)")
+        if !context.tabs.isEmpty {
+            lines.append("Open Tabs (current window):")
+            for tab in context.tabs {
+                let title = tab.title.isEmpty ? "-" : tab.title
+                let location = tab.origin.isEmpty ? tab.url : tab.origin
+                let activeLabel = tab.isActive ? "[active] " : ""
+                lines.append("- \(activeLabel)\(title) (\(location))")
+            }
+        }
         lines.append("Page URL: \(context.observation.url)")
         lines.append("Page Title: \(context.observation.title)")
         lines.append("Page Text: \(context.observation.text)")

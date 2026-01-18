@@ -19,7 +19,7 @@ Tools are necessary for:
 User
   │
   ▼
-Sidecar UI (in-page iframe; fallback panel window: popover.html + popover.js)
+Sidecar UI (in-page iframe in the active tab; fallback panel window: popover.html + popover.js)
   │  native messaging
   ▼
 Extension background (background.js)
@@ -46,7 +46,7 @@ Tool results -> Agent Core -> sidecar UI
 
 ## Tool lifecycle (one step)
 
-1. Observe: the extension captures page text + element handles.
+1. Observe: the extension captures page text + element handles and a sanitized list of open tabs in the current window.
 2. Plan: the model emits JSON with summary + tool_calls.
 3. Gate: Policy Gate returns allow/ask/deny per tool call.
 4. Act: allowed tools execute in JS or Swift.
@@ -131,6 +131,12 @@ Laika uses a **context pack** rather than raw DOM:
 - Observation text (budgeted)
 - Element list with handles
 - Recent tool calls (if available)
+- Open tab summaries for the current window (title + origin only)
+
+Multi-tab context (prototype):
+
+- The sidecar asks the background for tab summaries (`laika.tabs.list`) and includes them in the plan request.
+- Tool execution stays bound to the tab that was observed; the tab list is for planning context only.
 
 Observation budgets (current):
 

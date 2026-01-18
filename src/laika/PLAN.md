@@ -44,19 +44,20 @@ Purpose: validate the design with a thin slice that combines a simple agent UI i
    - Success: extension can send/receive typed messages to the native handler.
 
 2. Minimal Safari UI
-   - Toolbar-attached sidecar panel with prompt input, run status, approvals list (fallback: standalone panel window on restricted pages).
+   - Toolbar-attached sidecar panel per Safari window with prompt input, run status, approvals list (fallback: standalone panel window on restricted pages).
    - Companion window with chat log and action queue.
    - Show "Observe/Assist" mode per site.
    - Success: entering a prompt triggers an observe->model->propose loop.
 
 3. Observe-only tool
    - Content script collects visible text + interactive elements (role, label, bbox).
-   - observe_dom returns a bounded context pack (size cap, no raw HTML).
+   - observe_dom returns a bounded context pack (size cap, no raw HTML) plus a sanitized list of open tabs in the current window.
    - Success: model can answer "summarize this page" with citations (element IDs or URLs).
 
 4. Assist-mode actions
    - Implement element handles scoped to (tabId, origin, documentId).
    - Tools: browser.click, browser.type, browser.open_tab, browser.scroll.
+   - Tool execution is bound to the observed tab unless a tab-switch tool is explicitly introduced.
    - Policy gate: allow observe; ask for actions; deny sensitive fields by default.
    - Success: user can approve a proposed click/type step and see highlight before execute.
 

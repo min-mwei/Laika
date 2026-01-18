@@ -42,16 +42,49 @@ public struct BoundingBox: Codable, Equatable, Sendable {
     }
 }
 
+public struct TabSummary: Codable, Equatable, Sendable {
+    public let title: String
+    public let url: String
+    public let origin: String
+    public let isActive: Bool
+
+    public init(title: String, url: String, origin: String, isActive: Bool) {
+        self.title = title
+        self.url = url
+        self.origin = origin
+        self.isActive = isActive
+    }
+}
+
 public struct ContextPack: Codable, Equatable, Sendable {
     public let origin: String
     public let mode: SiteMode
     public let observation: Observation
     public let recentToolCalls: [ToolCall]
+    public let tabs: [TabSummary]
 
-    public init(origin: String, mode: SiteMode, observation: Observation, recentToolCalls: [ToolCall]) {
+    public init(origin: String, mode: SiteMode, observation: Observation, recentToolCalls: [ToolCall], tabs: [TabSummary] = []) {
         self.origin = origin
         self.mode = mode
         self.observation = observation
         self.recentToolCalls = recentToolCalls
+        self.tabs = tabs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case origin
+        case mode
+        case observation
+        case recentToolCalls
+        case tabs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        origin = try container.decode(String.self, forKey: .origin)
+        mode = try container.decode(SiteMode.self, forKey: .mode)
+        observation = try container.decode(Observation.self, forKey: .observation)
+        recentToolCalls = try container.decodeIfPresent([ToolCall].self, forKey: .recentToolCalls) ?? []
+        tabs = try container.decodeIfPresent([TabSummary].self, forKey: .tabs) ?? []
     }
 }
