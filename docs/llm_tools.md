@@ -19,7 +19,7 @@ Tools are necessary for:
 User
   │
   ▼
-Sidecar UI (popover.html + popover.js)
+Sidecar UI (in-page iframe; fallback panel window: popover.html + popover.js)
   │  native messaging
   ▼
 Extension background (background.js)

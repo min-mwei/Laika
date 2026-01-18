@@ -22,7 +22,7 @@ Purpose: validate the design with a thin slice that combines a simple agent UI i
   - action tools -> click/type/scroll by element handle
   - overlay -> highlight target and show approval state
 - macOS app (SwiftUI)
-  - toolbar popover + small companion window
+  - toolbar-attached sidecar panel (fallback: standalone panel window) + small companion window
   - agent loop: observe -> model -> policy -> propose -> execute
   - run log: SQLite or JSONL append (small)
   - policy gate: static rules + per-site mode (Observe/Assist)
@@ -44,7 +44,7 @@ Purpose: validate the design with a thin slice that combines a simple agent UI i
    - Success: extension can send/receive typed messages to the native handler.
 
 2. Minimal Safari UI
-   - Toolbar popover with prompt input, run status, approvals list.
+   - Toolbar-attached sidecar panel with prompt input, run status, approvals list (fallback: standalone panel window on restricted pages).
    - Companion window with chat log and action queue.
    - Show "Observe/Assist" mode per site.
    - Success: entering a prompt triggers an observe->model->propose loop.

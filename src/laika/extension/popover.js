@@ -7,6 +7,7 @@ var sendButton = document.getElementById("send");
 var chatLog = document.getElementById("chat-log");
 var settingsButton = document.getElementById("open-settings");
 var closeButton = document.getElementById("close-sidecar");
+var isPanelWindow = false;
 
 var lastObservation = null;
 var planValidator = window.LaikaPlanValidator || {
@@ -36,10 +37,33 @@ function openSettings() {
 }
 
 function closeSidecar() {
+  if (isPanelWindow) {
+    if (typeof browser !== "undefined" && browser.runtime && browser.runtime.sendMessage) {
+      try {
+        var request = browser.runtime.sendMessage({ type: "laika.panel.close" });
+        if (request && request.catch) {
+          request.catch(function () {
+          });
+        }
+      } catch (error) {
+      }
+    }
+    try {
+      window.close();
+    } catch (error) {
+    }
+    return;
+  }
   if (typeof browser === "undefined" || !browser.runtime) {
     return;
   }
-  browser.runtime.sendMessage({ type: "laika.sidecar.hide" });
+  if (browser.runtime.sendMessage) {
+    var request = browser.runtime.sendMessage({ type: "laika.sidecar.hide" });
+    if (request && request.catch) {
+      request.catch(function () {
+      });
+    }
+  }
 }
 
 function setStatus(text) {
@@ -266,6 +290,11 @@ sendButton.addEventListener("click", async function () {
 });
 
 (function init() {
+  try {
+    isPanelWindow = window.top === window && new URL(window.location.href).searchParams.get("panel") === "1";
+  } catch (error) {
+    isPanelWindow = false;
+  }
   if (settingsButton) {
     settingsButton.addEventListener("click", openSettings);
   }

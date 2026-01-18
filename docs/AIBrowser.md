@@ -12,7 +12,7 @@ Laika is a macOS Safari extension + companion app that embeds a **secure AI agen
 
 This is a design draft for an MVP. It focuses on security posture, system boundaries, and contracts. Specific implementation details (exact Safari APIs, storage schema, model selection) should be validated with prototypes.
 
-Prototype UI note: the current build uses an in-page **sidecar panel** toggled by the toolbar icon (position configurable in Settings). References to a “popover” below should be read as “sidecar panel” for the prototype UI.
+Prototype UI note: the current build renders an attached, in-page **sidecar panel** inside the active tab, toggled by the toolbar icon (position configurable in Settings). If the active tab can’t be scripted, the toolbar opens the same UI as a standalone panel window. References to a “popover” below should be read as “sidecar UI” for the prototype.
 
 Convergence note: further changes should be driven by probe/prototype results (Safari/WebExtension behavior, IPC limits, sandboxed local inference), not more design expansion.
 

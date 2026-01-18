@@ -96,7 +96,7 @@
       container.style.maxWidth = "70vw";
       container.style.zIndex = "2147483647";
       container.style.background = "#f7f9fc";
-      container.style.boxShadow = "0 0 24px rgba(0, 0, 0, 0.2)";
+      container.style.boxShadow = "none";
       container.style.pointerEvents = "auto";
       container.style.boxSizing = "border-box";
       var frame = document.createElement("iframe");

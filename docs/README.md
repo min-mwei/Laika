@@ -2,7 +2,7 @@
 
 Quick index for design and research notes.
 
-- `docs/AIBrowser.md`: core architecture + security design for the Safari extension + app; current prototype UI uses a toolbar-toggled sidecar panel.
+- `docs/AIBrowser.md`: core architecture + security design for the Safari extension + app; current prototype UI uses a toolbar-toggled, attached sidecar panel in the active tab (with a standalone panel-window fallback when the sidecar can’t attach).
 - `docs/AIBrowser_pitch.md`: product narrative and positioning.
 - `docs/llm_tools.md`: tool-calling contract and tool catalog for Laika models.
 - `docs/local_llm.md`: local model runtime and safety/perf guidance.
