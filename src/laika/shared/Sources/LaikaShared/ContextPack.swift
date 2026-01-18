@@ -19,12 +19,23 @@ public struct ObservedElement: Codable, Equatable, Sendable {
     public let role: String
     public let label: String
     public let boundingBox: BoundingBox
+    public let href: String?
+    public let inputType: String?
 
-    public init(handleId: String, role: String, label: String, boundingBox: BoundingBox) {
+    public init(
+        handleId: String,
+        role: String,
+        label: String,
+        boundingBox: BoundingBox,
+        href: String? = nil,
+        inputType: String? = nil
+    ) {
         self.handleId = handleId
         self.role = role
         self.label = label
         self.boundingBox = boundingBox
+        self.href = href
+        self.inputType = inputType
     }
 }
 
@@ -61,14 +72,32 @@ public struct ContextPack: Codable, Equatable, Sendable {
     public let mode: SiteMode
     public let observation: Observation
     public let recentToolCalls: [ToolCall]
+    public let recentToolResults: [ToolResult]
     public let tabs: [TabSummary]
+    public let runId: String?
+    public let step: Int?
+    public let maxSteps: Int?
 
-    public init(origin: String, mode: SiteMode, observation: Observation, recentToolCalls: [ToolCall], tabs: [TabSummary] = []) {
+    public init(
+        origin: String,
+        mode: SiteMode,
+        observation: Observation,
+        recentToolCalls: [ToolCall],
+        recentToolResults: [ToolResult] = [],
+        tabs: [TabSummary] = [],
+        runId: String? = nil,
+        step: Int? = nil,
+        maxSteps: Int? = nil
+    ) {
         self.origin = origin
         self.mode = mode
         self.observation = observation
         self.recentToolCalls = recentToolCalls
+        self.recentToolResults = recentToolResults
         self.tabs = tabs
+        self.runId = runId
+        self.step = step
+        self.maxSteps = maxSteps
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -76,7 +105,11 @@ public struct ContextPack: Codable, Equatable, Sendable {
         case mode
         case observation
         case recentToolCalls
+        case recentToolResults
         case tabs
+        case runId
+        case step
+        case maxSteps
     }
 
     public init(from decoder: Decoder) throws {
@@ -85,6 +118,10 @@ public struct ContextPack: Codable, Equatable, Sendable {
         mode = try container.decode(SiteMode.self, forKey: .mode)
         observation = try container.decode(Observation.self, forKey: .observation)
         recentToolCalls = try container.decodeIfPresent([ToolCall].self, forKey: .recentToolCalls) ?? []
+        recentToolResults = try container.decodeIfPresent([ToolResult].self, forKey: .recentToolResults) ?? []
         tabs = try container.decodeIfPresent([TabSummary].self, forKey: .tabs) ?? []
+        runId = try container.decodeIfPresent(String.self, forKey: .runId)
+        step = try container.decodeIfPresent(Int.self, forKey: .step)
+        maxSteps = try container.decodeIfPresent(Int.self, forKey: .maxSteps)
     }
 }

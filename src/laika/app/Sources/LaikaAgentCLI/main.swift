@@ -18,7 +18,7 @@ func parseArgs() -> CLIArgs? {
     var origin: String = "https://example.com"
     var modelURL: URL?
     var useStatic = false
-    var maxTokens = 256
+    var maxTokens = 2048
 
     var iterator = CommandLine.arguments.makeIterator()
     _ = iterator.next()
@@ -64,7 +64,7 @@ func parseArgs() -> CLIArgs? {
 
 func usage() {
     let message = """
-Usage: laika-agent --goal "..." [--mode observe|assist] [--origin https://example.com] [--model-dir /path] [--max-tokens 256] [--static]
+Usage: laika-agent --goal "..." [--mode observe|assist] [--origin https://example.com] [--model-dir /path] [--max-tokens 2048] [--static]
 """
     print(message)
 }

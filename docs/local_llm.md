@@ -28,6 +28,20 @@ Related:
   - allow Laika to ship improved local models (or adapters) as signed artifacts,
   - allow rollback and deterministic provenance.
 
+## Prototype logging (local)
+
+- Laika creates a `Laika/` folder with subfolders: `logs/`, `db/`, and `audit/`.
+- In sandboxed builds, the home directory resolves to the container, so logs live under `~/Library/Containers/com.laika.Laika.Extension/Data/Laika/` (Safari extension) or `~/Library/Containers/com.laika.Laika/Data/Laika/` (host app).
+- Non-sandboxed CLI/server runs default to `~/Laika/`; `LAIKA_HOME=/path/to/Laika` overrides only in those runs.
+- LLM traces are written to `<base>/logs/llm.jsonl` (JSONL, append-only).
+- If the preferred location is blocked, Laika falls back to Application Support under the container (for example: `~/Library/Containers/<bundle-id>/Data/Library/Application Support/Laika/`).
+- Full prompt/output logging is enabled by default; set `LAIKA_LOG_FULL_LLM=0` to store only counts/metadata.
+
+## Qwen3 output length
+
+- Qwen3-0.6B advertises a 32,768 token context window; Laika caps `maxTokens` by default to keep local latency reasonable.
+- Increase `maxTokens` only when needed (summary truncation) and monitor latency, memory, and battery impact.
+
 ## Non-goals (initially)
 
 - A “general RAG product” or persistent corpus retrieval system. (Laika may compute embeddings internally for scoring/deduping/ranking, but it does not ship a user-facing retrieval subsystem.)

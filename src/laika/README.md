@@ -58,3 +58,4 @@ Shortcut build script:
 
 - Native messaging is used for JS -> Swift communication; no local HTTP server is required.
 - MLX Swift LM requires macOS 14+ (Apple Silicon).
+- Local logs are written under the sandbox container when running in Safari: `~/Library/Containers/com.laika.Laika.Extension/Data/Laika/logs/llm.jsonl` (host app: `~/Library/Containers/com.laika.Laika/Data/Laika/logs/llm.jsonl`). Non-sandboxed CLI/server runs default to `~/Laika/logs/llm.jsonl` and can be overridden with `LAIKA_HOME=/path`. Full prompt/output previews are enabled by default; set `LAIKA_LOG_FULL_LLM=0` to disable.

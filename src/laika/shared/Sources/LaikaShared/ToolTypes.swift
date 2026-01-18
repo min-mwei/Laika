@@ -6,6 +6,11 @@ public enum ToolName: String, Codable, CaseIterable, Sendable {
     case browserType = "browser.type"
     case browserScroll = "browser.scroll"
     case browserOpenTab = "browser.open_tab"
+    case browserNavigate = "browser.navigate"
+    case browserBack = "browser.back"
+    case browserForward = "browser.forward"
+    case browserRefresh = "browser.refresh"
+    case browserSelect = "browser.select"
 }
 
 public struct ToolCall: Codable, Equatable, Sendable {

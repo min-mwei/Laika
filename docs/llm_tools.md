@@ -140,8 +140,9 @@ Multi-tab context (prototype):
 
 Observation budgets (current):
 
-- The sidecar requests `maxChars: 1600`, `maxElements: 40` (`src/laika/extension/popover.js`).
+- The sidecar requests `maxChars: 8000`, `maxElements: 120` (`src/laika/extension/popover.js`).
 - The content script can support larger defaults (`maxChars: 4000`, `maxElements: 50`) but the request controls the limit (`src/laika/extension/content_script.js`).
+- The sidecar also passes `maxTokens` for model output length (default 2048, capped at 8192).
 
 Pushing toward a 32K token window (design notes):
 
@@ -189,21 +190,20 @@ Long-context guidance (from `docs/local_llm.md`):
 
 | Category | Tool name | Description | Tool params | Implementation | Runs in |
 | --- | --- | --- | --- | --- | --- |
-| Observation | `browser.observe_dom` | Capture page text + element handles. Not model-invoked; the app requests this before planning. | `{ "maxChars": number, "maxElements": number }` | `src/laika/extension/content_script.js` (`observeDom`) | Content script (Safari tab) |
+| Observation | `browser.observe_dom` | Capture/refresh page text + element handles. The agent may call this when it needs more context. | `{ "maxChars": number, "maxElements": number }` | `src/laika/extension/content_script.js` (`observeDom`) | Content script (Safari tab) |
 | Core navigation | `browser.open_tab` | Open a URL in a new tab. | `{ "url": "https://example.com" }` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
+| Core navigation | `browser.navigate` | Navigate the current tab to a URL. | `{ "url": "https://example.com" }` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
+| Core navigation | `browser.back` | Go back in history. | `{}` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
+| Core navigation | `browser.forward` | Go forward in history. | `{}` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
+| Core navigation | `browser.refresh` | Reload the current page. | `{}` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
 | Interaction | `browser.click` | Click a visible element by `handleId`. | `{ "handleId": "laika-12" }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
 | Interaction | `browser.type` | Type text into an input/textarea by `handleId`. | `{ "handleId": "laika-7", "text": "query" }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
 | Interaction | `browser.scroll` | Scroll the page by a vertical delta. | `{ "deltaY": 400 }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
+| Interaction | `browser.select` | Select a dropdown option by `handleId`. | `{ "handleId": "laika-9", "value": "Option" }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
 
 ## Proposed tools (not yet implemented)
 
-| Category | Tool name | Description | Tool params | Likely implementation | Likely runtime |
-| --- | --- | --- | --- | --- | --- |
-| Core navigation | `browser.navigate` | Navigate the current tab to a URL. | `{ "url": "https://example.com" }` | `background.js` | Extension background |
-| Core navigation | `browser.back` | Go back in history. | `{}` | `background.js` | Extension background |
-| Core navigation | `browser.forward` | Go forward in history. | `{}` | `background.js` | Extension background |
-| Core navigation | `browser.refresh` | Reload the current page. | `{}` | `background.js` | Extension background |
-| Interaction | `browser.select` | Select a dropdown option by `handleId`. | `{ "handleId": "laika-9", "value": "Option" }` | `content_script.js` | Content script |
+No additional tools are queued beyond the current catalog.
 | Content actions | `content.summarize` | Summarize page or scoped element. | `{ "scope": "page" }` or `{ "handleId": "laika-5" }` | Swift Agent Core | Swift (local model) |
 | Content actions | `content.find` | Search in-page or on the web for more info. | `{ "query": "SEC filing deadlines", "scope": "page"|"web" }` | Swift + `background.js` | Swift + extension background |
 

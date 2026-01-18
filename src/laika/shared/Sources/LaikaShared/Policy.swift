@@ -47,7 +47,15 @@ public final class PolicyGate: Sendable {
         switch toolCall.name {
         case .browserObserveDom:
             return PolicyResult(decision: .allow, reasonCode: "observe_allowed")
-        case .browserClick, .browserType, .browserScroll, .browserOpenTab:
+        case .browserClick,
+             .browserType,
+             .browserScroll,
+             .browserOpenTab,
+             .browserNavigate,
+             .browserBack,
+             .browserForward,
+             .browserRefresh,
+             .browserSelect:
             if context.mode == .observe {
                 return PolicyResult(decision: .deny, reasonCode: "observe_mode_blocks_actions")
             }

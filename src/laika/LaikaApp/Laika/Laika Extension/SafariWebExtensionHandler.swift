@@ -17,9 +17,24 @@ private actor NativeAgent {
     private var modelURL: URL?
     private var runner: ModelRunner?
     private var orchestrator: AgentOrchestrator?
+    private var maxTokens: Int?
 
     func plan(request: PlanRequest, maxTokens: Int?) async throws -> AgentResponse {
         try request.validate()
+        if LaikaPaths.ensureHomeDirectory() == nil {
+            let error = LaikaPaths.lastEnsureError ?? "unknown"
+            os_log("Failed to create Laika home directory: %{public}@", log: log, type: .error, error)
+        } else if LaikaPaths.lastUsedFallback {
+            let resolved = LaikaPaths.lastResolvedDirectory?.path ?? "unknown"
+            let preferred = LaikaPaths.lastPreferredDirectory?.path ?? "unknown"
+            let error = LaikaPaths.lastEnsureError ?? "unknown"
+            os_log("Laika home fallback used (resolved=%{public}@ preferred=%{public}@ error=%{public}@)",
+                   log: log,
+                   type: .error,
+                   resolved,
+                   preferred,
+                   error)
+        }
         os_log(
             "Plan request origin=%{public}@ mode=%{public}@ textChars=%{public}d elements=%{public}d",
             log: log,
@@ -32,8 +47,8 @@ private actor NativeAgent {
         let resolvedURL = resolveModelURL()
         let nextRunner: ModelRunner
         if let resolvedURL {
-            if runner == nil || modelURL != resolvedURL {
-                let tokens = maxTokens ?? 256
+            let tokens = normalizeMaxTokens(maxTokens)
+            if runner == nil || modelURL != resolvedURL || self.maxTokens != tokens {
                 os_log(
                     "Using MLX model at %{public}@ (maxTokens=%{public}d)",
                     log: log,
@@ -43,6 +58,7 @@ private actor NativeAgent {
                 )
                 runner = ModelRouter(preferred: .mlx, modelURL: resolvedURL, maxTokens: tokens)
                 modelURL = resolvedURL
+                self.maxTokens = tokens
                 orchestrator = AgentOrchestrator(model: runner ?? StaticModelRunner())
             }
             nextRunner = runner ?? StaticModelRunner()
@@ -58,6 +74,14 @@ private actor NativeAgent {
         let response = try await orchestrator!.runOnce(context: request.context, userGoal: request.goal)
         os_log("Plan response actions=%{public}d", log: log, type: .info, response.actions.count)
         return response
+    }
+
+    private func normalizeMaxTokens(_ maxTokens: Int?) -> Int {
+        let defaultTokens = 2048
+        let maxCap = 8192
+        let minTokens = 64
+        let value = maxTokens ?? defaultTokens
+        return min(max(value, minTokens), maxCap)
     }
 
     private func resolveModelURL() -> URL? {
@@ -136,6 +160,11 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             return ["ok": false, "error": "invalid_message"]
         }
 
+        if LaikaPaths.ensureHomeDirectory() == nil {
+            let error = LaikaPaths.lastEnsureError ?? "unknown"
+            os_log("Failed to create Laika home directory: %{public}@", log: log, type: .error, error)
+        }
+
         os_log("Native message type=%{public}@", log: log, type: .info, type)
         if type == "ping" {
             return ["ok": true, "status": "ready"]
@@ -152,6 +181,10 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         }
 
         do {
+            guard JSONSerialization.isValidJSONObject(requestPayload) else {
+                os_log("Plan request payload is not valid JSON", log: log, type: .error)
+                return ["ok": false, "error": "invalid_request_payload"]
+            }
             let data = try JSONSerialization.data(withJSONObject: requestPayload, options: [])
             let planRequest = try JSONDecoder().decode(PlanRequest.self, from: data)
             let maxTokens = (dict["maxTokens"] as? NSNumber)?.intValue

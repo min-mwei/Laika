@@ -9,7 +9,7 @@ public enum ModelPreference: Sendable {
 public final class ModelRouter: ModelRunner {
     private let runner: ModelRunner
 
-    public init(preferred: ModelPreference, modelURL: URL?, maxTokens: Int = 256) {
+    public init(preferred: ModelPreference, modelURL: URL?, maxTokens: Int = 2048) {
         switch preferred {
         case .mlx:
             if let url = modelURL {

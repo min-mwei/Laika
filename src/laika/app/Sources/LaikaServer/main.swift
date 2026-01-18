@@ -13,7 +13,7 @@ struct ServerConfig {
 func parseArgs() -> ServerConfig {
     var port: UInt16 = 8765
     var modelURL: URL?
-    var maxTokens = 256
+    var maxTokens = 2048
     var useStatic = false
 
     var iterator = CommandLine.arguments.makeIterator()
@@ -48,7 +48,7 @@ func parseArgs() -> ServerConfig {
 
 func usage() {
     let message = """
-Usage: laika-server [--port 8765] [--model-dir /path/to/MLX-model] [--max-tokens 256] [--static]
+Usage: laika-server [--port 8765] [--model-dir /path/to/MLX-model] [--max-tokens 2048] [--static]
 Environment:
   LAIKA_MODEL_DIR   Path to MLX model directory
 """

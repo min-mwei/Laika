@@ -13,3 +13,29 @@ test("validatePlanResponse rejects missing actions", () => {
   const result = validator.validatePlanResponse(payload);
   assert.equal(result.ok, false);
 });
+
+test("validatePlanResponse rejects unsupported tool name", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: { id: "12345678-1234-1234-1234-1234567890ab", name: "browser.nope", arguments: {} },
+        policy: { decision: "ask", reasonCode: "test" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, false);
+});
+
+test("validatePlanResponse accepts click action", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: { id: "12345678-1234-1234-1234-1234567890ab", name: "browser.click", arguments: { handleId: "laika-1" } },
+        policy: { decision: "ask", reasonCode: "test" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, true);
+});

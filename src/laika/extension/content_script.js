@@ -56,14 +56,75 @@
     return element.getAttribute("role") || element.tagName.toLowerCase();
   }
 
+  function sanitizeHref(href) {
+    if (!href) {
+      return "";
+    }
+    try {
+      var parsed = new URL(String(href), window.location.href);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return "";
+      }
+      return parsed.toString();
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function getHref(element) {
+    if (!element) {
+      return "";
+    }
+    if (element.tagName && element.tagName.toLowerCase() === "a") {
+      return sanitizeHref(element.getAttribute("href") || element.href || "");
+    }
+    return "";
+  }
+
+  function getInputType(element) {
+    if (!element) {
+      return "";
+    }
+    if (element.tagName && element.tagName.toLowerCase() === "input") {
+      return utils.normalizeWhitespace(element.getAttribute("type") || element.type || "");
+    }
+    return "";
+  }
+
+  function safeNumber(value) {
+    return Number.isFinite(value) ? value : 0;
+  }
+
   function getBoundingBox(element) {
     var rect = element.getBoundingClientRect();
     return {
-      x: rect.x,
-      y: rect.y,
-      width: rect.width,
-      height: rect.height
+      x: safeNumber(rect.x),
+      y: safeNumber(rect.y),
+      width: safeNumber(rect.width),
+      height: safeNumber(rect.height)
     };
+  }
+
+  function isTextContainerVisible(element) {
+    if (!element || !element.tagName) {
+      return false;
+    }
+    var tag = element.tagName.toLowerCase();
+    if (tag === "script" || tag === "style" || tag === "noscript" || tag === "head") {
+      return false;
+    }
+    var rect = element.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return false;
+    }
+    var style = window.getComputedStyle(element);
+    if (!style) {
+      return true;
+    }
+    if (style.display === "none" || style.visibility === "hidden") {
+      return false;
+    }
+    return true;
   }
 
   function applySidecarPlacement(container, side) {
@@ -144,11 +205,28 @@
     if (!root) {
       return "";
     }
+    var visibilityCache = new WeakMap();
+    function isNodeVisible(node) {
+      if (!node || !node.parentElement) {
+        return false;
+      }
+      var parent = node.parentElement;
+      if (visibilityCache.has(parent)) {
+        return visibilityCache.get(parent);
+      }
+      var visible = isTextContainerVisible(parent);
+      visibilityCache.set(parent, visible);
+      return visible;
+    }
+
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
     var chunks = [];
     var total = 0;
     var node;
     while ((node = walker.nextNode())) {
+      if (!isNodeVisible(node)) {
+        continue;
+      }
       var text = utils.normalizeWhitespace(node.nodeValue);
       if (!text) {
         continue;
@@ -170,15 +248,32 @@
     var maxChars = (options && options.maxChars) || 4000;
     var maxElements = (options && options.maxElements) || 50;
     var elements = Array.from(document.querySelectorAll("a, button, input, textarea, select"));
-    var limited = elements.slice(0, maxElements).map(function (element) {
-      var handleId = ensureHandle(element);
-      return {
-        handleId: handleId || "",
-        role: getRole(element),
-        label: getLabel(element),
-        boundingBox: getBoundingBox(element)
-      };
+    var projected = elements
+      .map(function (element) {
+        var boundingBox = getBoundingBox(element);
+        if (!boundingBox || boundingBox.width <= 0 || boundingBox.height <= 0) {
+          return null;
+        }
+        var handleId = ensureHandle(element);
+        return {
+          handleId: handleId || "",
+          role: getRole(element),
+          label: getLabel(element),
+          href: getHref(element),
+          inputType: getInputType(element),
+          boundingBox: boundingBox
+        };
+      })
+      .filter(function (item) {
+        return !!item && !!item.handleId;
+      });
+    projected.sort(function (a, b) {
+      if (a.boundingBox.y === b.boundingBox.y) {
+        return a.boundingBox.x - b.boundingBox.x;
+      }
+      return a.boundingBox.y - b.boundingBox.y;
     });
+    var limited = projected.slice(0, maxElements);
 
     var text = collectVisibleText(document.body, maxChars);
     return {
@@ -236,12 +331,23 @@
     if (toolName === "browser.type") {
       var input = findElement(args.handleId);
       if (input) {
+        var tagName = input.tagName ? input.tagName.toLowerCase() : "";
+        var isEditable = tagName === "input" || tagName === "textarea" || !!input.isContentEditable;
+        if (!isEditable) {
+          return { status: "error", error: "not_editable" };
+        }
         input.scrollIntoView({ block: "center" });
         highlightElement(input);
         input.focus();
-        input.value = args.text || "";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true }));
+        var text = args.text || "";
+        if (input.isContentEditable) {
+          input.textContent = text;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        } else {
+          input.value = text;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
         return { status: "ok" };
       }
       return { status: "error", error: "not_found" };
@@ -250,6 +356,32 @@
     if (toolName === "browser.scroll") {
       var deltaY = typeof args.deltaY === "number" ? args.deltaY : 0;
       window.scrollBy({ top: deltaY, left: 0, behavior: "smooth" });
+      return { status: "ok" };
+    }
+
+    if (toolName === "browser.select") {
+      var selectEl = findElement(args.handleId);
+      if (!selectEl) {
+        return { status: "error", error: "not_found" };
+      }
+      if (selectEl.tagName && selectEl.tagName.toLowerCase() !== "select") {
+        return { status: "error", error: "not_select" };
+      }
+      var value = typeof args.value === "string" ? args.value : "";
+      if (!value) {
+        return { status: "error", error: "missing_value" };
+      }
+      var options = Array.from(selectEl.options || []);
+      var matched = options.find(function (option) {
+        return option.value === value || option.label === value || option.text === value;
+      });
+      if (matched) {
+        selectEl.value = matched.value;
+      } else {
+        selectEl.value = value;
+      }
+      selectEl.dispatchEvent(new Event("input", { bubbles: true }));
+      selectEl.dispatchEvent(new Event("change", { bubbles: true }));
       return { status: "ok" };
     }
 

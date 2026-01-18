@@ -1,10 +1,16 @@
 "use strict";
 
 var ALLOWED_TOOLS = {
+  "browser.observe_dom": true,
   "browser.click": true,
   "browser.type": true,
   "browser.scroll": true,
-  "browser.open_tab": true
+  "browser.open_tab": true,
+  "browser.navigate": true,
+  "browser.back": true,
+  "browser.forward": true,
+  "browser.refresh": true,
+  "browser.select": true
 };
 
 var DEFAULT_SIDECAR_SIDE = "right";
@@ -543,6 +549,26 @@ async function handleTool(toolName, args, sender, tabOverride) {
   if (!ALLOWED_TOOLS[toolName]) {
     return { status: "error", error: "unsupported_tool" };
   }
+  if (toolName === "browser.observe_dom") {
+    function clampInt(value, min, max) {
+      if (typeof value !== "number" || !isFinite(value)) {
+        return undefined;
+      }
+      var rounded = Math.floor(value);
+      if (rounded < min) {
+        return min;
+      }
+      if (rounded > max) {
+        return max;
+      }
+      return rounded;
+    }
+    var options = {
+      maxChars: clampInt(args && args.maxChars, 0, 16000),
+      maxElements: clampInt(args && args.maxElements, 0, 200)
+    };
+    return handleObserve(options, sender, tabOverride);
+  }
   if (toolName === "browser.open_tab") {
     if (args && args.url) {
       var safeUrl = sanitizeOpenUrl(args.url);
@@ -561,13 +587,13 @@ async function handleTool(toolName, args, sender, tabOverride) {
         createOptions.windowId = targetWindowId;
       }
       try {
-        await browser.tabs.create(createOptions);
-        return { status: "ok" };
+        var created = await browser.tabs.create(createOptions);
+        return { status: "ok", tabId: created && isNumericId(created.id) ? created.id : null };
       } catch (error) {
         if (isNumericId(createOptions.windowId)) {
           try {
-            await browser.tabs.create({ url: safeUrl, active: true });
-            return { status: "ok" };
+            var createdFallback = await browser.tabs.create({ url: safeUrl, active: true });
+            return { status: "ok", tabId: createdFallback && isNumericId(createdFallback.id) ? createdFallback.id : null };
           } catch (innerError) {
           }
         }
@@ -589,6 +615,57 @@ async function handleTool(toolName, args, sender, tabOverride) {
   }
   if (!isNumericId(tabId)) {
     return { status: "error", error: "no_active_tab" };
+  }
+  if (toolName === "browser.navigate") {
+    if (!args || !args.url) {
+      return { status: "error", error: "missing_url" };
+    }
+    var navigateUrl = sanitizeOpenUrl(args.url);
+    if (!navigateUrl) {
+      return { status: "error", error: "invalid_url" };
+    }
+    if (!browser.tabs || !browser.tabs.update) {
+      return { status: "error", error: "tabs_unavailable" };
+    }
+    try {
+      await browser.tabs.update(tabId, { url: navigateUrl });
+      return { status: "ok" };
+    } catch (error) {
+      return { status: "error", error: "navigate_failed" };
+    }
+  }
+  if (toolName === "browser.back") {
+    if (!browser.tabs || !browser.tabs.goBack) {
+      return { status: "error", error: "tabs_unavailable" };
+    }
+    try {
+      await browser.tabs.goBack(tabId);
+      return { status: "ok" };
+    } catch (error) {
+      return { status: "error", error: "back_failed" };
+    }
+  }
+  if (toolName === "browser.forward") {
+    if (!browser.tabs || !browser.tabs.goForward) {
+      return { status: "error", error: "tabs_unavailable" };
+    }
+    try {
+      await browser.tabs.goForward(tabId);
+      return { status: "ok" };
+    } catch (error) {
+      return { status: "error", error: "forward_failed" };
+    }
+  }
+  if (toolName === "browser.refresh") {
+    if (!browser.tabs || !browser.tabs.reload) {
+      return { status: "error", error: "tabs_unavailable" };
+    }
+    try {
+      await browser.tabs.reload(tabId);
+      return { status: "ok" };
+    } catch (error) {
+      return { status: "error", error: "refresh_failed" };
+    }
   }
   try {
     return await browser.tabs.sendMessage(tabId, { type: "laika.tool", toolName: toolName, args: args || {} });

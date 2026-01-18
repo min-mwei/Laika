@@ -27,4 +27,21 @@ final class ToolCallParserTests: XCTestCase {
         XCTAssertEqual(parsed.summary, output)
         XCTAssertTrue(parsed.toolCalls.isEmpty)
     }
+
+    func testParsesJSONWhenWrappedInThinkingAndFences() throws {
+        let output = """
+        <think>Planning...</think>
+        ```json
+        {"summary":"ok","tool_calls":[{"name":"browser.scroll","arguments":{"deltaY":400}}]}
+        ```
+        """
+        let parsed = try ToolCallParser.parse(output)
+        XCTAssertEqual(parsed.summary, "ok")
+        XCTAssertEqual(parsed.toolCalls.count, 1)
+        XCTAssertEqual(parsed.toolCalls.first?.name, .browserScroll)
+    }
+
+    func testParseRequiringJSONThrowsWhenNoJSON() throws {
+        XCTAssertThrowsError(try ToolCallParser.parseRequiringJSON("hello"))
+    }
 }

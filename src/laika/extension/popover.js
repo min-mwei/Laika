@@ -9,13 +9,23 @@ var settingsButton = document.getElementById("open-settings");
 var closeButton = document.getElementById("close-sidecar");
 var isPanelWindow = false;
 
+var DEFAULT_MAX_TOKENS = 2048;
+var MAX_TOKENS_CAP = 8192;
+var maxTokensSetting = DEFAULT_MAX_TOKENS;
+
 var lastObservation = null;
 var lastObservationTabId = null;
+var lastAssistantSummary = "";
 var planValidator = window.LaikaPlanValidator || {
   validatePlanResponse: function () {
     return { ok: true };
   }
 };
+
+var MAX_AGENT_STEPS = 6;
+var MAX_OBSERVE_STEPS = 2;
+var DEFAULT_OBSERVE_OPTIONS = { maxChars: 8000, maxElements: 120 };
+var DEFAULT_ASSIST_OPTIONS = { maxChars: 8000, maxElements: 120 };
 
 function logDebug(text) {
   if (typeof console !== "undefined" && console.debug) {
@@ -67,6 +77,33 @@ function closeSidecar() {
   }
 }
 
+function clampMaxTokens(value) {
+  if (typeof value !== "number" || !isFinite(value)) {
+    return DEFAULT_MAX_TOKENS;
+  }
+  var rounded = Math.floor(value);
+  if (rounded < 64) {
+    return 64;
+  }
+  if (rounded > MAX_TOKENS_CAP) {
+    return MAX_TOKENS_CAP;
+  }
+  return rounded;
+}
+
+async function loadMaxTokens() {
+  if (!browser.storage || !browser.storage.local) {
+    maxTokensSetting = DEFAULT_MAX_TOKENS;
+    return;
+  }
+  try {
+    var stored = await browser.storage.local.get({ maxTokens: DEFAULT_MAX_TOKENS });
+    maxTokensSetting = clampMaxTokens(stored.maxTokens);
+  } catch (error) {
+    maxTokensSetting = DEFAULT_MAX_TOKENS;
+  }
+}
+
 function setStatus(text) {
   statusEl.textContent = text;
   logDebug("status: " + text);
@@ -76,8 +113,11 @@ function labelForRole(role) {
   if (role === "user") {
     return "you";
   }
-  if (role === "system") {
+  if (role === "assistant") {
     return "Laika";
+  }
+  if (role === "system") {
+    return "status";
   }
   return role;
 }
@@ -122,6 +162,7 @@ function formatToolCall(action) {
 }
 
 function appendActionPrompt(action, tabId) {
+  return new Promise(function (resolve) {
   var message = document.createElement("div");
   message.className = "message";
   var label = document.createElement("strong");
@@ -138,12 +179,15 @@ function appendActionPrompt(action, tabId) {
   approveButton.addEventListener("click", function () {
     approveButton.disabled = true;
     rejectButton.disabled = true;
-    runTool(action, tabId);
+    runTool(action, tabId).then(function (result) {
+      resolve({ decision: "approve", result: result });
+    });
   });
   rejectButton.addEventListener("click", function () {
     approveButton.disabled = true;
     rejectButton.disabled = true;
     appendMessage("system", "Action rejected: " + formatToolCall(action));
+    resolve({ decision: "reject", result: null });
   });
 
   buttons.appendChild(approveButton);
@@ -153,6 +197,7 @@ function appendActionPrompt(action, tabId) {
   message.appendChild(buttons);
   chatLog.appendChild(message);
   chatLog.scrollTop = chatLog.scrollHeight;
+  });
 }
 
 async function sendNativeMessage(payload) {
@@ -188,7 +233,7 @@ async function observePage() {
   try {
     result = await browser.runtime.sendMessage({
       type: "laika.observe",
-      options: { maxChars: 1600, maxElements: 40 }
+      options: DEFAULT_OBSERVE_OPTIONS
     });
   } catch (error) {
     throw new Error("no_context");
@@ -207,7 +252,7 @@ async function observePage() {
   } else {
     lastObservationTabId = null;
   }
-  return result.observation;
+  return { observation: result.observation, tabId: lastObservationTabId };
 }
 
 async function listTabContext() {
@@ -224,23 +269,53 @@ async function listTabContext() {
   return [];
 }
 
-async function requestPlan(goal, observation, tabs) {
+function sleep(ms) {
+  return new Promise(function (resolve) {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function observeWithRetries(options, tabId) {
+  var attempts = 5;
+  for (var i = 0; i < attempts; i += 1) {
+    try {
+      var result = await browser.runtime.sendMessage({
+        type: "laika.observe",
+        options: options || DEFAULT_OBSERVE_OPTIONS,
+        tabId: typeof tabId === "number" ? tabId : undefined
+      });
+      if (result && result.status === "ok" && result.observation && !isObservationEmpty(result.observation)) {
+        return { observation: result.observation, tabId: typeof result.tabId === "number" ? result.tabId : tabId };
+      }
+    } catch (error) {
+    }
+    await sleep(250);
+  }
+  throw new Error("observe_failed");
+}
+
+async function requestPlan(goal, context) {
   var origin = "";
   try {
-    origin = new URL(observation.url).origin;
+    origin = new URL(context.observation.url).origin;
   } catch (error) {
-    origin = observation.url || "";
+    origin = (context.observation && context.observation.url) || "";
   }
   var payload = {
     type: "plan",
+    maxTokens: clampMaxTokens(maxTokensSetting),
     request: {
       goal: goal,
       context: {
         origin: origin,
-        mode: "assist",
-        observation: observation,
-        recentToolCalls: [],
-        tabs: Array.isArray(tabs) ? tabs : []
+        mode: context.mode || "assist",
+        runId: context.runId || null,
+        step: typeof context.step === "number" ? context.step : null,
+        maxSteps: typeof context.maxSteps === "number" ? context.maxSteps : null,
+        observation: context.observation,
+        recentToolCalls: Array.isArray(context.recentToolCalls) ? context.recentToolCalls : [],
+        recentToolResults: Array.isArray(context.recentToolResults) ? context.recentToolResults : [],
+        tabs: Array.isArray(context.tabs) ? context.tabs : []
       }
     }
   };
@@ -248,7 +323,7 @@ async function requestPlan(goal, observation, tabs) {
 }
 
 async function runTool(action, tabId) {
-  appendMessage("system", "Running " + action.toolCall.name + "...");
+  logDebug("Running tool " + action.toolCall.name);
   try {
     var payload = {
       type: "laika.tool",
@@ -259,14 +334,82 @@ async function runTool(action, tabId) {
       payload.tabId = tabId;
     }
     var result = await browser.runtime.sendMessage(payload);
+    if (!result || typeof result.status !== "string") {
+      appendMessage("system", "Tool failed: no_response");
+      return { status: "error", error: "no_response" };
+    }
     if (result.status !== "ok") {
       appendMessage("system", "Tool failed: " + (result.error || "unknown"));
-      return;
+      return result;
     }
-    appendMessage("system", "Tool executed: " + action.toolCall.name);
+    return result;
   } catch (error) {
     appendMessage("system", "Tool error: " + error.message);
+    return { status: "error", error: error.message };
   }
+}
+
+function buildToolResult(toolCall, toolName, rawResult) {
+  var status = rawResult && rawResult.status === "ok" ? "ok" : "error";
+  var payload = {};
+  if (rawResult && rawResult.error) {
+    payload.error = rawResult.error;
+  }
+  if (toolName === "browser.open_tab" && rawResult && typeof rawResult.tabId === "number") {
+    payload.tabId = rawResult.tabId;
+  }
+  if (toolName === "browser.observe_dom" && rawResult && rawResult.observation) {
+    payload.url = rawResult.observation.url || "";
+    payload.title = rawResult.observation.title || "";
+    payload.textChars = (rawResult.observation.text || "").length;
+    payload.elementCount = Array.isArray(rawResult.observation.elements) ? rawResult.observation.elements.length : 0;
+  }
+  return {
+    toolCallId: toolCall.id,
+    status: status,
+    payload: payload
+  };
+}
+
+function pickNextAction(actions) {
+  if (!Array.isArray(actions)) {
+    return null;
+  }
+  for (var i = 0; i < actions.length; i += 1) {
+    var action = actions[i];
+    if (!action || !action.toolCall || !action.policy) {
+      continue;
+    }
+    if (action.policy.decision === "allow" || action.policy.decision === "ask") {
+      return action;
+    }
+  }
+  return null;
+}
+
+function generateRunId() {
+  return String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+}
+
+function isActionGoal(goal) {
+  var text = String(goal || "").toLowerCase();
+  if (!text) {
+    return false;
+  }
+  return (
+    text.indexOf("click") >= 0 ||
+    text.indexOf("open ") >= 0 ||
+    text.indexOf("go to") >= 0 ||
+    text.indexOf("navigate") >= 0 ||
+    text.indexOf("first link") >= 0 ||
+    text.indexOf("second link") >= 0 ||
+    text.indexOf("next page") >= 0 ||
+    text.indexOf("previous page") >= 0 ||
+    text.indexOf("back") >= 0 ||
+    text.indexOf("forward") >= 0 ||
+    text.indexOf("scroll") >= 0 ||
+    text.indexOf("type ") >= 0
+  );
 }
 
 sendButton.addEventListener("click", async function () {
@@ -279,34 +422,107 @@ sendButton.addEventListener("click", async function () {
   goalInput.value = "";
   sendButton.disabled = true;
   lastObservationTabId = null;
+  lastAssistantSummary = "";
 
   try {
-    var tabsPromise = listTabContext();
-    lastObservation = await observePage();
-    var tabIdForPlan = lastObservationTabId;
-    var tabsContext = await tabsPromise;
-    appendMessage("system", "Planning with local model...");
-    var response = await requestPlan(goal, lastObservation, tabsContext);
-    if (!response || response.ok !== true) {
-      appendMessage("system", "Plan failed: " + (response && response.error ? response.error : "unknown"));
-      return;
-    }
-    var plan = response.plan;
-    var validation = planValidator.validatePlanResponse(plan);
-    if (!validation.ok) {
-      appendMessage("system", "Invalid plan response: " + validation.error);
-      return;
-    }
-    appendMessage("assistant", plan.summary || "Plan ready.");
-    plan.actions.forEach(function (action) {
-      if (action.policy.decision === "deny") {
-        appendMessage("system", "Blocked: " + action.policy.reasonCode);
-      } else if (action.policy.decision === "allow") {
-        runTool(action, tabIdForPlan);
-      } else {
-        appendActionPrompt(action, tabIdForPlan);
+    await loadMaxTokens();
+    var mode = isActionGoal(goal) ? "assist" : "observe";
+    var maxSteps = mode === "observe" ? MAX_OBSERVE_STEPS : MAX_AGENT_STEPS;
+    var observeOptions = mode === "observe" ? DEFAULT_OBSERVE_OPTIONS : DEFAULT_ASSIST_OPTIONS;
+
+    var runId = generateRunId();
+    var tabsContext = await listTabContext();
+    var firstObservation = await observeWithRetries(observeOptions, null);
+    lastObservation = firstObservation.observation;
+    var tabIdForPlan = firstObservation.tabId;
+
+    var recentToolCalls = [];
+    var recentToolResults = [];
+
+    for (var step = 1; step <= maxSteps; step += 1) {
+      setStatus("Native: thinking...");
+      var context = {
+        mode: mode,
+        runId: runId,
+        step: step,
+        maxSteps: maxSteps,
+        observation: lastObservation,
+        recentToolCalls: recentToolCalls.slice(-8),
+        recentToolResults: recentToolResults.slice(-8),
+        tabs: tabsContext
+      };
+      var response = await requestPlan(goal, context);
+      if (!response || response.ok !== true) {
+        appendMessage("system", "Plan failed: " + (response && response.error ? response.error : "unknown"));
+        return;
       }
-    });
+      var plan = response.plan;
+      var validation = planValidator.validatePlanResponse(plan);
+      if (!validation.ok) {
+        appendMessage("system", "Invalid plan response: " + validation.error);
+        return;
+      }
+
+      var nextAction = pickNextAction(plan.actions);
+      if (!nextAction) {
+        if (plan.summary && plan.summary !== lastAssistantSummary) {
+          appendMessage("assistant", plan.summary);
+          lastAssistantSummary = plan.summary;
+        }
+        break;
+      }
+      if (nextAction.policy.decision === "deny") {
+        appendMessage("system", "Blocked: " + nextAction.policy.reasonCode);
+        if (plan.summary && plan.summary !== lastAssistantSummary) {
+          appendMessage("assistant", plan.summary);
+          lastAssistantSummary = plan.summary;
+        }
+        break;
+      }
+      if (step === maxSteps) {
+        appendMessage("system", "Step limit reached.");
+        if (plan.summary && plan.summary !== lastAssistantSummary) {
+          appendMessage("assistant", plan.summary);
+          lastAssistantSummary = plan.summary;
+        }
+        break;
+      }
+
+      var approval = null;
+      if (nextAction.policy.decision === "ask") {
+        if (plan.summary && plan.summary !== lastAssistantSummary) {
+          appendMessage("assistant", plan.summary);
+          lastAssistantSummary = plan.summary;
+        }
+        approval = await appendActionPrompt(nextAction, tabIdForPlan);
+        if (!approval || approval.decision !== "approve") {
+          appendMessage("system", "Stopped: action not approved.");
+          break;
+        }
+      } else {
+        approval = { decision: "approve", result: await runTool(nextAction, tabIdForPlan) };
+      }
+
+      var toolResult = approval.result;
+      recentToolCalls.push(nextAction.toolCall);
+      recentToolResults.push(buildToolResult(nextAction.toolCall, nextAction.toolCall.name, toolResult));
+
+      if (toolResult && typeof toolResult.tabId === "number") {
+        tabIdForPlan = toolResult.tabId;
+      }
+      if (nextAction.toolCall.name === "browser.observe_dom" && toolResult && toolResult.observation) {
+        lastObservation = toolResult.observation;
+        if (typeof toolResult.tabId === "number") {
+          tabIdForPlan = toolResult.tabId;
+        }
+      } else {
+        tabsContext = await listTabContext();
+        var updated = await observeWithRetries(observeOptions, tabIdForPlan);
+        lastObservation = updated.observation;
+        tabIdForPlan = updated.tabId;
+      }
+    }
+    setStatus("Native: ready");
   } catch (error) {
     if (error && (error.message === "no_context" || error.message === "no_active_tab")) {
       explainMissingContext();
@@ -324,6 +540,7 @@ sendButton.addEventListener("click", async function () {
   } catch (error) {
     isPanelWindow = false;
   }
+  loadMaxTokens();
   if (settingsButton) {
     settingsButton.addEventListener("click", openSettings);
   }
