@@ -2,6 +2,18 @@
 
 Sources consulted to expand web navigation and form interaction question templates:
 
+Internal Laika docs (tool contract + flows):
+
+0) Tool contract and catalog
+- docs/llm_tools.md
+
+0) Automation harness goals (HN scenario)
+- docs/automation.md
+- src/laika/automation_harness/scripts/scenarios/hn.json
+
+0) AIBrowser interaction patterns + safety posture
+- docs/AIBrowser.md
+
 1) Playwright Actions docs (text input, checkboxes/radios, select options, clicks)
 - https://playwright.dev/docs/input
 

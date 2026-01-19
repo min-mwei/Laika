@@ -16,8 +16,23 @@
       "requires": ["text"]
     },
     {
+      "id": "page_takeaways",
+      "text": "What are the key takeaways from this page?",
+      "requires": ["text"]
+    },
+    {
+      "id": "page_key_numbers",
+      "text": "What are the key numbers or stats mentioned on this page?",
+      "requires": ["text"]
+    },
+    {
       "id": "main_sections",
       "text": "What are the main sections on this page?",
+      "requires": ["headings"]
+    },
+    {
+      "id": "section_summaries",
+      "text": "Summarize each main section of the page.",
       "requires": ["headings"]
     },
     {
@@ -29,6 +44,26 @@
       "id": "second_topic",
       "text": "Tell me about the second topic on this page.",
       "min_links": 2
+    },
+    {
+      "id": "summarize_first_link",
+      "text": "Summarize the first link on this page.",
+      "min_links": 1
+    },
+    {
+      "id": "summarize_second_link",
+      "text": "Summarize the second link on this page.",
+      "min_links": 2
+    },
+    {
+      "id": "key_links",
+      "text": "What are the key links on this page, and what does each look like it leads to?",
+      "min_links": 1
+    },
+    {
+      "id": "what_to_click_next",
+      "text": "What should I click next if I want to learn more?",
+      "min_links": 1
     },
     {
       "id": "first_topic_comments",
@@ -52,8 +87,8 @@
     },
     {
       "id": "fill_form",
-      "text": "Fill in the form with the following: name={name}, email={email}, message={message}.",
-      "requires": ["form"]
+      "text": "Fill in the contact form with: name={name}, email={email}, message={message}",
+      "requires": ["contact_form"]
     },
     {
       "id": "search_site",

@@ -306,6 +306,8 @@ def _normalize_tool_calls(payload: Dict[str, Any]) -> None:
             call["name"] = call.get("tool")
         if "arguments" not in call and "args" in call:
             call["arguments"] = call.get("args")
+        call.pop("tool", None)
+        call.pop("args", None)
         normalized.append(call)
     payload["tool_calls"] = normalized
 
@@ -838,6 +840,15 @@ def _snapshot_features(snapshot: Snapshot) -> Dict[str, Any]:
             if f.input_type == "search" or "search" in f.label.lower()
         ]
     ) >= 1
+    lowered_labels = [f.label.lower() for f in snapshot.form_fields if f.label]
+    has_name = any("name" in label for label in lowered_labels)
+    has_email = any("email" in label or "e-mail" in label for label in lowered_labels) or any(
+        f.input_type == "email" for f in snapshot.form_fields
+    )
+    has_message = any("message" in label or "comment" in label for label in lowered_labels) or any(
+        f.role == "textarea" for f in snapshot.form_fields
+    )
+    features["contact_form"] = has_email and (has_message or has_name) and len(snapshot.form_fields) >= 2
     features["hn_topics"] = len(snapshot.hn_topics) >= 1
     features["hn_comments"] = len(snapshot.hn_comments) >= 1
     features["scroll"] = True
@@ -921,6 +932,12 @@ def _response_format_for(seed_id: str) -> Optional[List[str]]:
             "What it is",
             "Why this is notable",
         ]
+    if seed_id in {"summarize_first_link", "summarize_second_link"}:
+        return [
+            "Link overview",
+            "Key points",
+            "Why it matters",
+        ]
     if seed_id in {"first_topic_comments", "second_topic_comments"}:
         return [
             "Comment themes",
@@ -932,6 +949,17 @@ def _response_format_for(seed_id: str) -> Optional[List[str]]:
 
 
 def _is_multistep(seed_id: str) -> bool:
+    return seed_id in {
+        "first_topic",
+        "second_topic",
+        "first_topic_comments",
+        "second_topic_comments",
+        "summarize_first_link",
+        "summarize_second_link",
+    }
+
+
+def _multistep_requires_hn(seed_id: str) -> bool:
     return seed_id in {
         "first_topic",
         "second_topic",
@@ -1040,6 +1068,10 @@ def _generate_multistep_record(
             "Open the commentsUrl for the topic before summarizing comments.",
             "Return a tool call now.",
         ]
+    if question.seed.qid in {"summarize_first_link", "summarize_second_link"}:
+        extra_instructions = [
+            "Open the requested link before summarizing. Return a tool call now.",
+        ]
     first_prompt = _build_user_prompt(
         question.text,
         snapshot,
@@ -1124,6 +1156,7 @@ def _build_system_prompt(reasoning: bool) -> str:
         "\n- Use browser.select for <select> elements."
         "\n- Use browser.scroll with deltaY when asked to scroll."
         "\n- Never invent handleId values; use one listed in the snapshot."
+        "\n- If the user asks for the first/second link, choose the first/second Main Links item."
         "\n- If an HN Topics list is present, use it for first/second topic selection."
         "\n- For HN topics, you may use browser.navigate/open_tab with the topic URL or commentsUrl."
         "\n- If no HN Topics list is present, treat first/second topic as Main Links items."
@@ -1343,7 +1376,9 @@ def main() -> None:
             if args.dry_run:
                 print(user_prompt)
                 continue
-            use_multistep = _is_multistep(rendered.seed.qid) and bool(snapshot.hn_topics)
+            use_multistep = _is_multistep(rendered.seed.qid)
+            if use_multistep and _multistep_requires_hn(rendered.seed.qid) and not snapshot.hn_topics:
+                use_multistep = False
             if use_multistep:
                 result = _generate_multistep_record(
                     model,

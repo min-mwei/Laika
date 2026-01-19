@@ -76,3 +76,12 @@ Each JSONL record follows the `model_trainer` format:
 - ChatGPT Codex output is normalized from `tool/args` to `name/arguments` before writing JSONL.
 - The seed questions and values live in `seed_questions.json`.
 - Research sources used to expand seed questions are listed in `research_sources.md`.
+
+## Seed Question Themes
+
+`seed_questions.json` is organized around common “browser assistant” intents:
+
+- Page summaries: what the page is about, key takeaways, main sections.
+- Link drill-down: summarize the first/second link (multi-step: open -> summarize).
+- Hacker News: summarize first/second topic and summarize comment threads (multi-step via `commentsUrl`).
+- Forms: fill contact forms, use search boxes, select dropdowns, toggle checkboxes.
