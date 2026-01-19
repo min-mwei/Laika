@@ -1,8 +1,26 @@
-# model_playground (AI21-Jamba2-3B hello world)
+# model_playground (Laika MLX POC)
 
-Minimal Python "hello world" for `ai21labs/AI21-Jamba2-3B` using Hugging Face Transformers, with Apple Silicon (MPS) support.
+Python proof-of-concept that emulates Laika's tool-calling loop with a local Qwen3 MLX 4-bit model. It:
+
+- loads a converted Qwen3 MLX model,
+- fetches pages without cookies,
+- extracts sanitized text + element handles,
+- asks the model to emit JSON tool calls (per `docs/llm_tools.md`),
+- executes tools and re-observes until the model returns a final summary.
 
 ## Setup
+
+Convert the model to MLX 4-bit first:
+
+```bash
+cd src/local_llm_quantizer
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python convert_qwen3_to_mlx_4bit.py --out-dir ./Qwen3-0.6B-MLX-4bit
+```
+
+Install the POC dependencies (Apple Silicon required for MLX):
 
 ```bash
 cd src/model_playground
@@ -14,24 +32,43 @@ pip install -r requirements.txt
 ## Run
 
 ```bash
-python hello_world.py
+python laika_poc.py \
+  --url https://news.ycombinator.com \
+  --prompt "What is this page about?"
 ```
 
-Apple Silicon (MPS):
+If you stored the MLX model elsewhere, pass `--model-dir /path/to/Qwen3-0.6B-MLX-4bit`.
+
+Comet-style run (higher budgets + thinking enabled):
 
 ```bash
-python hello_world.py --device mps
+python laika_poc.py \
+  --url https://news.ycombinator.com \
+  --prompt "Tell me about the first topic." \
+  --comet-mode
 ```
 
-This model uses Mamba layers. On non-CUDA devices (MPS/CPU), Transformers must use the naive Mamba implementation (`use_mamba_kernels=False`); `hello_world.py` applies this automatically. You can force it explicitly with `--no-mamba-kernels`.
+When `--comet-mode` is enabled, the POC will fall back to a structured summary builder if the model ignores the requested headings.
 
-If you hit an MPS kernel error, enable CPU fallback for unsupported ops:
+Interactive loop:
 
 ```bash
-PYTORCH_ENABLE_MPS_FALLBACK=1 python hello_world.py --device mps
+python laika_poc.py \
+  --url https://news.ycombinator.com \
+  --interactive
 ```
 
-## Notes on performance
+Example 2 (from `docs/llm_tools.md`):
 
-- The model card recommends CUDA-focused speedups (`flash-attn`, `mamba-ssm`, `causal-conv1d`); these are typically unavailable on macOS/MPS. This sample aims to run with stock PyTorch+Transformers.
-- For faster startup, set `HF_HOME` to a fast disk and keep the model cached.
+```text
+User> What is this page about?
+User> Tell me about the first topic.
+```
+
+Notes:
+
+- The POC never sends raw HTML to the model; it only sends extracted text, titles, and link metadata.
+- Qwen3 can emit `<think>...</think>` blocks; the parser strips them before JSON parsing.
+- On Hacker News front pages, the POC extracts a topic list (title, url, commentsUrl, points, comments) to resolve "first topic" and comment requests.
+- On Hacker News item pages, the POC extracts comment threads (author, age, points, indent) and feeds them into the prompt for deeper summaries.
+- To try larger Qwen models, pass a different `--model-dir` pointing at a converted MLX model (for example, Qwen3-4B).

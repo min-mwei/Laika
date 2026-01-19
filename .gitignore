@@ -28,6 +28,11 @@ dist/
 # Safari extension model assets
 src/laika/extension/lib/models/
 
+# Model trainer outputs
+src/model_trainer/Qwen3-0.6B-finetuned/
+src/model_trainer/Qwen3-0.6B-finetuned-reasoning/
+src/local_llm_quantizer/Qwen3-0.6B-MLX-4bit/
+
 # Python
 __pycache__/
 *.py[cod]

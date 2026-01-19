@@ -244,9 +244,184 @@
     return chunks.join(" ");
   }
 
+  function isBlockCandidate(element) {
+    if (!element || !element.tagName) {
+      return false;
+    }
+    if (!isTextContainerVisible(element)) {
+      return false;
+    }
+    if (element.closest && element.closest("nav,header,footer,aside,menu")) {
+      return false;
+    }
+    var role = (element.getAttribute("role") || "").toLowerCase();
+    if (role === "navigation" || role === "banner" || role === "contentinfo" || role === "menu") {
+      return false;
+    }
+    return true;
+  }
+
+  function linkStatsForElement(element, textLength) {
+    var links = element.querySelectorAll("a");
+    var linkText = 0;
+    var maxLinks = 40;
+    for (var i = 0; i < links.length && i < maxLinks; i += 1) {
+      linkText += utils.normalizeWhitespace(links[i].innerText).length;
+    }
+    var density = textLength > 0 ? linkText / textLength : 0;
+    if (!Number.isFinite(density)) {
+      density = 0;
+    }
+    density = Math.max(0, Math.min(1, density));
+    return { count: links.length, density: density };
+  }
+
+  function roundDensity(value) {
+    return Math.round(value * 100) / 100;
+  }
+
+  function collectTextBlocks(root, maxBlocks, maxPrimaryChars) {
+    if (!root) {
+      return { blocks: [], primary: null };
+    }
+    var blockTextLimit = 360;
+    var selectors = "article,main,section,h1,h2,h3,p,li,td,div";
+    var nodes = Array.from(root.querySelectorAll(selectors));
+    var blocks = [];
+    var seen = new Set();
+    var order = 0;
+    nodes.forEach(function (element) {
+      order += 1;
+      if (!isBlockCandidate(element)) {
+        return;
+      }
+      var rawText = utils.normalizeWhitespace(element.innerText);
+      if (!rawText || rawText.length < 40) {
+        return;
+      }
+      if (rawText.length > 900) {
+        var tagName = element.tagName ? element.tagName.toLowerCase() : "";
+        if (tagName === "div" || tagName === "section") {
+          return;
+        }
+      }
+      var stats = linkStatsForElement(element, rawText.length);
+      if (stats.density > 0.6 && rawText.length < 200) {
+        return;
+      }
+      var text = utils.budgetText(rawText, blockTextLimit);
+      var key = text.toLowerCase();
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      var tag = element.tagName ? element.tagName.toLowerCase() : "";
+      var role = element.getAttribute("role") || "";
+      var score = rawText.length * (1 - stats.density);
+      if (tag === "article" || tag === "main") {
+        score += 200;
+      }
+      blocks.push({
+        order: order,
+        score: score,
+        tag: tag,
+        role: role,
+        rawText: rawText,
+        text: text,
+        linkCount: stats.count,
+        linkDensity: roundDensity(stats.density)
+      });
+    });
+    if (blocks.length === 0) {
+      return { blocks: [], primary: null };
+    }
+    blocks.sort(function (a, b) {
+      return b.score - a.score;
+    });
+    var primaryCandidate = blocks[0];
+    var primary = {
+      tag: primaryCandidate.tag,
+      role: primaryCandidate.role,
+      text: utils.budgetText(primaryCandidate.rawText, maxPrimaryChars),
+      linkCount: primaryCandidate.linkCount,
+      linkDensity: primaryCandidate.linkDensity
+    };
+    var trimmed = blocks.slice(0, maxBlocks);
+    trimmed.sort(function (a, b) {
+      return a.order - b.order;
+    });
+    var outputBlocks = trimmed.map(function (block) {
+      return {
+        tag: block.tag,
+        role: block.role,
+        text: block.text,
+        linkCount: block.linkCount,
+        linkDensity: block.linkDensity
+      };
+    });
+    return { blocks: outputBlocks, primary: primary };
+  }
+
+  function collectOutline(root, maxItems, maxChars) {
+    if (!root) {
+      return [];
+    }
+    var selectors = "h1,h2,h3,h4,h5,h6,li,dt,dd,summary,caption";
+    var nodes = Array.from(root.querySelectorAll(selectors));
+    var outline = [];
+    var seen = new Set();
+    var order = 0;
+    nodes.forEach(function (element) {
+      order += 1;
+      if (!isBlockCandidate(element)) {
+        return;
+      }
+      var rawText = utils.normalizeWhitespace(element.innerText);
+      if (!rawText || rawText.length < 3) {
+        return;
+      }
+      var text = utils.budgetText(rawText, maxChars);
+      var key = text.toLowerCase();
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      var tag = element.tagName ? element.tagName.toLowerCase() : "";
+      var role = element.getAttribute("role") || "";
+      var level = 0;
+      if (tag.length === 2 && tag.charAt(0) === "h") {
+        var parsed = parseInt(tag.charAt(1), 10);
+        level = Number.isFinite(parsed) ? parsed : 0;
+      }
+      outline.push({
+        order: order,
+        level: level,
+        tag: tag,
+        role: role,
+        text: text
+      });
+    });
+    outline.sort(function (a, b) {
+      return a.order - b.order;
+    });
+    var trimmed = outline.slice(0, maxItems);
+    return trimmed.map(function (item) {
+      return {
+        level: item.level,
+        tag: item.tag,
+        role: item.role,
+        text: item.text
+      };
+    });
+  }
+
   function observeDom(options) {
     var maxChars = (options && options.maxChars) || 4000;
     var maxElements = (options && options.maxElements) || 50;
+    var maxBlocks = (options && options.maxBlocks) || 30;
+    var maxPrimaryChars = (options && options.maxPrimaryChars) || 1200;
+    var maxOutline = (options && options.maxOutline) || 50;
+    var maxOutlineChars = (options && options.maxOutlineChars) || 160;
     var elements = Array.from(document.querySelectorAll("a, button, input, textarea, select"));
     var projected = elements
       .map(function (element) {
@@ -276,11 +451,18 @@
     var limited = projected.slice(0, maxElements);
 
     var text = collectVisibleText(document.body, maxChars);
+    var blockResult = collectTextBlocks(document.body, maxBlocks, maxPrimaryChars);
+    var blocks = blockResult.blocks;
+    var primary = blockResult.primary;
+    var outline = collectOutline(document.body, maxOutline, maxOutlineChars);
     return {
       url: window.location.href,
       title: document.title || "",
       text: text,
-      elements: limited
+      elements: limited,
+      blocks: blocks,
+      outline: outline,
+      primary: primary
     };
   }
 

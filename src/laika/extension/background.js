@@ -565,7 +565,11 @@ async function handleTool(toolName, args, sender, tabOverride) {
     }
     var options = {
       maxChars: clampInt(args && args.maxChars, 0, 16000),
-      maxElements: clampInt(args && args.maxElements, 0, 200)
+      maxElements: clampInt(args && args.maxElements, 0, 200),
+      maxBlocks: clampInt(args && args.maxBlocks, 0, 80),
+      maxPrimaryChars: clampInt(args && args.maxPrimaryChars, 0, 4000),
+      maxOutline: clampInt(args && args.maxOutline, 0, 120),
+      maxOutlineChars: clampInt(args && args.maxOutlineChars, 0, 400)
     };
     return handleObserve(options, sender, tabOverride);
   }

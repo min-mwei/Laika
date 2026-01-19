@@ -156,6 +156,9 @@ public struct LLMTraceEvent: Codable, Sendable {
     public let userPromptChars: Int?
     public let observationChars: Int?
     public let elementCount: Int?
+    public let blockCount: Int?
+    public let outlineCount: Int?
+    public let primaryChars: Int?
     public let tabCount: Int?
     public let recentToolCallsCount: Int?
     public let promptPreview: String?
@@ -183,6 +186,9 @@ public struct LLMTraceEvent: Codable, Sendable {
         userPrompt: String,
         observationChars: Int,
         elementCount: Int,
+        blockCount: Int,
+        outlineCount: Int,
+        primaryChars: Int,
         tabCount: Int
     ) -> LLMTraceEvent {
         let shouldLog = LaikaLogger.shouldLogFullLLM
@@ -206,6 +212,9 @@ public struct LLMTraceEvent: Codable, Sendable {
             userPromptChars: userPrompt.count,
             observationChars: observationChars,
             elementCount: elementCount,
+            blockCount: blockCount,
+            outlineCount: outlineCount,
+            primaryChars: primaryChars,
             tabCount: tabCount,
             recentToolCallsCount: recentToolCallsCount,
             promptPreview: promptPreview,
@@ -253,6 +262,9 @@ public struct LLMTraceEvent: Codable, Sendable {
             userPromptChars: nil,
             observationChars: nil,
             elementCount: nil,
+            blockCount: nil,
+            outlineCount: nil,
+            primaryChars: nil,
             tabCount: nil,
             recentToolCallsCount: nil,
             promptPreview: nil,

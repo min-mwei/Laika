@@ -40,6 +40,18 @@
       if (typeof args.maxElements !== "undefined" && typeof args.maxElements !== "number") {
         return "observe_dom.maxElements must be number";
       }
+      if (typeof args.maxBlocks !== "undefined" && typeof args.maxBlocks !== "number") {
+        return "observe_dom.maxBlocks must be number";
+      }
+      if (typeof args.maxPrimaryChars !== "undefined" && typeof args.maxPrimaryChars !== "number") {
+        return "observe_dom.maxPrimaryChars must be number";
+      }
+      if (typeof args.maxOutline !== "undefined" && typeof args.maxOutline !== "number") {
+        return "observe_dom.maxOutline must be number";
+      }
+      if (typeof args.maxOutlineChars !== "undefined" && typeof args.maxOutlineChars !== "number") {
+        return "observe_dom.maxOutlineChars must be number";
+      }
       return null;
     }
 

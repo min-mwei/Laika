@@ -19,12 +19,13 @@ Output MUST be a single JSON object and nothing else.
 - No extra text, no Markdown, no code fences, no <think>.
 - The first character must be "{" and the last character must be "}".
 
-You are given the user's goal and a sanitized page context (URL, title, visible text, and a Main Links list).
-Your job: return a grounded summary of the page contents.
+You are given the user's goal and a sanitized page context (URL, title, visible text, Primary Content, Text Blocks, DOM Outline, and a Main Links list).
+Your job: return a grounded, detailed summary of the page contents.
 
 Rules:
 - tool_calls MUST be [] in observe mode.
-- Mention 3–5 specific items from Main Links (or Page Text) when available.
+- Follow the Summary requirements in the user prompt.
+- Use Text Blocks when provided; they highlight likely content.
 - Do not describe the site in general terms; summarize what is on the page now.
 
 Examples:
@@ -61,7 +62,7 @@ When answering "What is this page about?" / summaries:
 - Mention a few representative items from "Main Links" if available.
 
 Tools:
-- browser.observe_dom arguments: {"maxChars": int?, "maxElements": int?}
+- browser.observe_dom arguments: {"maxChars": int?, "maxElements": int?, "maxBlocks": int?, "maxPrimaryChars": int?, "maxOutline": int?, "maxOutlineChars": int?}
 - browser.click arguments: {"handleId": string}
 - browser.type arguments: {"handleId": string, "text": string}
 - browser.select arguments: {"handleId": string, "value": string}
@@ -96,9 +97,12 @@ Examples:
         lines.append("Origin: \(context.origin)")
         lines.append("Mode: \(context.mode.rawValue)")
         let mainLinks = MainLinkHeuristics.candidates(from: context.observation.elements)
+        let isCommentGoal = isCommentGoal(goal)
+        let textBlocks = context.observation.blocks
+        let outline = context.observation.outline
+        let primary = context.observation.primary
         if context.mode == .observe {
-            let requiredCount = mainLinks.isEmpty ? 3 : max(1, min(3, mainLinks.count))
-            lines.append("Summary requirements: mention at least \(requiredCount) items from Main Links (or Page Text). Do not request tools.")
+            lines.append("Summary requirements: \(summaryRequirements(goal: goal, mainLinkCount: mainLinks.count, textCount: context.observation.text.count, blockCount: textBlocks.count, outlineCount: outline.count, hasPrimary: primary != nil))")
         }
         if !context.tabs.isEmpty {
             lines.append("Open Tabs (current window):")
@@ -127,9 +131,36 @@ Examples:
         lines.append("- URL: \(context.observation.url)")
         lines.append("- Title: \(context.observation.title)")
         lines.append("- Text: \(context.observation.text)")
-        lines.append("- Stats: textChars=\(context.observation.text.count) elementCount=\(context.observation.elements.count)")
+        let primaryChars = primary?.text.count ?? 0
+        lines.append("- Stats: textChars=\(context.observation.text.count) elementCount=\(context.observation.elements.count) blockCount=\(textBlocks.count) outlineCount=\(outline.count) primaryChars=\(primaryChars)")
 
-        if !mainLinks.isEmpty {
+        if context.mode == .observe, let primary {
+            lines.append("Primary Content (readability candidate):")
+            let tag = primary.tag.isEmpty ? "-" : primary.tag
+            let role = primary.role.isEmpty ? "-" : primary.role
+            let density = String(format: "%.2f", primary.linkDensity)
+            lines.append("- tag=\(tag) role=\(role) links=\(primary.linkCount) density=\(density) text=\"\(primary.text)\"")
+        }
+
+        if context.mode == .observe && !outline.isEmpty {
+            lines.append("DOM Outline:")
+            for (index, item) in outline.prefix(20).enumerated() {
+                let tag = item.tag.isEmpty ? "-" : item.tag
+                let role = item.role.isEmpty ? "-" : item.role
+                lines.append("\(index + 1). level=\(item.level) tag=\(tag) role=\(role) text=\"\(item.text)\"")
+            }
+        }
+
+        if context.mode == .observe && !textBlocks.isEmpty {
+            lines.append("Text Blocks (content candidates):")
+            for (index, block) in textBlocks.prefix(18).enumerated() {
+                let tag = block.tag.isEmpty ? "-" : block.tag
+                let role = block.role.isEmpty ? "-" : block.role
+                let density = String(format: "%.2f", block.linkDensity)
+                lines.append("\(index + 1). tag=\(tag) role=\(role) links=\(block.linkCount) density=\(density) text=\"\(block.text)\"")
+            }
+        }
+        if !mainLinks.isEmpty && !isCommentGoal {
             lines.append("Main Links (likely content):")
             for (index, element) in mainLinks.prefix(20).enumerated() {
                 let label = element.label.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -213,5 +244,62 @@ Examples:
             return "(\(parts), …)"
         }
         return "(\(parts))"
+    }
+
+    private static func summaryRequirements(
+        goal: String,
+        mainLinkCount: Int,
+        textCount: Int,
+        blockCount: Int,
+        outlineCount: Int,
+        hasPrimary: Bool
+    ) -> String {
+        let primaryHint = hasPrimary ? "Primary Content" : "Page Text"
+        let outlineHint = outlineCount > 0 ? "DOM Outline" : "Page Text"
+        let lowerGoal = goal.lowercased()
+        if lowerGoal.contains("comment") || lowerGoal.contains("thread") || lowerGoal.contains("discussion") {
+            let evidence = blockCount > 0 ? "Text Blocks" : "Page Text"
+            return "Provide 6-8 bullet points summarizing distinct themes or arguments from the comments. Mention at least 3 concrete points from \(evidence) or \(primaryHint). Use \(outlineHint) to structure if helpful. Avoid navigation."
+        }
+        if lowerGoal.contains("linked page") ||
+            lowerGoal.contains("linked") ||
+            lowerGoal.contains("article") ||
+            lowerGoal.contains("story") ||
+            lowerGoal.contains("page content") {
+            let evidence = blockCount > 0 ? "Text Blocks" : "Page Text"
+            return "Provide 6-8 sentences summarizing the linked page content. Mention key facts, names, and any visible numbers from \(evidence) or \(primaryHint). Use \(outlineHint) to structure if helpful. Avoid navigation."
+        }
+        if lowerGoal.contains("what is this page about") ||
+            lowerGoal.contains("what is this page") ||
+            lowerGoal.contains("summarize") ||
+            lowerGoal.contains("overview") {
+            let required = mainLinkRequirement(count: mainLinkCount)
+            let metricsHint = "Include any visible metrics (points, comments, timestamps) from Page Text."
+            let evidence = blockCount > 0 ? "Text Blocks" : "Page Text"
+            return "Provide 6-8 sentences summarizing the page contents. Mention at least \(required) items from Main Links. Use \(evidence) and \(primaryHint) for detail. Use \(outlineHint) to structure if helpful. \(metricsHint)"
+        }
+        let fallbackRequired = mainLinkRequirement(count: mainLinkCount)
+        if fallbackRequired > 0 {
+            return "Provide 5-7 sentences summarizing the page contents with concrete details. Mention at least \(fallbackRequired) items from Main Links."
+        }
+        if textCount < 400 {
+            return "Provide 4-6 sentences summarizing the page contents using Page Text details."
+        }
+        return "Provide 5-7 sentences summarizing the page contents using Page Text details."
+    }
+
+    private static func mainLinkRequirement(count: Int) -> Int {
+        if count >= 5 {
+            return 5
+        }
+        if count >= 3 {
+            return 3
+        }
+        return count
+    }
+
+    private static func isCommentGoal(_ goal: String) -> Bool {
+        let lower = goal.lowercased()
+        return lower.contains("comment") || lower.contains("thread") || lower.contains("discussion")
     }
 }

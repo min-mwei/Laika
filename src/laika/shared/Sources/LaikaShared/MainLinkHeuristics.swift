@@ -6,6 +6,29 @@ public struct MainLinkHeuristics {
         "hide", "reply", "flag", "edit", "more", "next", "prev", "previous", "upvote", "downvote"
     ]
 
+    private static func isMetadataLabel(_ label: String) -> Bool {
+        let lower = label.lowercased()
+        if excludedLabels.contains(lower) {
+            return true
+        }
+        if lower == "discuss" {
+            return true
+        }
+        let hasDigits = lower.rangeOfCharacter(from: .decimalDigits) != nil
+        if hasDigits && lower.contains("comment") {
+            return true
+        }
+        if hasDigits && lower.contains("point") {
+            return true
+        }
+        if hasDigits && lower.contains("ago") {
+            if lower.contains("minute") || lower.contains("hour") || lower.contains("day") || lower.contains("week") {
+                return true
+            }
+        }
+        return false
+    }
+
     public static func candidates(from elements: [ObservedElement]) -> [ObservedElement] {
         return elements.filter { element in
             guard element.role.lowercased() == "a" else {
@@ -18,7 +41,7 @@ public struct MainLinkHeuristics {
             if label.isEmpty {
                 return false
             }
-            if excludedLabels.contains(label.lowercased()) {
+            if isMetadataLabel(label) {
                 return false
             }
             if label.count < 12 {

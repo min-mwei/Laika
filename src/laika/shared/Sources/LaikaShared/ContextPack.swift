@@ -1,16 +1,108 @@
 import Foundation
 
+public struct ObservedTextBlock: Codable, Equatable, Sendable {
+    public let tag: String
+    public let role: String
+    public let text: String
+    public let linkCount: Int
+    public let linkDensity: Double
+
+    public init(tag: String, role: String, text: String, linkCount: Int, linkDensity: Double) {
+        self.tag = tag
+        self.role = role
+        self.text = text
+        self.linkCount = linkCount
+        self.linkDensity = linkDensity
+    }
+}
+
+public struct ObservedOutlineItem: Codable, Equatable, Sendable {
+    public let level: Int
+    public let tag: String
+    public let role: String
+    public let text: String
+
+    public init(level: Int, tag: String, role: String, text: String) {
+        self.level = level
+        self.tag = tag
+        self.role = role
+        self.text = text
+    }
+}
+
+public struct ObservedPrimaryContent: Codable, Equatable, Sendable {
+    public let tag: String
+    public let role: String
+    public let text: String
+    public let linkCount: Int
+    public let linkDensity: Double
+
+    public init(tag: String, role: String, text: String, linkCount: Int, linkDensity: Double) {
+        self.tag = tag
+        self.role = role
+        self.text = text
+        self.linkCount = linkCount
+        self.linkDensity = linkDensity
+    }
+}
+
 public struct Observation: Codable, Equatable, Sendable {
     public let url: String
     public let title: String
     public let text: String
     public let elements: [ObservedElement]
+    public let blocks: [ObservedTextBlock]
+    public let outline: [ObservedOutlineItem]
+    public let primary: ObservedPrimaryContent?
 
-    public init(url: String, title: String, text: String, elements: [ObservedElement]) {
+    public init(
+        url: String,
+        title: String,
+        text: String,
+        elements: [ObservedElement],
+        blocks: [ObservedTextBlock] = [],
+        outline: [ObservedOutlineItem] = [],
+        primary: ObservedPrimaryContent? = nil
+    ) {
         self.url = url
         self.title = title
         self.text = text
         self.elements = elements
+        self.blocks = blocks
+        self.outline = outline
+        self.primary = primary
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case url
+        case title
+        case text
+        case elements
+        case blocks
+        case outline
+        case primary
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        url = try container.decode(String.self, forKey: .url)
+        title = try container.decode(String.self, forKey: .title)
+        text = try container.decode(String.self, forKey: .text)
+        elements = try container.decode([ObservedElement].self, forKey: .elements)
+        blocks = try container.decodeIfPresent([ObservedTextBlock].self, forKey: .blocks) ?? []
+        outline = try container.decodeIfPresent([ObservedOutlineItem].self, forKey: .outline) ?? []
+        primary = try container.decodeIfPresent(ObservedPrimaryContent.self, forKey: .primary)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(url, forKey: .url)
+        try container.encode(title, forKey: .title)
+        try container.encode(text, forKey: .text)
+        try container.encode(elements, forKey: .elements)
+        try container.encode(blocks, forKey: .blocks)
+        try container.encode(outline, forKey: .outline)
+        try container.encodeIfPresent(primary, forKey: .primary)
     }
 }
 

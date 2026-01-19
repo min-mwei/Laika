@@ -91,10 +91,19 @@ public final class MLXModelRunner: ModelRunner {
         let systemPrompt = PromptBuilder.systemPrompt(for: context.mode)
         let userPrompt = PromptBuilder.userPrompt(context: context, goal: userGoal)
         let baseRequestId = UUID().uuidString
-        let attempts: [GenerationAttempt] = [
-            .init(temperature: 0.7, topP: 0.8, enableThinking: false),
-            .init(temperature: 0.6, topP: 0.95, enableThinking: false),
-        ]
+        let attempts: [GenerationAttempt]
+        switch context.mode {
+        case .observe:
+            attempts = [
+                .init(temperature: 0.2, topP: 0.9, enableThinking: false),
+                .init(temperature: 0.3, topP: 0.95, enableThinking: false)
+            ]
+        case .assist:
+            attempts = [
+                .init(temperature: 0.7, topP: 0.8, enableThinking: false),
+                .init(temperature: 0.6, topP: 0.95, enableThinking: false)
+            ]
+        }
         let maxOutputChars = 24_000
 
         var lastOutput: String?
@@ -120,6 +129,9 @@ public final class MLXModelRunner: ModelRunner {
                 userPrompt: userPrompt,
                 observationChars: context.observation.text.count,
                 elementCount: context.observation.elements.count,
+                blockCount: context.observation.blocks.count,
+                outlineCount: context.observation.outline.count,
+                primaryChars: context.observation.primary?.text.count ?? 0,
                 tabCount: context.tabs.count
             ))
 
