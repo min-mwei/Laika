@@ -27,4 +27,11 @@ public enum ModelError: Error, LocalizedError {
 
 public protocol ModelRunner: Sendable {
     func generatePlan(context: ContextPack, userGoal: String) async throws -> ModelResponse
+    func parseGoalPlan(context: ContextPack, userGoal: String) async throws -> GoalPlan
+}
+
+public extension ModelRunner {
+    func parseGoalPlan(context: ContextPack, userGoal: String) async throws -> GoalPlan {
+        return GoalPlan.unknown
+    }
 }

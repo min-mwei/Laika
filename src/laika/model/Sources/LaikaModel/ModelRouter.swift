@@ -25,4 +25,8 @@ public final class ModelRouter: ModelRunner {
     public func generatePlan(context: ContextPack, userGoal: String) async throws -> ModelResponse {
         try await runner.generatePlan(context: context, userGoal: userGoal)
     }
+
+    public func parseGoalPlan(context: ContextPack, userGoal: String) async throws -> GoalPlan {
+        try await runner.parseGoalPlan(context: context, userGoal: userGoal)
+    }
 }

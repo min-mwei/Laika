@@ -1734,7 +1734,7 @@ class Agent:
         max_chars: int,
         max_elements: int,
         verbose: bool,
-        comet_mode: bool,
+        detail_mode: bool,
     ) -> None:
         self.model = model
         self.browser = browser
@@ -1743,7 +1743,7 @@ class Agent:
         self.max_chars = max_chars
         self.max_elements = max_elements
         self.verbose = verbose
-        self.comet_mode = comet_mode
+        self.detail_mode = detail_mode
         self.recent_tool_calls: List[ToolCall] = []
         self.recent_tool_results: List[ToolResult] = []
         self.recent_pages: List[PageBrief] = []
@@ -1783,13 +1783,13 @@ class Agent:
             summary = response.summary.strip()
             if not response.tool_calls:
                 if summary:
-                    if self.comet_mode and _needs_structured_summary(summary, goal_plan):
+                    if self.detail_mode and _needs_structured_summary(summary, goal_plan):
                         context = self._build_context(step)
                         if goal_plan.wants_comments:
                             return _structured_comment_summary(context, self.recent_pages)
                         return _structured_topic_summary(context, self.recent_pages)
                     return summary
-                if self.comet_mode:
+                if self.detail_mode:
                     retry_summary = self._retry_summary(goal, goal_plan)
                     if retry_summary:
                         if _needs_structured_summary(retry_summary, goal_plan):
@@ -1996,14 +1996,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--top-p", type=float, default=default_top_p)
     parser.add_argument("--enable-thinking", action="store_true")
     parser.add_argument(
-        "--comet-mode",
+        "--detail-mode",
         action="store_true",
         help="Tune settings for deeper summaries (enables thinking + higher budgets).",
     )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    if args.comet_mode:
+    if args.detail_mode:
         if args.max_chars == default_max_chars:
             args.max_chars = 16000
         if args.max_elements == default_max_elements:
@@ -2059,7 +2059,7 @@ def main() -> int:
         max_chars=args.max_chars,
         max_elements=args.max_elements,
         verbose=args.verbose,
-        comet_mode=args.comet_mode,
+        detail_mode=args.detail_mode,
     )
 
     if args.interactive:

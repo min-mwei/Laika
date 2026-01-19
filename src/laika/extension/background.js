@@ -564,13 +564,20 @@ async function handleTool(toolName, args, sender, tabOverride) {
       return rounded;
     }
     var options = {
-      maxChars: clampInt(args && args.maxChars, 0, 16000),
-      maxElements: clampInt(args && args.maxElements, 0, 200),
-      maxBlocks: clampInt(args && args.maxBlocks, 0, 80),
-      maxPrimaryChars: clampInt(args && args.maxPrimaryChars, 0, 4000),
-      maxOutline: clampInt(args && args.maxOutline, 0, 120),
-      maxOutlineChars: clampInt(args && args.maxOutlineChars, 0, 400)
+      maxChars: clampInt(args && args.maxChars, 2000, 16000),
+      maxElements: clampInt(args && args.maxElements, 80, 200),
+      maxBlocks: clampInt(args && args.maxBlocks, 20, 80),
+      maxPrimaryChars: clampInt(args && args.maxPrimaryChars, 600, 4000),
+      maxOutline: clampInt(args && args.maxOutline, 20, 120),
+      maxOutlineChars: clampInt(args && args.maxOutlineChars, 80, 400),
+      maxItems: clampInt(args && args.maxItems, 10, 60),
+      maxItemChars: clampInt(args && args.maxItemChars, 120, 400),
+      maxComments: clampInt(args && args.maxComments, 6, 80),
+      maxCommentChars: clampInt(args && args.maxCommentChars, 120, 800)
     };
+    if (args && typeof args.rootHandleId === "string" && args.rootHandleId) {
+      options.rootHandleId = args.rootHandleId;
+    }
     return handleObserve(options, sender, tabOverride);
   }
   if (toolName === "browser.open_tab") {

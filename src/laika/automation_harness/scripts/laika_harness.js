@@ -1,0 +1,388 @@
+#!/usr/bin/env node
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+
+let playwright;
+try {
+  playwright = require("playwright");
+} catch (error) {
+  console.error("Playwright is required. Install with: npm install playwright");
+  process.exit(1);
+}
+
+const DEFAULT_SERVER_URL = "http://127.0.0.1:8765";
+const DEFAULT_MAX_STEPS = 6;
+const DEFAULT_OBSERVE_OPTIONS = {
+  maxChars: 12000,
+  maxElements: 160,
+  maxBlocks: 40,
+  maxPrimaryChars: 1600,
+  maxOutline: 80,
+  maxOutlineChars: 180,
+  maxItems: 30,
+  maxItemChars: 240,
+  maxComments: 24,
+  maxCommentChars: 360
+};
+const DETAIL_OBSERVE_OPTIONS = {
+  maxChars: 16000,
+  maxElements: 200,
+  maxBlocks: 80,
+  maxPrimaryChars: 4000,
+  maxOutline: 120,
+  maxOutlineChars: 240,
+  maxItems: 60,
+  maxItemChars: 400,
+  maxComments: 40,
+  maxCommentChars: 600
+};
+
+function usage() {
+  console.log(
+    [
+      "Usage:",
+      "  node scripts/laika_harness.js --url <url> --goal \"...\" [--goal \"...\"]",
+      "  node scripts/laika_harness.js --scenario <path/to/scenario.json>",
+      "",
+      "Options:",
+      "  --server <url>        Plan server base URL (default http://127.0.0.1:8765)",
+      "  --browser <name>      webkit | chromium | firefox (default webkit)",
+      "  --max-steps <n>        Max tool-call steps per goal (default 6)",
+      "  --detail              Use larger observe_dom budgets",
+      "  --headed              Show browser window",
+      "  --output <path>        Write run results to JSON",
+      "  --no-auto-approve      Stop on policy 'ask' instead of auto-approving"
+    ].join("\n")
+  );
+}
+
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const goals = [];
+  let url = null;
+  let scenarioPath = null;
+  let server = DEFAULT_SERVER_URL;
+  let browserName = "webkit";
+  let maxSteps = DEFAULT_MAX_STEPS;
+  let headless = true;
+  let detail = false;
+  let outputPath = null;
+  let autoApprove = true;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    switch (arg) {
+      case "--url":
+        url = args[++i] || null;
+        break;
+      case "--goal":
+        goals.push(args[++i] || "");
+        break;
+      case "--scenario":
+        scenarioPath = args[++i] || null;
+        break;
+      case "--server":
+        server = args[++i] || server;
+        break;
+      case "--browser":
+        browserName = (args[++i] || browserName).toLowerCase();
+        break;
+      case "--max-steps":
+        maxSteps = parseInt(args[++i] || String(DEFAULT_MAX_STEPS), 10);
+        break;
+      case "--detail":
+        detail = true;
+        break;
+      case "--headed":
+        headless = false;
+        break;
+      case "--output":
+        outputPath = args[++i] || null;
+        break;
+      case "--no-auto-approve":
+        autoApprove = false;
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (scenarioPath) {
+    return { scenarioPath, server, browserName, maxSteps, headless, detail, outputPath, autoApprove };
+  }
+  if (!url || goals.length === 0) {
+    return null;
+  }
+  return { url, goals, server, browserName, maxSteps, headless, detail, outputPath, autoApprove };
+}
+
+function loadScenario(scenarioPath) {
+  const raw = fs.readFileSync(scenarioPath, "utf8");
+  const payload = JSON.parse(raw);
+  if (!payload || typeof payload.url !== "string" || !Array.isArray(payload.goals)) {
+    throw new Error("Scenario must include url and goals array.");
+  }
+  return payload;
+}
+
+function pickNextAction(actions) {
+  if (!Array.isArray(actions)) {
+    return null;
+  }
+  for (const action of actions) {
+    if (!action || !action.toolCall || !action.policy) {
+      continue;
+    }
+    if (action.policy.decision === "allow" || action.policy.decision === "ask") {
+      return action;
+    }
+  }
+  return null;
+}
+
+async function callPlan(server, planRequest) {
+  const response = await fetch(`${server}/plan`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(planRequest)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Plan failed: ${response.status} ${text}`);
+  }
+  return await response.json();
+}
+
+function buildTabs(observation) {
+  if (!observation || !observation.url) {
+    return [];
+  }
+  let origin = "";
+  try {
+    origin = new URL(observation.url).origin;
+  } catch (error) {
+    origin = "";
+  }
+  return [
+    {
+      title: observation.title || "",
+      url: observation.url,
+      origin: origin,
+      isActive: true
+    }
+  ];
+}
+
+function buildToolResult(toolCall, status, payload) {
+  return {
+    toolCallId: toolCall.id,
+    status: status,
+    payload: payload || {}
+  };
+}
+
+function buildObservePayload(observation) {
+  if (!observation) {
+    return {};
+  }
+  return {
+    url: observation.url || "",
+    title: observation.title || "",
+    textChars: (observation.text || "").length,
+    elementCount: Array.isArray(observation.elements) ? observation.elements.length : 0,
+    blockCount: Array.isArray(observation.blocks) ? observation.blocks.length : 0,
+    itemCount: Array.isArray(observation.items) ? observation.items.length : 0,
+    outlineCount: Array.isArray(observation.outline) ? observation.outline.length : 0,
+    primaryChars: observation.primary && observation.primary.text ? String(observation.primary.text).length : 0
+  };
+}
+
+async function observeDom(page, options) {
+  const observation = await page.evaluate((opts) => {
+    if (!window.LaikaHarness || !window.LaikaHarness.observeDom) {
+      return { __error: "missing_harness" };
+    }
+    return window.LaikaHarness.observeDom(opts || {});
+  }, options || {});
+  if (observation && observation.__error) {
+    throw new Error(observation.__error);
+  }
+  return observation;
+}
+
+async function applyTool(page, toolName, args) {
+  return await page.evaluate(
+    (name, payload) => {
+      if (!window.LaikaHarness || !window.LaikaHarness.applyTool) {
+        return { status: "error", error: "missing_harness" };
+      }
+      return window.LaikaHarness.applyTool(name, payload || {});
+    },
+    toolName,
+    args || {}
+  );
+}
+
+async function executeTool(page, toolCall, observeOptions, navTimeoutMs) {
+  const name = toolCall.name;
+  const args = toolCall.arguments || {};
+  let result = { status: "ok" };
+  let observation = null;
+  if (name === "browser.observe_dom") {
+    observation = await observeDom(page, Object.keys(args).length ? args : observeOptions);
+  } else if (name === "browser.open_tab" || name === "browser.navigate") {
+    const url = args.url;
+    if (typeof url !== "string" || !url) {
+      result = { status: "error", error: "missing_url" };
+    } else {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: navTimeoutMs });
+      observation = await observeDom(page, observeOptions);
+    }
+  } else if (name === "browser.back") {
+    await page.goBack({ waitUntil: "domcontentloaded", timeout: navTimeoutMs }).catch(() => {});
+    observation = await observeDom(page, observeOptions);
+  } else if (name === "browser.forward") {
+    await page.goForward({ waitUntil: "domcontentloaded", timeout: navTimeoutMs }).catch(() => {});
+    observation = await observeDom(page, observeOptions);
+  } else if (name === "browser.refresh") {
+    await page.reload({ waitUntil: "domcontentloaded", timeout: navTimeoutMs }).catch(() => {});
+    observation = await observeDom(page, observeOptions);
+  } else {
+    const urlBefore = page.url();
+    result = await applyTool(page, name, args);
+    await page.waitForTimeout(200);
+    if (page.url() !== urlBefore) {
+      await page.waitForLoadState("domcontentloaded", { timeout: navTimeoutMs }).catch(() => {});
+    }
+    observation = await observeDom(page, observeOptions);
+  }
+  return { result, observation };
+}
+
+async function runGoals(state, goals, options) {
+  const results = [];
+  for (const goal of goals) {
+    const goalSteps = [];
+    let recentToolCalls = [];
+    let recentToolResults = [];
+    let summary = "";
+    for (let step = 1; step <= options.maxSteps; step += 1) {
+      const observation = state.observation;
+      let origin = "";
+      try {
+        origin = new URL(observation.url).origin;
+      } catch (error) {
+        origin = "";
+      }
+      if (!origin || !origin.startsWith("http")) {
+        throw new Error(`Invalid origin for plan request: ${observation.url}`);
+      }
+      const context = {
+        origin: origin,
+        mode: "assist",
+        observation: observation,
+        recentToolCalls: recentToolCalls.slice(-8),
+        recentToolResults: recentToolResults.slice(-8),
+        tabs: buildTabs(observation),
+        runId: state.runId,
+        step: step,
+        maxSteps: options.maxSteps
+      };
+      const plan = await callPlan(options.server, { context, goal });
+      summary = plan.summary || "";
+      const action = pickNextAction(plan.actions);
+      goalSteps.push({
+        step: step,
+        summary: summary,
+        action: action ? action.toolCall : null,
+        policy: action ? action.policy : null
+      });
+      if (!action) {
+        break;
+      }
+      if (action.policy && action.policy.decision === "deny") {
+        break;
+      }
+      if (action.policy && action.policy.decision === "ask" && !options.autoApprove) {
+        break;
+      }
+      const executed = await executeTool(state.page, action.toolCall, options.observeOptions, options.navTimeoutMs);
+      recentToolCalls.push(action.toolCall);
+      const payload = action.toolCall.name === "browser.observe_dom"
+        ? buildObservePayload(executed.observation)
+        : {};
+      recentToolResults.push(buildToolResult(action.toolCall, executed.result.status || "ok", payload));
+      if (executed.observation) {
+        state.observation = executed.observation;
+      }
+    }
+    results.push({ goal: goal, summary: summary, steps: goalSteps });
+  }
+  return results;
+}
+
+async function main() {
+  const args = parseArgs();
+  if (!args) {
+    usage();
+    process.exit(1);
+  }
+
+  let scenario = null;
+  if (args.scenarioPath) {
+    scenario = loadScenario(args.scenarioPath);
+  }
+  const url = scenario ? scenario.url : args.url;
+  const goals = scenario ? scenario.goals : args.goals;
+  const server = args.server;
+  const observeOptions = args.detail ? DETAIL_OBSERVE_OPTIONS : DEFAULT_OBSERVE_OPTIONS;
+
+  const browserType = playwright[args.browserName] || playwright.webkit;
+  const browser = await browserType.launch({ headless: args.headless });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+
+  const harnessFlag = () => {
+    window.__LAIKA_HARNESS__ = true;
+  };
+  await context.addInitScript(harnessFlag);
+  const contentScriptPath = path.resolve(__dirname, "../../extension/content_script.js");
+  await context.addInitScript({ path: contentScriptPath });
+
+  const page = await context.newPage();
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+  const observation = await observeDom(page, observeOptions);
+
+  const state = {
+    page: page,
+    observation: observation,
+    runId: String(Date.now())
+  };
+
+  const results = await runGoals(state, goals, {
+    server: server,
+    observeOptions: observeOptions,
+    navTimeoutMs: 15000,
+    maxSteps: args.maxSteps,
+    autoApprove: args.autoApprove
+  });
+
+  for (const result of results) {
+    console.log("");
+    console.log("Goal:", result.goal);
+    console.log("Summary:", result.summary || "(empty)");
+  }
+
+  if (args.outputPath) {
+    fs.writeFileSync(args.outputPath, JSON.stringify({ url, goals, results }, null, 2));
+    console.log(`\nWrote results to ${args.outputPath}`);
+  }
+
+  await browser.close();
+}
+
+main().catch((error) => {
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exit(1);
+});

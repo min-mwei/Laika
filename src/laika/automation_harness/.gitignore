@@ -1,0 +1,5 @@
+node_modules/
+.cache/
+playwright-report/
+output/
+*.log

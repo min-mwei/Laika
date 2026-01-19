@@ -86,6 +86,86 @@ public final class MLXModelRunner: ModelRunner {
         self.maxTokens = maxTokens
     }
 
+    public func parseGoalPlan(context: ContextPack, userGoal: String) async throws -> GoalPlan {
+        let container = try await store.container(for: modelURL)
+        let systemPrompt = PromptBuilder.goalParseSystemPrompt()
+        let userPrompt = PromptBuilder.goalParseUserPrompt(context: context, goal: userGoal)
+        let requestId = UUID().uuidString
+        let attempt = GenerationAttempt(temperature: 0.2, topP: 0.7, enableThinking: false)
+        let maxOutputChars = 8_000
+
+        LaikaLogger.logLLMEvent(.request(
+            id: requestId,
+            runId: context.runId,
+            step: context.step,
+            maxSteps: context.maxSteps,
+            goal: userGoal,
+            origin: context.origin,
+            pageURL: context.observation.url,
+            pageTitle: context.observation.title,
+            recentToolCallsCount: context.recentToolCalls.count,
+            modelPath: modelURL.lastPathComponent,
+            maxTokens: maxTokens,
+            temperature: Double(attempt.temperature),
+            topP: Double(attempt.topP),
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            observationChars: context.observation.text.count,
+            elementCount: context.observation.elements.count,
+            blockCount: context.observation.blocks.count,
+            itemCount: context.observation.items.count,
+            outlineCount: context.observation.outline.count,
+            primaryChars: context.observation.primary?.text.count ?? 0,
+            commentCount: context.observation.comments.count,
+            tabCount: context.tabs.count,
+            stage: "goal_parse"
+        ))
+
+        do {
+            let output = try await generateJSONResponse(
+                container: container,
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                attempt: attempt,
+                maxOutputChars: maxOutputChars
+            )
+            let parsed = GoalPlanParser.parse(output)
+            LaikaLogger.logLLMEvent(.response(
+                id: requestId,
+                runId: context.runId,
+                step: context.step,
+                maxSteps: context.maxSteps,
+                modelPath: modelURL.lastPathComponent,
+                maxTokens: maxTokens,
+                temperature: Double(attempt.temperature),
+                topP: Double(attempt.topP),
+                output: output,
+                toolCallsCount: nil,
+                summary: parsed.intent.rawValue,
+                error: nil,
+                stage: "goal_parse"
+            ))
+            return parsed
+        } catch {
+            LaikaLogger.logLLMEvent(.response(
+                id: requestId,
+                runId: context.runId,
+                step: context.step,
+                maxSteps: context.maxSteps,
+                modelPath: modelURL.lastPathComponent,
+                maxTokens: maxTokens,
+                temperature: Double(attempt.temperature),
+                topP: Double(attempt.topP),
+                output: "",
+                toolCallsCount: nil,
+                summary: nil,
+                error: error.localizedDescription,
+                stage: "goal_parse"
+            ))
+            return GoalPlan.unknown
+        }
+    }
+
     public func generatePlan(context: ContextPack, userGoal: String) async throws -> ModelResponse {
         let container = try await store.container(for: modelURL)
         let systemPrompt = PromptBuilder.systemPrompt(for: context.mode)
@@ -127,13 +207,16 @@ public final class MLXModelRunner: ModelRunner {
                 topP: Double(attempt.topP),
                 systemPrompt: systemPrompt,
                 userPrompt: userPrompt,
-                observationChars: context.observation.text.count,
-                elementCount: context.observation.elements.count,
-                blockCount: context.observation.blocks.count,
-                outlineCount: context.observation.outline.count,
-                primaryChars: context.observation.primary?.text.count ?? 0,
-                tabCount: context.tabs.count
-            ))
+            observationChars: context.observation.text.count,
+            elementCount: context.observation.elements.count,
+            blockCount: context.observation.blocks.count,
+            itemCount: context.observation.items.count,
+            outlineCount: context.observation.outline.count,
+            primaryChars: context.observation.primary?.text.count ?? 0,
+            commentCount: context.observation.comments.count,
+            tabCount: context.tabs.count,
+            stage: "plan"
+        ))
 
             do {
                 let output = try await generateJSONResponse(
@@ -157,7 +240,8 @@ public final class MLXModelRunner: ModelRunner {
                     output: output,
                     toolCallsCount: parsed.toolCalls.count,
                     summary: parsed.summary,
-                    error: nil
+                    error: nil,
+                    stage: "plan"
                 ))
                 return parsed
             } catch {
@@ -174,7 +258,8 @@ public final class MLXModelRunner: ModelRunner {
                     output: lastOutput ?? "",
                     toolCallsCount: nil,
                     summary: nil,
-                    error: error.localizedDescription
+                    error: error.localizedDescription,
+                    stage: "plan"
                 ))
             }
         }

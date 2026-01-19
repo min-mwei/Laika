@@ -81,6 +81,17 @@
     return "";
   }
 
+  function hostForURL(value) {
+    if (!value) {
+      return "";
+    }
+    try {
+      return new URL(String(value), window.location.href).host || "";
+    } catch (error) {
+      return "";
+    }
+  }
+
   function getInputType(element) {
     if (!element) {
       return "";
@@ -284,8 +295,8 @@
     if (!root) {
       return { blocks: [], primary: null };
     }
-    var blockTextLimit = 360;
-    var selectors = "article,main,section,h1,h2,h3,p,li,td,div";
+    var blockTextLimit = 420;
+    var selectors = "article,main,section,h1,h2,h3,p,li,td,div,blockquote,pre";
     var nodes = Array.from(root.querySelectorAll(selectors));
     var blocks = [];
     var seen = new Set();
@@ -296,7 +307,7 @@
         return;
       }
       var rawText = utils.normalizeWhitespace(element.innerText);
-      if (!rawText || rawText.length < 40) {
+      if (!rawText || rawText.length < 30) {
         return;
       }
       if (rawText.length > 900) {
@@ -317,6 +328,7 @@
       seen.add(key);
       var tag = element.tagName ? element.tagName.toLowerCase() : "";
       var role = element.getAttribute("role") || "";
+      var handleId = ensureHandle(element) || "";
       var score = rawText.length * (1 - stats.density);
       if (tag === "article" || tag === "main") {
         score += 200;
@@ -329,7 +341,8 @@
         rawText: rawText,
         text: text,
         linkCount: stats.count,
-        linkDensity: roundDensity(stats.density)
+        linkDensity: roundDensity(stats.density),
+        handleId: handleId
       });
     });
     if (blocks.length === 0) {
@@ -344,7 +357,8 @@
       role: primaryCandidate.role,
       text: utils.budgetText(primaryCandidate.rawText, maxPrimaryChars),
       linkCount: primaryCandidate.linkCount,
-      linkDensity: primaryCandidate.linkDensity
+      linkDensity: primaryCandidate.linkDensity,
+      handleId: primaryCandidate.handleId || ""
     };
     var trimmed = blocks.slice(0, maxBlocks);
     trimmed.sort(function (a, b) {
@@ -356,7 +370,8 @@
         role: block.role,
         text: block.text,
         linkCount: block.linkCount,
-        linkDensity: block.linkDensity
+        linkDensity: block.linkDensity,
+        handleId: block.handleId
       };
     });
     return { blocks: outputBlocks, primary: primary };
@@ -415,6 +430,474 @@
     });
   }
 
+  function collectItems(root, maxItems, maxChars) {
+    if (!root) {
+      return [];
+    }
+    var selectors = "article,li,section,div,tr,td,dt,dd";
+    var nodes = Array.from(root.querySelectorAll(selectors));
+    var items = [];
+    var seen = new Set();
+    var maxLinksPerItem = 6;
+    var order = 0;
+    var originHost = hostForURL(window.location.href);
+
+    function digitRatio(text) {
+      var digits = 0;
+      var alnum = 0;
+      for (var i = 0; i < text.length; i += 1) {
+        var ch = text.charAt(i);
+        if (/\p{N}/u.test(ch)) {
+          digits += 1;
+          alnum += 1;
+        } else if (/\p{L}/u.test(ch)) {
+          alnum += 1;
+        }
+      }
+      if (alnum === 0) {
+        return 0;
+      }
+      return digits / alnum;
+    }
+
+    function looksLikeDomainLabel(text) {
+      var trimmed = String(text || "").trim();
+      if (!trimmed) {
+        return false;
+      }
+      if (/\s/.test(trimmed)) {
+        return false;
+      }
+      if (trimmed.length > 24) {
+        return false;
+      }
+      return trimmed.indexOf(".") >= 0 || trimmed.indexOf("/") >= 0;
+    }
+
+    function containsDigit(text) {
+      return /\p{N}/u.test(String(text || ""));
+    }
+
+    nodes.forEach(function (element) {
+      order += 1;
+      if (!isBlockCandidate(element)) {
+        return;
+      }
+      var anchors = element.querySelectorAll("a");
+      if (!anchors || anchors.length === 0) {
+        return;
+      }
+      var rawText = utils.normalizeWhitespace(element.innerText);
+      if (!rawText || rawText.length < 20) {
+        return;
+      }
+      var bestAnchor = null;
+      var bestScore = -1;
+      var bestTextLength = 0;
+      var linkCandidates = [];
+      var linkSeen = new Set();
+      var siblingMetaText = "";
+      for (var i = 0; i < anchors.length; i += 1) {
+        var anchorText = utils.normalizeWhitespace(anchors[i].innerText);
+        var anchorUrl = getHref(anchors[i]);
+        if (!anchorText || anchorText.length < 2 || !anchorUrl) {
+          continue;
+        }
+        var anchorHost = hostForURL(anchorUrl);
+        var score = anchorText.length;
+        if (anchorHost && originHost && anchorHost !== originHost) {
+          score += 80;
+        }
+        if (anchorText.length < 6) {
+          score -= 10;
+        }
+        if (looksLikeDomainLabel(anchorText)) {
+          score -= 20;
+        }
+        if (linkCandidates.length < maxLinksPerItem) {
+          var linkKey = (anchorText + "|" + anchorUrl).toLowerCase();
+          if (!linkSeen.has(linkKey)) {
+            linkSeen.add(linkKey);
+            linkCandidates.push({
+              title: anchorText,
+              url: anchorUrl,
+              handleId: ensureHandle(anchors[i]) || ""
+            });
+          }
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          bestAnchor = anchors[i];
+          bestTextLength = anchorText.length;
+        }
+      }
+      if (linkCandidates.length < maxLinksPerItem) {
+        var sibling = element.nextElementSibling;
+        if (sibling && isBlockCandidate(sibling)) {
+          var siblingText = utils.normalizeWhitespace(sibling.innerText);
+          if (siblingText && siblingText.length <= 240) {
+            siblingMetaText = siblingText;
+            var siblingAnchors = sibling.querySelectorAll("a");
+            if (siblingAnchors && siblingAnchors.length > 0) {
+              for (var j = 0; j < siblingAnchors.length; j += 1) {
+                if (linkCandidates.length >= maxLinksPerItem) {
+                  break;
+                }
+                var siblingTextLabel = utils.normalizeWhitespace(siblingAnchors[j].innerText);
+                var siblingUrl = getHref(siblingAnchors[j]);
+                if (!siblingTextLabel || !siblingUrl) {
+                  continue;
+                }
+                var siblingKey = (siblingTextLabel + "|" + siblingUrl).toLowerCase();
+                if (linkSeen.has(siblingKey)) {
+                  continue;
+                }
+                linkSeen.add(siblingKey);
+                linkCandidates.push({
+                  title: siblingTextLabel,
+                  url: siblingUrl,
+                  handleId: ensureHandle(siblingAnchors[j]) || ""
+                });
+              }
+            }
+          }
+        }
+      }
+      if (!bestAnchor) {
+        return;
+      }
+      var title = utils.normalizeWhitespace(bestAnchor.innerText);
+      if (!title || title.length < 4) {
+        return;
+      }
+      if (title.length <= 12 && digitRatio(title) > 0.4) {
+        return;
+      }
+      if (looksLikeDomainLabel(title)) {
+        return;
+      }
+      var url = getHref(bestAnchor);
+      if (!url) {
+        return;
+      }
+      var textLength = rawText.length;
+      var bestHost = hostForURL(url);
+      if (bestHost && originHost && bestHost === originHost) {
+        if (bestTextLength <= 12 && textLength <= 80 && linkCandidates.length >= 2) {
+          return;
+        }
+      }
+      if (textLength < 30 && bestTextLength < 18) {
+        return;
+      }
+      var anchorShare = textLength > 0 ? bestTextLength / textLength : 0;
+      if (textLength >= 120 && anchorShare < 0.12) {
+        return;
+      }
+      var stats = linkStatsForElement(element, rawText.length);
+      if (stats.density > 0.7 && rawText.length < 200 && anchorShare < 0.5) {
+        return;
+      }
+      var snippetText = rawText;
+      if (siblingMetaText) {
+        var normalizedSnippet = snippetText.toLowerCase();
+        var normalizedSibling = siblingMetaText.toLowerCase();
+        if (normalizedSnippet.indexOf(normalizedSibling) === -1) {
+          if (containsDigit(siblingMetaText) || siblingMetaText.length > snippetText.length) {
+            snippetText = rawText + " | " + siblingMetaText;
+          }
+        }
+      }
+      var snippet = utils.budgetText(snippetText, maxChars);
+      var key = (title + "|" + url).toLowerCase();
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      var tag = element.tagName ? element.tagName.toLowerCase() : "";
+      items.push({
+        order: order,
+        title: title,
+        url: url,
+        snippet: snippet,
+        tag: tag,
+        linkCount: stats.count,
+        linkDensity: roundDensity(stats.density),
+        handleId: ensureHandle(bestAnchor) || "",
+        links: linkCandidates
+      });
+    });
+    items.sort(function (a, b) {
+      return a.order - b.order;
+    });
+    var trimmed = items.slice(0, maxItems);
+    return trimmed.map(function (item) {
+      return {
+        title: item.title,
+        url: item.url,
+        snippet: item.snippet,
+        tag: item.tag,
+        linkCount: item.linkCount,
+        linkDensity: item.linkDensity,
+        handleId: item.handleId,
+        links: item.links
+      };
+    });
+  }
+
+  function hasCommentHint(element) {
+    if (!element) {
+      return false;
+    }
+    var id = (element.id || "").toLowerCase();
+    var className = "";
+    if (typeof element.className === "string") {
+      className = element.className.toLowerCase();
+    }
+    if (id.indexOf("comment") >= 0 || className.indexOf("comment") >= 0) {
+      return true;
+    }
+    if (id.indexOf("reply") >= 0 || className.indexOf("reply") >= 0) {
+      return true;
+    }
+    if (id.indexOf("thread") >= 0 || className.indexOf("thread") >= 0) {
+      return true;
+    }
+    if (id.indexOf("discussion") >= 0 || className.indexOf("discussion") >= 0) {
+      return true;
+    }
+    return false;
+  }
+
+  function findMetaText(container, selectors, maxChars) {
+    if (!container) {
+      return "";
+    }
+    for (var i = 0; i < selectors.length; i += 1) {
+      var element = container.querySelector(selectors[i]);
+      if (!element) {
+        continue;
+      }
+      var text = utils.normalizeWhitespace(element.innerText || "");
+      if (!text) {
+        var fallback = element.getAttribute("title") || element.getAttribute("datetime") || "";
+        text = utils.normalizeWhitespace(fallback);
+      }
+      if (!text) {
+        continue;
+      }
+      if (maxChars && text.length > maxChars) {
+        text = text.slice(0, maxChars);
+      }
+      return text;
+    }
+    return "";
+  }
+
+  function extractCommentDepth(container) {
+    if (!container) {
+      return 0;
+    }
+    var attrCandidates = ["data-depth", "data-level", "aria-level", "indent"];
+    for (var i = 0; i < attrCandidates.length; i += 1) {
+      var attr = container.getAttribute(attrCandidates[i]);
+      if (attr) {
+        var value = parseInt(attr, 10);
+        if (Number.isFinite(value)) {
+          return Math.max(0, value);
+        }
+      }
+    }
+    var indentElement = container.querySelector("[indent]");
+    if (indentElement) {
+      var indentAttr = indentElement.getAttribute("indent");
+      var indentValue = parseInt(indentAttr, 10);
+      if (Number.isFinite(indentValue)) {
+        return Math.max(0, indentValue);
+      }
+    }
+    var depth = 0;
+    var parent = container.parentElement;
+    while (parent) {
+      var tag = parent.tagName ? parent.tagName.toLowerCase() : "";
+      if (tag === "ol" || tag === "ul" || tag === "blockquote") {
+        depth += 1;
+      }
+      parent = parent.parentElement;
+    }
+    return depth;
+  }
+
+  function pickCommentTextElement(container) {
+    if (!container) {
+      return null;
+    }
+    var selectors = [
+      "[itemprop=\"text\"]",
+      ".comment",
+      ".comment-body",
+      ".comment_body",
+      ".comment-content",
+      ".content",
+      ".message",
+      ".text"
+    ];
+    var nodes = container.querySelectorAll(selectors.join(","));
+    var best = null;
+    var bestLength = 0;
+    for (var i = 0; i < nodes.length; i += 1) {
+      var nodeText = utils.normalizeWhitespace(nodes[i].innerText || "");
+      if (nodeText.length > bestLength) {
+        bestLength = nodeText.length;
+        best = nodes[i];
+      }
+    }
+    return best || container;
+  }
+
+  function extractCommentText(container, maxChars) {
+    var element = pickCommentTextElement(container) || container;
+    if (!element) {
+      return "";
+    }
+    var clone = element.cloneNode(true);
+    var removeSelectors = [
+      "nav",
+      "header",
+      "footer",
+      "aside",
+      "form",
+      "button",
+      "input",
+      "textarea",
+      "select",
+      "svg",
+      "img",
+      "script",
+      "style",
+      ".reply",
+      ".comment-actions",
+      ".actions"
+    ];
+    var removals = clone.querySelectorAll(removeSelectors.join(","));
+    for (var i = 0; i < removals.length; i += 1) {
+      removals[i].remove();
+    }
+    var nestedLists = clone.querySelectorAll("ol, ul");
+    for (var j = 0; j < nestedLists.length; j += 1) {
+      nestedLists[j].remove();
+    }
+    var text = utils.normalizeWhitespace(clone.innerText || "");
+    if (maxChars) {
+      text = utils.budgetText(text, maxChars);
+    }
+    return text;
+  }
+
+  function collectComments(root, maxComments, maxChars) {
+    if (!root || maxComments <= 0) {
+      return [];
+    }
+    var selectors = [
+      "[role=\"comment\"]",
+      "[itemprop=\"comment\"]",
+      "[itemtype*=\"Comment\"]",
+      "[data-comment-id]",
+      "[data-comment]",
+      "[data-thread-id]",
+      "[data-reply-id]",
+      ".comment",
+      ".comment-body",
+      ".comment_body",
+      ".comment-content"
+    ];
+    var nodes = Array.from(root.querySelectorAll(selectors.join(",")));
+    if (nodes.length < 3) {
+      var fallbackNodes = Array.from(root.querySelectorAll("article,li,div,section,tr"));
+      for (var i = 0; i < fallbackNodes.length; i += 1) {
+        if (hasCommentHint(fallbackNodes[i])) {
+          nodes.push(fallbackNodes[i]);
+        }
+      }
+      if (nodes.length < 3) {
+        var lists = root.querySelectorAll("ol, ul");
+        for (var j = 0; j < lists.length; j += 1) {
+          var listItems = Array.from(lists[j].children).filter(function (child) {
+            return child && child.tagName && child.tagName.toLowerCase() === "li";
+          });
+          if (listItems.length < 3) {
+            continue;
+          }
+          nodes = nodes.concat(listItems);
+        }
+      }
+    }
+
+    var seen = new Set();
+    var comments = [];
+    for (var k = 0; k < nodes.length; k += 1) {
+      if (comments.length >= maxComments) {
+        break;
+      }
+      var node = nodes[k];
+      if (!node) {
+        continue;
+      }
+      var container = node.closest ? node.closest("article,li,div,section,td,tr") : node;
+      if (!container) {
+        container = node;
+      }
+      if (!isBlockCandidate(container)) {
+        continue;
+      }
+      var text = extractCommentText(container, maxChars);
+      if (!text || text.length < 30) {
+        continue;
+      }
+      var key = text.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      var author = findMetaText(container, [
+        "[rel=\"author\"]",
+        "[itemprop=\"author\"]",
+        "[data-author]",
+        ".author",
+        ".user",
+        ".username",
+        ".byline",
+        ".comment-author"
+      ], 80);
+      var age = findMetaText(container, [
+        "time",
+        "[datetime]",
+        "[data-time]",
+        ".age",
+        ".time",
+        ".timestamp"
+      ], 80);
+      var score = "";
+      var scoreElement = container.querySelector("[data-score],[data-vote-count],.score,.points,.likes,.upvotes");
+      if (scoreElement) {
+        var scoreText = utils.normalizeWhitespace(scoreElement.innerText || scoreElement.getAttribute("data-score") || "");
+        if (!scoreText) {
+          scoreText = utils.normalizeWhitespace(scoreElement.getAttribute("data-vote-count") || "");
+        }
+        score = scoreText;
+      }
+      comments.push({
+        text: text,
+        author: author,
+        age: age,
+        score: score,
+        depth: extractCommentDepth(container),
+        handleId: ensureHandle(container) || ""
+      });
+    }
+    return comments;
+  }
+
   function observeDom(options) {
     var maxChars = (options && options.maxChars) || 4000;
     var maxElements = (options && options.maxElements) || 50;
@@ -422,7 +905,18 @@
     var maxPrimaryChars = (options && options.maxPrimaryChars) || 1200;
     var maxOutline = (options && options.maxOutline) || 50;
     var maxOutlineChars = (options && options.maxOutlineChars) || 160;
-    var elements = Array.from(document.querySelectorAll("a, button, input, textarea, select"));
+    var maxItems = (options && options.maxItems) || 24;
+    var maxItemChars = (options && options.maxItemChars) || 240;
+    var maxComments = (options && options.maxComments) || 24;
+    var maxCommentChars = (options && options.maxCommentChars) || 360;
+    var root = document.body;
+    if (options && options.rootHandleId) {
+      var target = findElement(options.rootHandleId);
+      if (target) {
+        root = target;
+      }
+    }
+    var elements = Array.from((root || document).querySelectorAll("a, button, input, textarea, select"));
     var projected = elements
       .map(function (element) {
         var boundingBox = getBoundingBox(element);
@@ -450,19 +944,23 @@
     });
     var limited = projected.slice(0, maxElements);
 
-    var text = collectVisibleText(document.body, maxChars);
-    var blockResult = collectTextBlocks(document.body, maxBlocks, maxPrimaryChars);
+    var text = collectVisibleText(root, maxChars);
+    var blockResult = collectTextBlocks(root, maxBlocks, maxPrimaryChars);
     var blocks = blockResult.blocks;
     var primary = blockResult.primary;
-    var outline = collectOutline(document.body, maxOutline, maxOutlineChars);
+    var outline = collectOutline(root, maxOutline, maxOutlineChars);
+    var items = collectItems(root, maxItems, maxItemChars);
+    var comments = collectComments(root, maxComments, maxCommentChars);
     return {
       url: window.location.href,
       title: document.title || "",
       text: text,
       elements: limited,
       blocks: blocks,
+      items: items,
       outline: outline,
-      primary: primary
+      primary: primary,
+      comments: comments
     };
   }
 
@@ -592,5 +1090,13 @@
       }
       return Promise.resolve({ status: "error", error: "unknown_type" });
     });
+  }
+
+  if (typeof window !== "undefined" && window.__LAIKA_HARNESS__) {
+    if (!window.LaikaHarness) {
+      window.LaikaHarness = {};
+    }
+    window.LaikaHarness.observeDom = observeDom;
+    window.LaikaHarness.applyTool = applyTool;
   }
 })();

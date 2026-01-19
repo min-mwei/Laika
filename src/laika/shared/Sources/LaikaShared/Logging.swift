@@ -139,6 +139,7 @@ public enum LaikaPaths {
 
 public struct LLMTraceEvent: Codable, Sendable {
     public let type: String
+    public let stage: String?
     public let id: String
     public let timestamp: Date
     public let runId: String?
@@ -157,8 +158,10 @@ public struct LLMTraceEvent: Codable, Sendable {
     public let observationChars: Int?
     public let elementCount: Int?
     public let blockCount: Int?
+    public let itemCount: Int?
     public let outlineCount: Int?
     public let primaryChars: Int?
+    public let commentCount: Int?
     public let tabCount: Int?
     public let recentToolCallsCount: Int?
     public let promptPreview: String?
@@ -187,14 +190,18 @@ public struct LLMTraceEvent: Codable, Sendable {
         observationChars: Int,
         elementCount: Int,
         blockCount: Int,
+        itemCount: Int,
         outlineCount: Int,
         primaryChars: Int,
-        tabCount: Int
+        commentCount: Int,
+        tabCount: Int,
+        stage: String? = "plan"
     ) -> LLMTraceEvent {
         let shouldLog = LaikaLogger.shouldLogFullLLM
         let promptPreview = shouldLog ? LaikaLogger.preview("SYSTEM:\n\(systemPrompt)\nUSER:\n\(userPrompt)") : nil
         return LLMTraceEvent(
             type: "request",
+            stage: stage,
             id: id,
             timestamp: Date(),
             runId: runId,
@@ -213,8 +220,10 @@ public struct LLMTraceEvent: Codable, Sendable {
             observationChars: observationChars,
             elementCount: elementCount,
             blockCount: blockCount,
+            itemCount: itemCount,
             outlineCount: outlineCount,
             primaryChars: primaryChars,
+            commentCount: commentCount,
             tabCount: tabCount,
             recentToolCallsCount: recentToolCallsCount,
             promptPreview: promptPreview,
@@ -238,13 +247,15 @@ public struct LLMTraceEvent: Codable, Sendable {
         output: String,
         toolCallsCount: Int?,
         summary: String?,
-        error: String?
+        error: String?,
+        stage: String? = "plan"
     ) -> LLMTraceEvent {
         let shouldLog = LaikaLogger.shouldLogFullLLM
         let outputPreview = shouldLog ? LaikaLogger.preview(output) : nil
         let summaryPreview = shouldLog ? LaikaLogger.preview(summary ?? "") : nil
         return LLMTraceEvent(
             type: "response",
+            stage: stage,
             id: id,
             timestamp: Date(),
             runId: runId,
@@ -263,8 +274,10 @@ public struct LLMTraceEvent: Codable, Sendable {
             observationChars: nil,
             elementCount: nil,
             blockCount: nil,
+            itemCount: nil,
             outlineCount: nil,
             primaryChars: nil,
+            commentCount: nil,
             tabCount: nil,
             recentToolCallsCount: nil,
             promptPreview: nil,
@@ -292,6 +305,32 @@ public enum LaikaLogger {
         guard let url = LaikaPaths.logFileURL("llm.jsonl") else {
             return
         }
+        Task {
+            await LaikaLogWriter.shared.append(event, to: url)
+        }
+    }
+
+    public static func logAgentEvent(
+        type: String,
+        runId: String?,
+        step: Int?,
+        maxSteps: Int?,
+        payload: [String: JSONValue]
+    ) {
+        guard let url = LaikaPaths.logFileURL("llm.jsonl") else {
+            return
+        }
+        var enriched = payload
+        if let runId, !runId.isEmpty {
+            enriched["runId"] = .string(runId)
+        }
+        if let step {
+            enriched["step"] = .number(Double(step))
+        }
+        if let maxSteps {
+            enriched["maxSteps"] = .number(Double(maxSteps))
+        }
+        let event = RunEvent(type: type, payload: .object(enriched))
         Task {
             await LaikaLogWriter.shared.append(event, to: url)
         }

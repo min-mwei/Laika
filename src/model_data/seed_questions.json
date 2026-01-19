@@ -1,0 +1,114 @@
+{
+  "questions": [
+    {
+      "id": "page_about",
+      "text": "What is this page about?",
+      "requires": ["text"]
+    },
+    {
+      "id": "summarize_page",
+      "text": "Summarize this page.",
+      "requires": ["text"]
+    },
+    {
+      "id": "page_overview",
+      "text": "Give me a short overview of this page.",
+      "requires": ["text"]
+    },
+    {
+      "id": "main_sections",
+      "text": "What are the main sections on this page?",
+      "requires": ["headings"]
+    },
+    {
+      "id": "first_topic",
+      "text": "Tell me about the first topic on this page.",
+      "min_links": 1
+    },
+    {
+      "id": "second_topic",
+      "text": "Tell me about the second topic on this page.",
+      "min_links": 2
+    },
+    {
+      "id": "first_topic_comments",
+      "text": "What are the comments about the first topic?",
+      "requires": ["hn_topics"]
+    },
+    {
+      "id": "second_topic_comments",
+      "text": "What are the comments about the second topic?",
+      "requires": ["hn_topics"]
+    },
+    {
+      "id": "open_first_link",
+      "text": "Open the first link.",
+      "min_links": 1
+    },
+    {
+      "id": "open_second_link",
+      "text": "Open the second link.",
+      "min_links": 2
+    },
+    {
+      "id": "fill_form",
+      "text": "Fill in the form with the following: name={name}, email={email}, message={message}.",
+      "requires": ["form"]
+    },
+    {
+      "id": "search_site",
+      "text": "Search this site for \"{query}\".",
+      "requires": ["search"]
+    },
+    {
+      "id": "select_option",
+      "text": "Select \"{option}\" from the \"{select_label}\" dropdown.",
+      "requires": ["select"]
+    },
+    {
+      "id": "check_box",
+      "text": "Check the \"{checkbox_label}\" checkbox.",
+      "requires": ["checkbox"]
+    },
+    {
+      "id": "click_button",
+      "text": "Click the \"{button_label}\" button.",
+      "requires": ["button"]
+    },
+    {
+      "id": "scroll_down",
+      "text": "Scroll down to see more.",
+      "requires": ["scroll"]
+    }
+  ],
+  "values": {
+    "names": [
+      "Ava Chen",
+      "Jordan Lee",
+      "Sam Rivera",
+      "Priya Patel",
+      "Luis Gomez"
+    ],
+    "emails": [
+      "ava.chen@example.com",
+      "jordan.lee@example.com",
+      "sam.rivera@example.com",
+      "priya.patel@example.com",
+      "luis.gomez@example.com"
+    ],
+    "messages": [
+      "Please send me the brochure.",
+      "I would like a pricing estimate.",
+      "Can you share more details?",
+      "Please follow up with next steps.",
+      "I am interested in a demo."
+    ],
+    "queries": [
+      "pricing",
+      "features",
+      "support",
+      "API docs",
+      "contact"
+    ]
+  }
+}

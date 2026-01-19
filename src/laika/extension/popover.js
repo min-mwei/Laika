@@ -9,7 +9,7 @@ var settingsButton = document.getElementById("open-settings");
 var closeButton = document.getElementById("close-sidecar");
 var isPanelWindow = false;
 
-var DEFAULT_MAX_TOKENS = 2048;
+var DEFAULT_MAX_TOKENS = 3072;
 var MAX_TOKENS_CAP = 8192;
 var maxTokensSetting = DEFAULT_MAX_TOKENS;
 
@@ -23,30 +23,17 @@ var planValidator = window.LaikaPlanValidator || {
 };
 
 var MAX_AGENT_STEPS = 6;
-var MAX_OBSERVE_STEPS = 2;
 var DEFAULT_OBSERVE_OPTIONS = {
-  maxChars: 8000,
-  maxElements: 120,
-  maxBlocks: 30,
-  maxPrimaryChars: 1200,
-  maxOutline: 60,
-  maxOutlineChars: 160
-};
-var DEFAULT_ASSIST_OPTIONS = {
-  maxChars: 8000,
-  maxElements: 120,
-  maxBlocks: 24,
-  maxPrimaryChars: 900,
-  maxOutline: 40,
-  maxOutlineChars: 140
-};
-var DETAIL_SUMMARY_OPTIONS = {
-  maxChars: 16000,
-  maxElements: 200,
-  maxBlocks: 50,
-  maxPrimaryChars: 1800,
+  maxChars: 12000,
+  maxElements: 160,
+  maxBlocks: 40,
+  maxPrimaryChars: 1600,
   maxOutline: 80,
-  maxOutlineChars: 180
+  maxOutlineChars: 180,
+  maxItems: 30,
+  maxItemChars: 240,
+  maxComments: 24,
+  maxCommentChars: 360
 };
 
 function logDebug(text) {
@@ -386,6 +373,7 @@ function buildToolResult(toolCall, toolName, rawResult) {
     payload.textChars = (rawResult.observation.text || "").length;
     payload.elementCount = Array.isArray(rawResult.observation.elements) ? rawResult.observation.elements.length : 0;
     payload.blockCount = Array.isArray(rawResult.observation.blocks) ? rawResult.observation.blocks.length : 0;
+    payload.itemCount = Array.isArray(rawResult.observation.items) ? rawResult.observation.items.length : 0;
     payload.outlineCount = Array.isArray(rawResult.observation.outline) ? rawResult.observation.outline.length : 0;
     payload.primaryChars = rawResult.observation.primary && rawResult.observation.primary.text
       ? String(rawResult.observation.primary.text).length
@@ -418,262 +406,6 @@ function generateRunId() {
   return String(Date.now()) + "-" + Math.random().toString(16).slice(2);
 }
 
-function generateToolId() {
-  return "tool-" + generateRunId();
-}
-
-function extractTopicIndex(goal) {
-  var text = String(goal || "").toLowerCase();
-  if (text.indexOf("first") >= 0 || text.indexOf("1st") >= 0) {
-    return 1;
-  }
-  if (text.indexOf("second") >= 0 || text.indexOf("2nd") >= 0) {
-    return 2;
-  }
-  if (text.indexOf("third") >= 0 || text.indexOf("3rd") >= 0) {
-    return 3;
-  }
-  return null;
-}
-
-function isTopicDetailGoal(goal) {
-  var text = String(goal || "").toLowerCase();
-  if (!text) {
-    return false;
-  }
-  var hasTopicKeyword =
-    text.indexOf("topic") >= 0 ||
-    text.indexOf("link") >= 0 ||
-    text.indexOf("item") >= 0 ||
-    text.indexOf("story") >= 0 ||
-    text.indexOf("post") >= 0;
-  var hasTellIntent =
-    text.indexOf("tell me") >= 0 ||
-    text.indexOf("tell us") >= 0 ||
-    text.indexOf("describe") >= 0 ||
-    text.indexOf("explain") >= 0 ||
-    text.indexOf("about the") >= 0;
-  if (!hasTopicKeyword || extractTopicIndex(goal) === null) {
-    return false;
-  }
-  if (hasTellIntent) {
-    return true;
-  }
-  return text.trim().endsWith("?") || text.trim().length <= 40;
-}
-
-function isMainLinkLabel(label) {
-  var excluded = {
-    "new": true,
-    "past": true,
-    "comments": true,
-    "ask": true,
-    "show": true,
-    "jobs": true,
-    "submit": true,
-    "login": true,
-    "logout": true,
-    "hide": true,
-    "reply": true,
-    "flag": true,
-    "edit": true,
-    "more": true,
-    "next": true,
-    "prev": true,
-    "previous": true,
-    "upvote": true,
-    "downvote": true
-  };
-  var trimmed = String(label || "").trim();
-  if (!trimmed) {
-    return false;
-  }
-  var lower = trimmed.toLowerCase();
-  if (excluded[lower]) {
-    return false;
-  }
-  if (trimmed.length < 12) {
-    return false;
-  }
-  return trimmed.indexOf(" ") >= 0;
-}
-
-function mainLinkCandidates(elements) {
-  if (!Array.isArray(elements)) {
-    return [];
-  }
-  return elements.filter(function (element) {
-    return element &&
-      String(element.role || "").toLowerCase() === "a" &&
-      element.href &&
-      isMainLinkLabel(element.label);
-  });
-}
-
-function commentLinkCandidates(elements) {
-  if (!Array.isArray(elements)) {
-    return [];
-  }
-  return elements.filter(function (element) {
-    if (!element || String(element.role || "").toLowerCase() !== "a") {
-      return false;
-    }
-    var label = String(element.label || "").toLowerCase();
-    var href = String(element.href || "");
-    if (!href || href.indexOf("item?id=") === -1) {
-      return false;
-    }
-    return label.indexOf("comment") >= 0 || label.indexOf("discuss") >= 0;
-  });
-}
-
-function pickCommentLinkForMain(mainLink, commentLinks) {
-  if (!mainLink || !mainLink.boundingBox || !Array.isArray(commentLinks) || commentLinks.length === 0) {
-    return null;
-  }
-  var best = null;
-  var bestDelta = Infinity;
-  for (var i = 0; i < commentLinks.length; i += 1) {
-    var comment = commentLinks[i];
-    if (!comment.boundingBox) {
-      continue;
-    }
-    var delta = Math.abs(comment.boundingBox.y - mainLink.boundingBox.y);
-    if (delta < bestDelta) {
-      bestDelta = delta;
-      best = comment;
-    }
-  }
-  if (best && bestDelta <= 80) {
-    return best;
-  }
-  return best || null;
-}
-
-async function requestSummary(goal, observation, tabsContext, runId, step, maxSteps) {
-  var context = {
-    mode: "observe",
-    runId: runId,
-    step: step,
-    maxSteps: maxSteps,
-    observation: observation,
-    recentToolCalls: [],
-    recentToolResults: [],
-    tabs: Array.isArray(tabsContext) ? tabsContext : []
-  };
-  var response = await requestPlan(goal, context);
-  if (!response || response.ok !== true) {
-    throw new Error(response && response.error ? response.error : "plan_failed");
-  }
-  var plan = response.plan;
-  var validation = planValidator.validatePlanResponse(plan);
-  if (!validation.ok) {
-    throw new Error("invalid_plan");
-  }
-  return plan.summary || "";
-}
-
-async function runApprovedTool(toolName, args, tabId) {
-  var action = {
-    toolCall: {
-      id: generateToolId(),
-      name: toolName,
-      arguments: args || {}
-    },
-    policy: { decision: "ask", reasonCode: "workflow" }
-  };
-  var approval = await appendActionPrompt(action, tabId);
-  if (!approval || approval.decision !== "approve") {
-    return null;
-  }
-  return approval.result;
-}
-
-async function runTopicDetailWorkflow(goal, index, listObservation, tabsContext, runId) {
-  if (!listObservation || !listObservation.observation) {
-    throw new Error("no_context");
-  }
-  var elements = listObservation.observation.elements || [];
-  var mainLinks = mainLinkCandidates(elements);
-  if (mainLinks.length < index) {
-    appendMessage("system", "Unable to find that topic on this page.");
-    return true;
-  }
-  var mainLink = mainLinks[index - 1];
-  var commentLinks = commentLinkCandidates(elements);
-  var commentLink = pickCommentLinkForMain(mainLink, commentLinks);
-
-  setStatus("Native: opening story...");
-  var storyResult = await runApprovedTool("browser.open_tab", { url: mainLink.href }, listObservation.tabId);
-  if (!storyResult || storyResult.status !== "ok") {
-    appendMessage("system", "Stopped: story tab not opened.");
-    return true;
-  }
-  var storyObservation = await observeWithRetries(DETAIL_SUMMARY_OPTIONS, storyResult.tabId);
-  var storySummary = await requestSummary(
-    "Summarize the linked page content in 6-8 sentences. Highlight key facts, names, and numbers. Avoid navigation.",
-    storyObservation.observation,
-    tabsContext,
-    runId,
-    1,
-    1
-  );
-
-  var commentSummary = "";
-  if (commentLink && commentLink.href) {
-    setStatus("Native: opening comments...");
-    var commentResult = await runApprovedTool("browser.open_tab", { url: commentLink.href }, listObservation.tabId);
-    if (commentResult && commentResult.status === "ok") {
-      var commentObservation = await observeWithRetries(DETAIL_SUMMARY_OPTIONS, commentResult.tabId);
-      commentSummary = await requestSummary(
-        "Summarize the key points raised in the comment thread in 6-8 bullet points or sentences. Mention at least 3 distinct arguments or themes and any notable numbers. Avoid navigation.",
-        commentObservation.observation,
-        tabsContext,
-        runId,
-        1,
-        1
-      );
-    }
-  }
-
-  var finalLines = [];
-  var label = (mainLink.label || "").trim();
-  if (label) {
-    finalLines.push("Topic: " + label);
-  }
-  if (storySummary) {
-    finalLines.push("Story: " + storySummary);
-  }
-  if (commentSummary) {
-    finalLines.push("Comments: " + commentSummary);
-  } else {
-    finalLines.push("Comments: No comment thread was available or it could not be opened.");
-  }
-  appendMessage("assistant", finalLines.join("\n"));
-  return true;
-}
-
-function isActionGoal(goal) {
-  var text = String(goal || "").toLowerCase();
-  if (!text) {
-    return false;
-  }
-  return (
-    text.indexOf("click") >= 0 ||
-    text.indexOf("open ") >= 0 ||
-    text.indexOf("go to") >= 0 ||
-    text.indexOf("navigate") >= 0 ||
-    text.indexOf("first link") >= 0 ||
-    text.indexOf("second link") >= 0 ||
-    text.indexOf("next page") >= 0 ||
-    text.indexOf("previous page") >= 0 ||
-    text.indexOf("back") >= 0 ||
-    text.indexOf("forward") >= 0 ||
-    text.indexOf("scroll") >= 0 ||
-    text.indexOf("type ") >= 0
-  );
-}
-
 sendButton.addEventListener("click", async function () {
   var goal = goalInput.value.trim();
   if (!goal) {
@@ -690,24 +422,12 @@ sendButton.addEventListener("click", async function () {
     await loadMaxTokens();
     var runId = generateRunId();
     var tabsContext = await listTabContext();
-    var firstObservation = await observeWithRetries(DEFAULT_ASSIST_OPTIONS, null);
+    var mode = "assist";
+    var maxSteps = MAX_AGENT_STEPS;
+    var observeOptions = DEFAULT_OBSERVE_OPTIONS;
+    var firstObservation = await observeWithRetries(observeOptions, null);
     lastObservation = firstObservation.observation;
     var tabIdForPlan = firstObservation.tabId;
-
-    if (isTopicDetailGoal(goal)) {
-      var index = extractTopicIndex(goal);
-      if (index !== null) {
-        var handled = await runTopicDetailWorkflow(goal, index, firstObservation, tabsContext, runId);
-        if (handled) {
-          setStatus("Native: ready");
-          return;
-        }
-      }
-    }
-
-    var mode = isActionGoal(goal) ? "assist" : "observe";
-    var maxSteps = mode === "observe" ? MAX_OBSERVE_STEPS : MAX_AGENT_STEPS;
-    var observeOptions = mode === "observe" ? DEFAULT_OBSERVE_OPTIONS : DEFAULT_ASSIST_OPTIONS;
 
     var recentToolCalls = [];
     var recentToolResults = [];

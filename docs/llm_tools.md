@@ -130,6 +130,7 @@ Laika uses a **context pack** rather than raw DOM:
 - Goal, origin, mode
 - Observation text (budgeted)
 - Element list with handles
+- Items/outline/blocks summaries from the DOM (including item link candidates)
 - Recent tool calls (if available)
 - Open tab summaries for the current window (title + origin only)
 
@@ -190,7 +191,7 @@ Long-context guidance (from `docs/local_llm.md`):
 
 | Category | Tool name | Description | Tool params | Implementation | Runs in |
 | --- | --- | --- | --- | --- | --- |
-| Observation | `browser.observe_dom` | Capture/refresh page text + element handles. The agent may call this when it needs more context. | `{ "maxChars": number, "maxElements": number }` | `src/laika/extension/content_script.js` (`observeDom`) | Content script (Safari tab) |
+| Observation | `browser.observe_dom` | Capture/refresh page text + element handles. The agent may call this when it needs more context. | `{ "maxChars": number, "maxElements": number, "maxBlocks": number, "maxPrimaryChars": number, "maxOutline": number, "maxOutlineChars": number, "maxItems": number, "maxItemChars": number }` | `src/laika/extension/content_script.js` (`observeDom`) | Content script (Safari tab) |
 | Core navigation | `browser.open_tab` | Open a URL in a new tab. | `{ "url": "https://example.com" }` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
 | Core navigation | `browser.navigate` | Navigate the current tab to a URL. | `{ "url": "https://example.com" }` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
 | Core navigation | `browser.back` | Go back in history. | `{}` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
