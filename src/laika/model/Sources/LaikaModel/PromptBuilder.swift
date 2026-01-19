@@ -2,7 +2,37 @@ import Foundation
 import LaikaShared
 
 enum PromptBuilder {
-    static func systemPrompt() -> String {
+    static func systemPrompt(for mode: SiteMode) -> String {
+        switch mode {
+        case .observe:
+            return observeSystemPrompt()
+        case .assist:
+            return assistSystemPrompt()
+        }
+    }
+
+    private static func observeSystemPrompt() -> String {
+        return """
+You are Laika, a safe browser assistant focused on summaries.
+
+Output MUST be a single JSON object and nothing else.
+- No extra text, no Markdown, no code fences, no <think>.
+- The first character must be "{" and the last character must be "}".
+
+You are given the user's goal and a sanitized page context (URL, title, visible text, and a Main Links list).
+Your job: return a grounded summary of the page contents.
+
+Rules:
+- tool_calls MUST be [] in observe mode.
+- Mention 3–5 specific items from Main Links (or Page Text) when available.
+- Do not describe the site in general terms; summarize what is on the page now.
+
+Examples:
+{"summary":"The page lists items such as ...","tool_calls":[]}
+"""
+    }
+
+    private static func assistSystemPrompt() -> String {
         return """
 You are Laika, a safe browser agent.
 
@@ -23,6 +53,7 @@ Rules:
 - Use browser.click for links/buttons (role "a" / "button").
 - Use browser.type only for editable fields (role "input" / "textarea" or contenteditable).
 - Use browser.select only for <select>.
+- Tool arguments must match the schema exactly; do not add extra keys.
 - After a tool call runs, you will receive updated page context in the next step.
 
 When answering "What is this page about?" / summaries:
@@ -45,14 +76,9 @@ Return:
 - "tool_calls": [] when no tool is needed.
 - "tool_calls": [ ... ] with exactly ONE tool call when needed.
 
-Schema:
-{
-  "summary": "short user-facing summary",
-  "tool_calls": [
-    {"name": "browser.click", "arguments": {"handleId": "laika-1"}},
-  ]
-}
-If no action is needed, return an empty tool_calls array.
+Examples:
+{"summary":"short user-facing summary","tool_calls":[]}
+{"summary":"short user-facing summary","tool_calls":[{"name":"browser.click","arguments":{"handleId":"laika-1"}}]}
 """
     }
 
@@ -69,6 +95,11 @@ If no action is needed, return an empty tool_calls array.
         }
         lines.append("Origin: \(context.origin)")
         lines.append("Mode: \(context.mode.rawValue)")
+        let mainLinks = MainLinkHeuristics.candidates(from: context.observation.elements)
+        if context.mode == .observe {
+            let requiredCount = mainLinks.isEmpty ? 3 : max(1, min(3, mainLinks.count))
+            lines.append("Summary requirements: mention at least \(requiredCount) items from Main Links (or Page Text). Do not request tools.")
+        }
         if !context.tabs.isEmpty {
             lines.append("Open Tabs (current window):")
             for tab in context.tabs {
@@ -98,7 +129,6 @@ If no action is needed, return an empty tool_calls array.
         lines.append("- Text: \(context.observation.text)")
         lines.append("- Stats: textChars=\(context.observation.text.count) elementCount=\(context.observation.elements.count)")
 
-        let mainLinks = mainLinkCandidates(from: context.observation.elements)
         if !mainLinks.isEmpty {
             lines.append("Main Links (likely content):")
             for (index, element) in mainLinks.prefix(20).enumerated() {
@@ -108,51 +138,24 @@ If no action is needed, return an empty tool_calls array.
             }
         }
 
-        lines.append("Elements (top-to-bottom):")
-        for element in context.observation.elements {
-            let label = element.label.isEmpty ? "-" : element.label
-            var extras: [String] = []
-            if let href = element.href, !href.isEmpty {
-                extras.append("href=\"\(href)\"")
+        if context.mode == .assist {
+            lines.append("Elements (top-to-bottom):")
+            for element in context.observation.elements {
+                let label = element.label.isEmpty ? "-" : element.label
+                var extras: [String] = []
+                if let href = element.href, !href.isEmpty {
+                    extras.append("href=\"\(href)\"")
+                }
+                if let inputType = element.inputType, !inputType.isEmpty {
+                    extras.append("inputType=\"\(inputType)\"")
+                }
+                let extraText = extras.isEmpty ? "" : " " + extras.joined(separator: " ")
+                lines.append("- id=\(element.handleId) role=\(element.role) label=\"\(label)\" bbox=\(format(element.boundingBox))\(extraText)")
             }
-            if let inputType = element.inputType, !inputType.isEmpty {
-                extras.append("inputType=\"\(inputType)\"")
-            }
-            let extraText = extras.isEmpty ? "" : " " + extras.joined(separator: " ")
-            lines.append("- id=\(element.handleId) role=\(element.role) label=\"\(label)\" bbox=\(format(element.boundingBox))\(extraText)")
+        } else {
+            lines.append("Elements omitted in observe mode.")
         }
         return lines.joined(separator: "\n")
-    }
-
-    private static func mainLinkCandidates(from elements: [ObservedElement]) -> [ObservedElement] {
-        let excluded: Set<String> = [
-            "new", "past", "comments", "ask", "show", "jobs", "submit", "login", "logout",
-            "hide", "reply", "flag", "edit", "more", "next", "prev", "previous", "upvote", "downvote"
-        ]
-        return elements
-            .filter { element in
-                guard element.role.lowercased() == "a" else {
-                    return false
-                }
-                guard let href = element.href, !href.isEmpty else {
-                    return false
-                }
-                let label = element.label.trimmingCharacters(in: .whitespacesAndNewlines)
-                if label.isEmpty {
-                    return false
-                }
-                if excluded.contains(label.lowercased()) {
-                    return false
-                }
-                if label.count < 12 {
-                    return false
-                }
-                if label.contains(" ") {
-                    return true
-                }
-                // Keep domain-style labels as a fallback, but de-prioritize by filtering them out here.
-                return false
-            }
     }
 
     private static func format(_ box: BoundingBox) -> String {

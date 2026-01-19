@@ -5,6 +5,9 @@ public final class StaticModelRunner: ModelRunner {
     public init() {}
 
     public func generatePlan(context: ContextPack, userGoal: String) async throws -> ModelResponse {
+        if context.mode == .observe {
+            return ModelResponse(toolCalls: [], summary: "Summary requested.")
+        }
         let normalizedGoal = userGoal.lowercased()
         if normalizedGoal.contains("click") || normalizedGoal.contains("open") {
             if let first = context.observation.elements.first {

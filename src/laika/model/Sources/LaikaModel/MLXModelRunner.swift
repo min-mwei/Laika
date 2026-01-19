@@ -88,7 +88,7 @@ public final class MLXModelRunner: ModelRunner {
 
     public func generatePlan(context: ContextPack, userGoal: String) async throws -> ModelResponse {
         let container = try await store.container(for: modelURL)
-        let systemPrompt = PromptBuilder.systemPrompt()
+        let systemPrompt = PromptBuilder.systemPrompt(for: context.mode)
         let userPrompt = PromptBuilder.userPrompt(context: context, goal: userGoal)
         let baseRequestId = UUID().uuidString
         let attempts: [GenerationAttempt] = [
