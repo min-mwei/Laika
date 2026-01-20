@@ -25,3 +25,13 @@ This directory is reserved for the Safari extension, macOS companion app, and th
 ## Model integration defaults
 - Prefer local inference via `mlx-swift` with MLX 4-bit model assets produced by `src/local_llm_quantizer`.
 - If a cloud fallback is requested, make it opt-in and pass only redacted context packs.
+
+## Development process (required)
+1) Design and update the relevant design doc before coding.
+2) Implement, write code, and test locally.
+3) Run the Laika automation harness to validate behavior.
+4) Confirm the build works, logging is sufficient, then ask for manual user testing.
+5) Read logs and incorporate user feedback.
+
+## Mode policy
+- The prototype supports assist mode only; do not reintroduce observe-only mode branches.

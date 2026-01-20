@@ -18,7 +18,7 @@ actor ModelStore {
     }
 }
 
-public final class MLXModelRunner: ModelRunner {
+public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
     public let modelURL: URL
     public let maxTokens: Int
     private let store = ModelStore()
@@ -91,7 +91,12 @@ public final class MLXModelRunner: ModelRunner {
         let systemPrompt = PromptBuilder.goalParseSystemPrompt()
         let userPrompt = PromptBuilder.goalParseUserPrompt(context: context, goal: userGoal)
         let requestId = UUID().uuidString
-        let attempt = GenerationAttempt(temperature: 0.2, topP: 0.7, enableThinking: false)
+        let attempt = GenerationAttempt(
+            temperature: 0.2,
+            topP: 0.7,
+            enableThinking: shouldEnableThinkingForGoalParse(goal: userGoal)
+        )
+        let parseMaxTokens = goalParseMaxTokens(goal: userGoal)
         let maxOutputChars = 8_000
 
         LaikaLogger.logLLMEvent(.request(
@@ -105,7 +110,7 @@ public final class MLXModelRunner: ModelRunner {
             pageTitle: context.observation.title,
             recentToolCallsCount: context.recentToolCalls.count,
             modelPath: modelURL.lastPathComponent,
-            maxTokens: maxTokens,
+            maxTokens: parseMaxTokens,
             temperature: Double(attempt.temperature),
             topP: Double(attempt.topP),
             systemPrompt: systemPrompt,
@@ -127,7 +132,8 @@ public final class MLXModelRunner: ModelRunner {
                 systemPrompt: systemPrompt,
                 userPrompt: userPrompt,
                 attempt: attempt,
-                maxOutputChars: maxOutputChars
+                maxOutputChars: maxOutputChars,
+                maxTokensOverride: parseMaxTokens
             )
             let parsed = GoalPlanParser.parse(output)
             LaikaLogger.logLLMEvent(.response(
@@ -136,7 +142,7 @@ public final class MLXModelRunner: ModelRunner {
                 step: context.step,
                 maxSteps: context.maxSteps,
                 modelPath: modelURL.lastPathComponent,
-                maxTokens: maxTokens,
+                maxTokens: parseMaxTokens,
                 temperature: Double(attempt.temperature),
                 topP: Double(attempt.topP),
                 output: output,
@@ -153,7 +159,7 @@ public final class MLXModelRunner: ModelRunner {
                 step: context.step,
                 maxSteps: context.maxSteps,
                 modelPath: modelURL.lastPathComponent,
-                maxTokens: maxTokens,
+                maxTokens: parseMaxTokens,
                 temperature: Double(attempt.temperature),
                 topP: Double(attempt.topP),
                 output: "",
@@ -168,23 +174,12 @@ public final class MLXModelRunner: ModelRunner {
 
     public func generatePlan(context: ContextPack, userGoal: String) async throws -> ModelResponse {
         let container = try await store.container(for: modelURL)
-        let systemPrompt = PromptBuilder.systemPrompt(for: context.mode)
+        let systemPrompt = PromptBuilder.systemPrompt()
         let userPrompt = PromptBuilder.userPrompt(context: context, goal: userGoal)
         let baseRequestId = UUID().uuidString
-        let attempts: [GenerationAttempt]
-        switch context.mode {
-        case .observe:
-            attempts = [
-                .init(temperature: 0.2, topP: 0.9, enableThinking: false),
-                .init(temperature: 0.3, topP: 0.95, enableThinking: false)
-            ]
-        case .assist:
-            attempts = [
-                .init(temperature: 0.7, topP: 0.8, enableThinking: false),
-                .init(temperature: 0.6, topP: 0.95, enableThinking: false)
-            ]
-        }
+        let attempts = planAttempts(context: context, userGoal: userGoal)
         let maxOutputChars = 24_000
+        let planMaxTokens = planMaxTokens(context: context, userGoal: userGoal)
 
         var lastOutput: String?
         var lastError: Error?
@@ -202,21 +197,21 @@ public final class MLXModelRunner: ModelRunner {
                 pageTitle: context.observation.title,
                 recentToolCallsCount: context.recentToolCalls.count,
                 modelPath: modelURL.lastPathComponent,
-                maxTokens: maxTokens,
+                maxTokens: planMaxTokens,
                 temperature: Double(attempt.temperature),
                 topP: Double(attempt.topP),
                 systemPrompt: systemPrompt,
                 userPrompt: userPrompt,
-            observationChars: context.observation.text.count,
-            elementCount: context.observation.elements.count,
-            blockCount: context.observation.blocks.count,
-            itemCount: context.observation.items.count,
-            outlineCount: context.observation.outline.count,
-            primaryChars: context.observation.primary?.text.count ?? 0,
-            commentCount: context.observation.comments.count,
-            tabCount: context.tabs.count,
-            stage: "plan"
-        ))
+                observationChars: context.observation.text.count,
+                elementCount: context.observation.elements.count,
+                blockCount: context.observation.blocks.count,
+                itemCount: context.observation.items.count,
+                outlineCount: context.observation.outline.count,
+                primaryChars: context.observation.primary?.text.count ?? 0,
+                commentCount: context.observation.comments.count,
+                tabCount: context.tabs.count,
+                stage: "plan"
+            ))
 
             do {
                 let output = try await generateJSONResponse(
@@ -224,7 +219,8 @@ public final class MLXModelRunner: ModelRunner {
                     systemPrompt: systemPrompt,
                     userPrompt: userPrompt,
                     attempt: attempt,
-                    maxOutputChars: maxOutputChars
+                    maxOutputChars: maxOutputChars,
+                    maxTokensOverride: planMaxTokens
                 )
                 lastOutput = output
                 let parsed = try ToolCallParser.parseRequiringJSON(output)
@@ -234,7 +230,7 @@ public final class MLXModelRunner: ModelRunner {
                     step: context.step,
                     maxSteps: context.maxSteps,
                     modelPath: modelURL.lastPathComponent,
-                    maxTokens: maxTokens,
+                    maxTokens: planMaxTokens,
                     temperature: Double(attempt.temperature),
                     topP: Double(attempt.topP),
                     output: output,
@@ -252,7 +248,7 @@ public final class MLXModelRunner: ModelRunner {
                     step: context.step,
                     maxSteps: context.maxSteps,
                     modelPath: modelURL.lastPathComponent,
-                    maxTokens: maxTokens,
+                    maxTokens: planMaxTokens,
                     temperature: Double(attempt.temperature),
                     topP: Double(attempt.topP),
                     output: lastOutput ?? "",
@@ -275,10 +271,12 @@ public final class MLXModelRunner: ModelRunner {
         systemPrompt: String,
         userPrompt: String,
         attempt: GenerationAttempt,
-        maxOutputChars: Int
+        maxOutputChars: Int,
+        maxTokensOverride: Int? = nil
     ) async throws -> String {
+        let tokenLimit = maxTokensOverride ?? maxTokens
         let parameters = GenerateParameters(
-            maxTokens: maxTokens,
+            maxTokens: tokenLimit,
             temperature: attempt.temperature,
             topP: attempt.topP
         )
@@ -304,5 +302,90 @@ public final class MLXModelRunner: ModelRunner {
         }
 
         return output
+    }
+
+    public func streamText(_ request: StreamRequest) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    let container = try await store.container(for: modelURL)
+                    let tokenLimit = min(maxTokens, max(request.maxTokens, 32))
+                    var parameters = GenerateParameters(
+                        maxTokens: tokenLimit,
+                        temperature: request.temperature,
+                        topP: request.topP,
+                        repetitionPenalty: request.repetitionPenalty,
+                        repetitionContextSize: request.repetitionContextSize
+                    )
+                    if request.repetitionPenalty == nil {
+                        parameters.repetitionContextSize = 0
+                    }
+                    let additionalContext: [String: any Sendable]? =
+                        request.enableThinking ? nil : ["enable_thinking": false]
+                    let session = ChatSession(
+                        container,
+                        instructions: request.systemPrompt,
+                        generateParameters: parameters,
+                        additionalContext: additionalContext
+                    )
+                    for try await chunk in session.streamResponse(to: request.userPrompt) {
+                        continuation.yield(chunk)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func planAttempts(context: ContextPack, userGoal: String) -> [GenerationAttempt] {
+        let goalPlan = context.goalPlan ?? GoalPlan.unknown
+        let useThinking = shouldEnableThinkingForPlan(goalPlan: goalPlan, goal: userGoal)
+        if useThinking {
+            return [
+                .init(temperature: 0.4, topP: 0.85, enableThinking: true)
+            ]
+        }
+        return [
+            .init(temperature: 0.7, topP: 0.8, enableThinking: false),
+            .init(temperature: 0.6, topP: 0.95, enableThinking: false)
+        ]
+    }
+
+    private func goalParseMaxTokens(goal: String) -> Int {
+        let threshold = 140
+        let desired = goal.count > threshold ? 160 : 96
+        return min(maxTokens, desired)
+    }
+
+    private func shouldEnableThinkingForGoalParse(goal: String) -> Bool {
+        return goal.count > 140
+    }
+
+    private func planMaxTokens(context: ContextPack, userGoal: String) -> Int {
+        let goalPlan = context.goalPlan ?? GoalPlan.unknown
+        let desired: Int
+        switch goalPlan.intent {
+        case .pageSummary:
+            desired = 320
+        case .itemSummary, .commentSummary:
+            desired = 512
+        case .action:
+            desired = 256
+        case .unknown:
+            desired = 384
+        }
+        return min(maxTokens, desired)
+    }
+
+    private func shouldEnableThinkingForPlan(goalPlan: GoalPlan, goal: String) -> Bool {
+        if goalPlan.intent == .pageSummary || goalPlan.intent == .itemSummary || goalPlan.intent == .commentSummary {
+            return false
+        }
+        if goalPlan.wantsComments {
+            return false
+        }
+        return goal.count > 220
     }
 }

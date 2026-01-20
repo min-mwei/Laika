@@ -1,5 +1,13 @@
 # Development + Testing
 
+## Process (required)
+
+1) Design and update the relevant design doc.
+2) Implement, write code, and test locally.
+3) Run the Laika automation harness to validate behavior.
+4) Confirm the build works, logging is sufficient, then ask for manual user testing.
+5) Read logs and incorporate user feedback.
+
 ## Build (Swift packages)
 
 ```bash

@@ -9,6 +9,7 @@ Purpose: validate the design with a thin slice that combines a simple agent UI i
 - Local model integration using an MLX 4-bit model (Qwen3-0.6B) built via `src/local_llm_quantizer`.
 - Package the MLX model directory for the initial phase and run inference locally via `mlx-swift`.
 - Redacted context pack only; no cookies or session tokens.
+- Prototype runs in assist-only mode; read-only summaries use `content.summarize`.
 
 ## Non-goals for this validation
 - Full autopilot, multi-modal inputs, or long-run resume.
@@ -25,7 +26,7 @@ Purpose: validate the design with a thin slice that combines a simple agent UI i
   - toolbar-attached sidecar panel (fallback: standalone panel window) + small companion window
   - agent loop: observe -> model -> policy -> propose -> execute
   - run log: SQLite or JSONL append (small)
-  - policy gate: static rules + per-site mode (Observe/Assist)
+  - policy gate: static rules + per-action approvals
 - Native messaging bridge
   - Safari Web Extension uses `browser.runtime.sendNativeMessage` to reach the native handler
   - Native handler calls the Agent Core and returns typed responses
@@ -44,10 +45,9 @@ Purpose: validate the design with a thin slice that combines a simple agent UI i
    - Success: extension can send/receive typed messages to the native handler.
 
 2. Minimal Safari UI
-   - Toolbar-attached sidecar panel per Safari window with prompt input, run status, approvals list (fallback: standalone panel window on restricted pages).
-   - Companion window with chat log and action queue.
-   - Show "Observe/Assist" mode per site.
-   - Success: entering a prompt triggers an observe->model->propose loop.
+  - Toolbar-attached sidecar panel per Safari window with prompt input, run status, approvals list (fallback: standalone panel window on restricted pages).
+  - Companion window with chat log and action queue.
+  - Success: entering a prompt triggers an observe->model->propose loop.
 
 3. Observe-only tool
    - Content script collects visible text + interactive elements (role, label, bbox).

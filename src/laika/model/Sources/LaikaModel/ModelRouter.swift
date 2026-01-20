@@ -6,7 +6,7 @@ public enum ModelPreference: Sendable {
     case staticFallback
 }
 
-public final class ModelRouter: ModelRunner {
+public final class ModelRouter: ModelRunner, StreamingModelRunner {
     private let runner: ModelRunner
 
     public init(preferred: ModelPreference, modelURL: URL?, maxTokens: Int = 2048) {
@@ -28,5 +28,14 @@ public final class ModelRouter: ModelRunner {
 
     public func parseGoalPlan(context: ContextPack, userGoal: String) async throws -> GoalPlan {
         try await runner.parseGoalPlan(context: context, userGoal: userGoal)
+    }
+
+    public func streamText(_ request: StreamRequest) -> AsyncThrowingStream<String, Error> {
+        guard let streaming = runner as? StreamingModelRunner else {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: ModelError.modelUnavailable("Streaming model unavailable."))
+            }
+        }
+        return streaming.streamText(request)
     }
 }

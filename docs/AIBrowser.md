@@ -14,6 +14,8 @@ This is a design draft for an MVP. It focuses on security posture, system bounda
 
 Prototype UI note: the current build renders an attached, in-page **sidecar panel** inside the active tab, toggled by the toolbar icon (position configurable in Settings). The sidecar is scoped per Safari window; each window has its own attached panel. If the active tab can’t be scripted, the toolbar opens the same UI as a standalone panel window. Plan requests include a sanitized summary of open tabs in the current window (title + origin only, no query/hash) so the agent can reason about multi-tab context without gaining cross-tab access. References to a “popover” below should be read as “sidecar UI” for the prototype.
 
+Prototype mode note: the current implementation runs in **assist-only** mode. Read-only tasks (summaries) are handled via the `content.summarize` tool plus policy gating; there is no separate observe-only mode in code.
+
 Convergence note: further changes should be driven by probe/prototype results (Safari/WebExtension behavior, IPC limits, sandboxed local inference), not more design expansion.
 
 Next steps (prototype checklist):
@@ -144,9 +146,8 @@ Privacy boundary (what leaves the device):
 - **Adaptive planning**: handles login gates, pagination, infinite scroll, and DOM updates.
 - **Long-running workflows**: pause/resume across restarts and long approvals, backed by a durable run log.
 - **Autonomy levels**:
-  - *Observe*: read + summarize only.
-  - *Assist*: propose actions; user approves each step or batch.
-  - *Autopilot*: execute within strict policy constraints; escalates to user on sensitive steps.
+  - *Assist* (current): propose actions; user approves each step or batch; read-only summaries run through `content.summarize`.
+  - *Autopilot* (future): execute within strict policy constraints; escalates to user on sensitive steps.
 
 ### 3) Multi-modal Human Interaction
 
@@ -177,7 +178,7 @@ Privacy boundary (what leaves the device):
 
 ## MVP Scope / Milestones
 
-    - **MVP 0 (Observe-only)**: isolated surface, `observe_dom`, `extract_table`, citations, toolbar sidecar panel + companion UI, per-site mode selector, SQLite run log (audit + context).
+    - **MVP 0 (Assist-only)**: isolated surface, `observe_dom`, `extract_table`, citations, toolbar sidecar panel + companion UI, SQLite run log (audit + context).
 - **MVP 1 (Assist)**: “My Browser” authorization, `find`, `click`, `type`, element highlighting, per-step approvals, dedicated task tab(s), pause on takeover.
 - **MVP 2 (Autopilot on low-risk sites)**: policy matrix defaults, durable pause/resume + cancellation, timeouts/retries, rollback to checkpoints, recovery + verification loops.
 - **MVP 3 (Multi-modal)**: viewport capture + region selection, voice input, optional vision grounding.
@@ -659,7 +660,7 @@ Safari WebExtensions cannot access the GPU or the file system directly in a way 
 
 Long-running automation is only “durable” if lifecycle behavior is explicit. Laika should make it clear what continues and what pauses.
 
-- **Agent Core must be running**: all planning, policy, logging, and (optionally) local inference live in the Agent Core. If it is not running, the extension enters `app-offline` and stays in observe-only UI with a one-click `Open Laika`.
+- **Agent Core must be running**: all planning, policy, logging, and (optionally) local inference live in the Agent Core. If it is not running, the extension enters `app-offline` and stays in read-only UI with a one-click `Open Laika`.
 - **“My Browser” runs require Safari + an attached tab**:
   - If Safari quits, the task tab closes, or the tab can’t be reattached, the run transitions to `paused` (never “continue headless”).
   - On resume, require a fresh `observe_dom` and explicit re-authorization for `My Browser` (capability tokens are not persisted across restarts).
@@ -732,7 +733,7 @@ Private browsing should behave like a hard “no persistence” boundary:
   - No SQLite/App Group writes (no run log, no checkpoints, no artifacts).
   - No cross-run memory; no exports unless the user explicitly saves a redacted summary to a non-private run.
   - Prefer local-only models; if a cloud model is enabled globally, require a separate opt-in for Private windows.
-- UX: Private detection may be unreliable; default to conservative behavior when unsure (Connector off; observe-only). When Private is detected (or explicitly enabled), show a “Private window” banner that states: “No logs, no saved artifacts, no cloud calls unless you opt in for Private.”
+- UX: Private detection may be unreliable; default to conservative behavior when unsure (Connector off; read-only). When Private is detected (or explicitly enabled), show a “Private window” banner that states: “No logs, no saved artifacts, no cloud calls unless you opt in for Private.”
 
 ### Restricted Pages and Special URL Schemes
 
@@ -921,10 +922,10 @@ All JS⇄Swift communication uses a **strictly typed, versioned tool protocol**,
 
 - Use a long-lived `runtime.connect` port (sidecar/overlay ↔ background) and a single native-messaging channel (background ↔ native bridge).
 - On reconnect (service worker suspension, UI reopen), send `run.sync(lastSeenEventId)`; Swift replies with missing events + current authoritative run state.
-- If the native side (Laika app/agent core) is not reachable, enter `app-offline`: disable automation, keep observe-only UI copy, and offer a one-click “Open Laika”.
+- If the native side (Laika app/agent core) is not reachable, enter `app-offline`: disable automation, keep read-only UI copy, and offer a one-click “Open Laika”.
 - **“Open Laika” mechanics (App Store-safe)**: on user click, attempt a deterministic bring-to-front flow:
   - Preferred: open an app-registered URL scheme (e.g., `laika://open?source=safari`) or Universal Link that the app handles, so the OS launches/activates Laika.
-  - Fallback: show clear instructions (“Open Laika.app to continue”) and keep the extension in observe-only mode.
+  - Fallback: show clear instructions (“Open Laika.app to continue”) and keep the extension in read-only mode.
 - **App locked / Panic**: after a Panic or explicit lock, the app refuses to mint new `capabilityToken`s for `My Browser` until the user re-authorizes in the app. The extension should render a clear “locked” state and route the user to unlock.
 
 **Message sequencing + backpressure**
@@ -1529,7 +1530,7 @@ Overlays must not hijack the page or leak data across origins:
 2. Agent proposes the next action with an element highlight + “why this element” (based on tool observations, not page instructions).
 3. Policy Gate returns `ask`; user approves; tool executes; agent verifies outcome; audit log records the decision.
 
-**Sensitive site: observe-only with redaction**
+**Sensitive site: read-only with redaction**
 
 1. User opens a banking domain; site classification defaults to `Observe`.
 2. Agent can extract balances/transactions into a derived summary, but policy blocks typing/paste/submit/download.

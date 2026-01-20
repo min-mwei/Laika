@@ -155,6 +155,19 @@ async function callPlan(server, planRequest) {
   return await response.json();
 }
 
+async function callSummarize(server, planRequest) {
+  const response = await fetch(`${server}/summarize`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(planRequest)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Summarize failed: ${response.status} ${text}`);
+  }
+  return await response.json();
+}
+
 function buildTabs(observation) {
   if (!observation || !observation.url) {
     return [];
@@ -175,11 +188,73 @@ function buildTabs(observation) {
   ];
 }
 
+function buildSummaryContext(observation, runId, step, maxSteps, recentToolCalls, recentToolResults, goalPlan) {
+  if (!observation) {
+    return null;
+  }
+  let origin = "";
+  try {
+    origin = new URL(observation.url).origin;
+  } catch (error) {
+    origin = "";
+  }
+  return {
+    origin: origin,
+    mode: "assist",
+    runId: runId,
+    step: step,
+    maxSteps: maxSteps,
+    observation: observation,
+    recentToolCalls: recentToolCalls.slice(-8),
+    recentToolResults: recentToolResults.slice(-8),
+    tabs: buildTabs(observation),
+    goalPlan: goalPlan || null
+  };
+}
+
 function buildToolResult(toolCall, status, payload) {
   return {
     toolCallId: toolCall.id,
     status: status,
     payload: payload || {}
+  };
+}
+
+function summarizeObservation(observation) {
+  if (!observation) {
+    return null;
+  }
+  const items = Array.isArray(observation.items) ? observation.items : [];
+  const comments = Array.isArray(observation.comments) ? observation.comments : [];
+  const summaryItems = items.slice(0, 5).map((item) => {
+    const links = Array.isArray(item.links) ? item.links : [];
+    return {
+      title: item.title || "",
+      url: item.url || "",
+      linkCount: links.length,
+      links: links.slice(0, 3).map((link) => ({
+        title: link.title || "",
+        url: link.url || ""
+      }))
+    };
+  });
+  const summaryComments = comments.slice(0, 3).map((comment) => ({
+    author: comment.author || "",
+    age: comment.age || "",
+    text: (comment.text || "").slice(0, 140)
+  }));
+  return {
+    url: observation.url || "",
+    title: observation.title || "",
+    textChars: (observation.text || "").length,
+    elementCount: Array.isArray(observation.elements) ? observation.elements.length : 0,
+    blockCount: Array.isArray(observation.blocks) ? observation.blocks.length : 0,
+    itemCount: items.length,
+    outlineCount: Array.isArray(observation.outline) ? observation.outline.length : 0,
+    commentCount: comments.length,
+    primaryChars: observation.primary && observation.primary.text ? String(observation.primary.text).length : 0,
+    items: summaryItems,
+    comments: summaryComments
   };
 }
 
@@ -292,14 +367,38 @@ async function runGoals(state, goals, options) {
       };
       const plan = await callPlan(options.server, { context, goal });
       summary = plan.summary || "";
+      const goalPlan = plan.goalPlan || null;
+      const planActions = Array.isArray(plan.actions) ? plan.actions : [];
       const action = pickNextAction(plan.actions);
-      goalSteps.push({
+      const stepInfo = {
         step: step,
         summary: summary,
         action: action ? action.toolCall : null,
-        policy: action ? action.policy : null
-      });
+        policy: action ? action.policy : null,
+        goalPlan: goalPlan,
+        planActions: planActions,
+        observation: summarizeObservation(observation)
+      };
+      goalSteps.push(stepInfo);
       if (!action) {
+        break;
+      }
+      if (action.toolCall && action.toolCall.name === "content.summarize") {
+        const summaryContext = buildSummaryContext(
+          observation,
+          state.runId,
+          step,
+          options.maxSteps,
+          recentToolCalls,
+          recentToolResults,
+          goalPlan
+        );
+        if (!summaryContext) {
+          break;
+        }
+        const summaryResponse = await callSummarize(options.server, { context: summaryContext, goal });
+        summary = summaryResponse.summary || "";
+        stepInfo.summaryResult = summary;
         break;
       }
       if (action.policy && action.policy.decision === "deny") {
@@ -314,6 +413,8 @@ async function runGoals(state, goals, options) {
         ? buildObservePayload(executed.observation)
         : {};
       recentToolResults.push(buildToolResult(action.toolCall, executed.result.status || "ok", payload));
+      stepInfo.toolResult = executed.result;
+      stepInfo.nextObservation = summarizeObservation(executed.observation);
       if (executed.observation) {
         state.observation = executed.observation;
       }

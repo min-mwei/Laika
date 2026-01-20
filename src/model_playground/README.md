@@ -50,6 +50,13 @@ python laika_poc.py \
 
 When `--detail-mode` is enabled, the POC will fall back to a structured summary builder if the model ignores the requested headings.
 
+Generation knobs (MLX):
+
+- `--temperature`, `--top-p`, `--min-p`, `--top-k`: sampling controls.
+- `--repetition-penalty`, `--repetition-context-size`: reduce repetition/loops.
+- `--seed`: deterministic sampling.
+- `--stream-model-output`: stream model output to stdout (debug).
+
 Interactive loop:
 
 ```bash

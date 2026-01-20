@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import inspect
 import json
 import re
 import sys
@@ -184,13 +183,20 @@ _EXCLUDED_MAIN_LINK_LABELS = {
     "downvote",
 }
 
+_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/121.0.0.0 Safari/537.36"
+)
+
 
 def _normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
 def _strip_think_blocks(text: str) -> str:
-    return re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
+    without_blocks = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
+    return re.sub(r"<\s*/?\s*think\s*>", "", without_blocks, flags=re.IGNORECASE)
 
 
 def _strip_code_fences(text: str) -> str:
@@ -544,7 +550,11 @@ class BrowserTab:
         try:
             response = requests.get(
                 url,
-                headers={"User-Agent": "LaikaPOC/0.1"},
+                headers={
+                    "User-Agent": _DEFAULT_USER_AGENT,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
                 timeout=15,
             )
             response.raise_for_status()
@@ -1369,7 +1379,8 @@ class PromptBuilder:
             "Rules:\n"
             "- tool_calls MUST be [] in observe mode.\n"
             "- Mention 3-5 specific items from Main Links (or Page Text) when available.\n"
-            "- Do not describe the site in general terms; summarize what is on the page now.\n\n"
+            "- Do not describe the site in general terms; summarize what is on the page now.\n"
+            "- Do not repeat prior sentences or phrases.\n\n"
             "Example:\n"
             "{\"summary\":\"The page lists items such as ...\",\"tool_calls\":[]}\n"
         )
@@ -1389,6 +1400,7 @@ class PromptBuilder:
             "- return a summary with no tool calls, OR\n"
             "- request ONE tool call that moves toward the goal.\n\n"
             "Rules:\n"
+            "- Do not repeat prior sentences or phrases.\n"
             "- Prefer at most ONE tool call per response.\n"
             "- If the goal can be answered from the provided page context, do not call tools.\n"
             "- If the user asks for the \"first/second link\", interpret it as the first/second item in the \"Main Links\" list.\n"
@@ -1674,29 +1686,74 @@ class MLXModelRunner:
         max_tokens: int,
         temperature: float,
         top_p: float,
+        min_p: float,
+        top_k: int,
+        repetition_penalty: float,
+        repetition_context_size: int,
         enable_thinking: bool,
+        seed: Optional[int],
+        stream_model_output: bool,
         verbose: bool,
     ) -> None:
-        from mlx_lm import generate, load
+        import mlx.core as mx
+        from mlx_lm import load, stream_generate
+        from mlx_lm.sample_utils import make_logits_processors, make_sampler
 
         self.model, self.tokenizer = load(model_dir)
-        self.generate_fn = generate
+        self.stream_generate_fn = stream_generate
+        self.make_sampler_fn = make_sampler
+        self.make_logits_processors_fn = make_logits_processors
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.top_p = top_p
+        self.min_p = min_p
+        self.top_k = top_k
+        self.repetition_penalty = repetition_penalty
+        self.repetition_context_size = repetition_context_size
         self.enable_thinking = enable_thinking
+        self.seed = seed
+        self.stream_model_output = stream_model_output
         self.verbose = verbose
+        if self.seed is not None:
+            mx.random.seed(self.seed)
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         prompt = self._format_prompt(system_prompt, user_prompt)
-        kwargs = self._generation_kwargs()
-        return self.generate_fn(self.model, self.tokenizer, prompt=prompt, **kwargs).strip()
+        sampler = self.make_sampler_fn(
+            temp=self.temperature,
+            top_p=self.top_p,
+            min_p=self.min_p,
+            top_k=self.top_k,
+        )
+        logits_processors = self.make_logits_processors_fn(
+            repetition_penalty=self.repetition_penalty,
+            repetition_context_size=self.repetition_context_size,
+        )
+
+        output = ""
+        for response in self.stream_generate_fn(
+            self.model,
+            self.tokenizer,
+            prompt,
+            max_tokens=self.max_tokens,
+            sampler=sampler,
+            logits_processors=logits_processors,
+        ):
+            output += response.text
+            if self.stream_model_output:
+                print(response.text, end="", flush=True)
+            if self._is_complete_json_response(output):
+                break
+        if self.stream_model_output:
+            print()
+        return output.strip()
 
     def _format_prompt(self, system_prompt: str, user_prompt: str) -> str:
+        thinking_switch = "/think" if self.enable_thinking else "/no_think"
         if getattr(self.tokenizer, "chat_template", None) is None:
-            return f"{system_prompt}\n\n{user_prompt}"
+            return f"{system_prompt}\n\n{thinking_switch}\n\n{user_prompt}"
         messages = [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": f"{system_prompt}\n\n{thinking_switch}"},
             {"role": "user", "content": user_prompt},
         ]
         try:
@@ -1711,17 +1768,18 @@ class MLXModelRunner:
                 add_generation_prompt=True,
             )
 
-    def _generation_kwargs(self) -> Dict[str, Any]:
-        kwargs: Dict[str, Any] = {"max_tokens": self.max_tokens, "verbose": self.verbose}
-        if self.temperature and self.temperature > 0:
-            sig = inspect.signature(self.generate_fn)
-            if "temp" in sig.parameters:
-                kwargs["temp"] = self.temperature
-            elif "temperature" in sig.parameters:
-                kwargs["temperature"] = self.temperature
-            if "top_p" in sig.parameters:
-                kwargs["top_p"] = self.top_p
-        return kwargs
+    def _is_complete_json_response(self, text: str) -> bool:
+        if "{" not in text or "}" not in text:
+            return False
+        sanitized = _strip_code_fences(_strip_think_blocks(text))
+        json_str = _extract_json_object(sanitized)
+        if json_str is None:
+            return False
+        try:
+            payload = json.loads(json_str)
+        except json.JSONDecodeError:
+            return False
+        return isinstance(payload, dict) and "summary" in payload and "tool_calls" in payload
 
 
 class Agent:
@@ -1959,6 +2017,10 @@ def _parse_args() -> argparse.Namespace:
     default_max_tokens = 1024
     default_temperature = 0.2
     default_top_p = 0.9
+    default_min_p = 0.0
+    default_top_k = 0
+    default_repetition_penalty = 0.0
+    default_repetition_context_size = 20
     parser = argparse.ArgumentParser(
         description="Laika MLX POC: tool-calling loop with Qwen3 MLX 4-bit.",
     )
@@ -1994,7 +2056,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-tokens", type=int, default=default_max_tokens)
     parser.add_argument("--temperature", type=float, default=default_temperature)
     parser.add_argument("--top-p", type=float, default=default_top_p)
+    parser.add_argument("--min-p", type=float, default=default_min_p)
+    parser.add_argument("--top-k", type=int, default=default_top_k)
+    parser.add_argument("--repetition-penalty", type=float, default=default_repetition_penalty)
+    parser.add_argument("--repetition-context-size", type=int, default=default_repetition_context_size)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--enable-thinking", action="store_true")
+    parser.add_argument("--stream-model-output", action="store_true")
     parser.add_argument(
         "--detail-mode",
         action="store_true",
@@ -2014,6 +2082,8 @@ def _parse_args() -> argparse.Namespace:
             args.temperature = 0.6
         if args.top_p == default_top_p:
             args.top_p = 0.95
+        if args.repetition_penalty == default_repetition_penalty:
+            args.repetition_penalty = 1.1
         if not args.enable_thinking:
             args.enable_thinking = True
 
@@ -2044,7 +2114,13 @@ def main() -> int:
             max_tokens=args.max_tokens,
             temperature=args.temperature,
             top_p=args.top_p,
+            min_p=args.min_p,
+            top_k=args.top_k,
+            repetition_penalty=args.repetition_penalty,
+            repetition_context_size=args.repetition_context_size,
             enable_thinking=args.enable_thinking,
+            seed=args.seed,
+            stream_model_output=args.stream_model_output,
             verbose=args.verbose,
         )
     except Exception as exc:

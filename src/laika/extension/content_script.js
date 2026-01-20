@@ -262,7 +262,11 @@
     if (!isTextContainerVisible(element)) {
       return false;
     }
-    if (element.closest && element.closest("nav,header,footer,aside,menu")) {
+    if (element.closest && element.closest("nav,header,footer,aside,menu,address,form")) {
+      return false;
+    }
+    var tagName = element.tagName ? element.tagName.toLowerCase() : "";
+    if (tagName === "address" || tagName === "form") {
       return false;
     }
     var role = (element.getAttribute("role") || "").toLowerCase();
@@ -474,8 +478,41 @@
       return trimmed.indexOf(".") >= 0 || trimmed.indexOf("/") >= 0;
     }
 
+    function looksLikeTimeLabel(text) {
+      var trimmed = String(text || "").trim().toLowerCase();
+      if (!trimmed) {
+        return false;
+      }
+      if (trimmed === "just now") {
+        return true;
+      }
+      var timePattern = /^\d+\s+(min|mins|minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s+ago$/;
+      return timePattern.test(trimmed);
+    }
+
     function containsDigit(text) {
       return /\p{N}/u.test(String(text || ""));
+    }
+
+    function isCommentLinkCandidate(text, url) {
+      var label = String(text || "").toLowerCase();
+      var href = String(url || "").toLowerCase();
+      if (label.indexOf("comment") >= 0 || label.indexOf("comments") >= 0) {
+        return true;
+      }
+      if (label.indexOf("discuss") >= 0 || label.indexOf("discussion") >= 0) {
+        return true;
+      }
+      if (label.indexOf("thread") >= 0 || label.indexOf("reply") >= 0 || label.indexOf("replies") >= 0) {
+        return true;
+      }
+      if (href.indexOf("comment") >= 0 || href.indexOf("discussion") >= 0 || href.indexOf("thread") >= 0) {
+        return true;
+      }
+      if (href.indexOf("#comments") >= 0 || href.indexOf("reply") >= 0) {
+        return true;
+      }
+      return false;
     }
 
     nodes.forEach(function (element) {
@@ -514,7 +551,8 @@
         if (looksLikeDomainLabel(anchorText)) {
           score -= 20;
         }
-        if (linkCandidates.length < maxLinksPerItem) {
+        var isCommentLink = isCommentLinkCandidate(anchorText, anchorUrl);
+        if (linkCandidates.length < maxLinksPerItem || isCommentLink) {
           var linkKey = (anchorText + "|" + anchorUrl).toLowerCase();
           if (!linkSeen.has(linkKey)) {
             linkSeen.add(linkKey);
@@ -536,28 +574,44 @@
         if (sibling && isBlockCandidate(sibling)) {
           var siblingText = utils.normalizeWhitespace(sibling.innerText);
           if (siblingText && siblingText.length <= 240) {
-            siblingMetaText = siblingText;
             var siblingAnchors = sibling.querySelectorAll("a");
+            var hasStrongSibling = false;
             if (siblingAnchors && siblingAnchors.length > 0) {
               for (var j = 0; j < siblingAnchors.length; j += 1) {
-                if (linkCandidates.length >= maxLinksPerItem) {
+                var siblingTextLabel = utils.normalizeWhitespace(siblingAnchors[j].innerText);
+                if (!siblingTextLabel) {
+                  continue;
+                }
+                if (siblingTextLabel.length >= 18 || siblingTextLabel.length >= bestTextLength + 6) {
+                  hasStrongSibling = true;
                   break;
                 }
-                var siblingTextLabel = utils.normalizeWhitespace(siblingAnchors[j].innerText);
-                var siblingUrl = getHref(siblingAnchors[j]);
-                if (!siblingTextLabel || !siblingUrl) {
-                  continue;
+              }
+            }
+            if (!hasStrongSibling) {
+              siblingMetaText = siblingText;
+              if (siblingAnchors && siblingAnchors.length > 0) {
+                for (var k = 0; k < siblingAnchors.length; k += 1) {
+                  var siblingLabel = utils.normalizeWhitespace(siblingAnchors[k].innerText);
+                  var siblingUrl = getHref(siblingAnchors[k]);
+                  if (!siblingLabel || !siblingUrl) {
+                    continue;
+                  }
+                  var siblingIsComment = isCommentLinkCandidate(siblingLabel, siblingUrl);
+                  if (linkCandidates.length >= maxLinksPerItem && !siblingIsComment) {
+                    break;
+                  }
+                  var siblingKey = (siblingLabel + "|" + siblingUrl).toLowerCase();
+                  if (linkSeen.has(siblingKey)) {
+                    continue;
+                  }
+                  linkSeen.add(siblingKey);
+                  linkCandidates.push({
+                    title: siblingLabel,
+                    url: siblingUrl,
+                    handleId: ensureHandle(siblingAnchors[k]) || ""
+                  });
                 }
-                var siblingKey = (siblingTextLabel + "|" + siblingUrl).toLowerCase();
-                if (linkSeen.has(siblingKey)) {
-                  continue;
-                }
-                linkSeen.add(siblingKey);
-                linkCandidates.push({
-                  title: siblingTextLabel,
-                  url: siblingUrl,
-                  handleId: ensureHandle(siblingAnchors[j]) || ""
-                });
               }
             }
           }
@@ -568,6 +622,9 @@
       }
       var title = utils.normalizeWhitespace(bestAnchor.innerText);
       if (!title || title.length < 4) {
+        return;
+      }
+      if (looksLikeTimeLabel(title)) {
         return;
       }
       if (title.length <= 12 && digitRatio(title) > 0.4) {
@@ -592,6 +649,9 @@
       }
       var anchorShare = textLength > 0 ? bestTextLength / textLength : 0;
       if (textLength >= 120 && anchorShare < 0.12) {
+        return;
+      }
+      if (bestTextLength <= 12 && textLength >= 60 && anchorShare < 0.2 && linkCandidates.length >= 3) {
         return;
       }
       var stats = linkStatsForElement(element, rawText.length);
@@ -666,7 +726,39 @@
     if (id.indexOf("discussion") >= 0 || className.indexOf("discussion") >= 0) {
       return true;
     }
+    if (hasCommentMetadata(element)) {
+      return true;
+    }
+    if (hasCommentTextHint(element)) {
+      return true;
+    }
     return false;
+  }
+
+  function hasCommentMetadata(element) {
+    if (!element || !element.querySelector) {
+      return false;
+    }
+    var timeEl = element.querySelector("time,[datetime],[data-time],.age,.time,.timestamp");
+    if (!timeEl) {
+      return false;
+    }
+    var authorEl = element.querySelector(
+      "[rel=\"author\"],[itemprop=\"author\"],[data-author],.author,.user,.username,.byline,.comment-author"
+    );
+    if (authorEl) {
+      return true;
+    }
+    var replyEl = element.querySelector(".reply,[data-reply-id],a[href*=\"reply\"]");
+    return !!replyEl;
+  }
+
+  function hasCommentTextHint(element) {
+    if (!element || !element.querySelector) {
+      return false;
+    }
+    var textEl = element.querySelector("[class*=\"comment\"],[class*=\"commtext\"],[class*=\"reply\"],[itemprop=\"text\"]");
+    return !!textEl;
   }
 
   function findMetaText(container, selectors, maxChars) {
@@ -735,6 +827,8 @@
     var selectors = [
       "[itemprop=\"text\"]",
       ".comment",
+      "[class*=\"comment\"]",
+      "[class*=\"commtext\"]",
       ".comment-body",
       ".comment_body",
       ".comment-content",
@@ -777,7 +871,13 @@
       "style",
       ".reply",
       ".comment-actions",
-      ".actions"
+      ".actions",
+      ".age",
+      ".user",
+      ".username",
+      ".author",
+      ".byline",
+      ".comment-author"
     ];
     var removals = clone.querySelectorAll(removeSelectors.join(","));
     for (var i = 0; i < removals.length; i += 1) {
@@ -807,6 +907,9 @@
       "[data-thread-id]",
       "[data-reply-id]",
       ".comment",
+      "[class*=\"comment\"]",
+      "[class*=\"commtext\"]",
+      "[class*=\"reply\"]",
       ".comment-body",
       ".comment_body",
       ".comment-content"

@@ -15,10 +15,12 @@ public struct AgentAction: Codable, Equatable, Sendable {
 public struct AgentResponse: Codable, Equatable, Sendable {
     public let summary: String
     public let actions: [AgentAction]
+    public let goalPlan: GoalPlan?
 
-    public init(summary: String, actions: [AgentAction]) {
+    public init(summary: String, actions: [AgentAction], goalPlan: GoalPlan? = nil) {
         self.summary = summary
         self.actions = actions
+        self.goalPlan = goalPlan
     }
 }
 
@@ -50,27 +52,30 @@ public final class AgentOrchestrator: @unchecked Sendable {
         let enrichedContext = contextWithGoalPlan(context, goalPlan: goalPlan)
         cacheListItemsIfNeeded(context: enrichedContext)
 
-        if context.mode == .assist, let planned = planAction(context: enrichedContext, goalPlan: goalPlan) {
+        if let planned = planAction(context: enrichedContext, goalPlan: goalPlan) {
             let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
             logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
-            return AgentResponse(summary: planned.summary, actions: actions)
+            logFinalSummary(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan, source: "planned_action")
+            return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan)
         }
 
-        if context.mode == .assist, shouldSummarizeWithoutTools(goalPlan: goalPlan) {
-            let observeContext = contextWithMode(enrichedContext, mode: .observe)
-            let summary = try await generateObservedSummary(context: observeContext, userGoal: userGoal, goalPlan: goalPlan)
-            return AgentResponse(summary: summary, actions: [])
+        if let planned = planSummaryTool(context: enrichedContext, goalPlan: goalPlan) {
+            let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
+            logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
+            logFinalSummary(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan, source: "planned_summary_tool")
+            return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan)
         }
 
-        if context.mode == .observe {
-            let summary = try await generateObservedSummary(context: enrichedContext, userGoal: userGoal, goalPlan: goalPlan)
-            return AgentResponse(summary: summary, actions: [])
+        if shouldSummarizeWithoutTools(goalPlan: goalPlan) {
+            let summary = try await generateSummaryFallback(context: enrichedContext, userGoal: userGoal, goalPlan: goalPlan)
+            logFinalSummary(summary: summary, context: enrichedContext, goalPlan: goalPlan, source: "summary_fallback")
+            return AgentResponse(summary: summary, actions: [], goalPlan: goalPlan)
         }
         let modelResponse = try await model.generatePlan(context: enrichedContext, userGoal: userGoal)
-        if context.mode == .assist, shouldForceSummary(context: enrichedContext, goalPlan: goalPlan, modelResponse: modelResponse) {
-            let observeContext = contextWithMode(enrichedContext, mode: .observe)
-            let summary = try await generateObservedSummary(context: observeContext, userGoal: userGoal, goalPlan: goalPlan)
-            return AgentResponse(summary: summary, actions: [])
+        if shouldForceSummary(context: enrichedContext, goalPlan: goalPlan, modelResponse: modelResponse) {
+            let summary = try await generateSummaryFallback(context: enrichedContext, userGoal: userGoal, goalPlan: goalPlan)
+            logFinalSummary(summary: summary, context: enrichedContext, goalPlan: goalPlan, source: "summary_fallback")
+            return AgentResponse(summary: summary, actions: [], goalPlan: goalPlan)
         }
         let focus = summaryFocus(context: enrichedContext, goalPlan: goalPlan)
         let format = summaryFormat(goalPlan: goalPlan)
@@ -81,7 +86,8 @@ public final class AgentOrchestrator: @unchecked Sendable {
             format: format
         )
         let actions = applyPolicy(to: modelResponse.toolCalls, context: enrichedContext)
-        return AgentResponse(summary: summary, actions: actions)
+        logFinalSummary(summary: summary, context: enrichedContext, goalPlan: goalPlan, source: "model_summary")
+        return AgentResponse(summary: summary, actions: actions, goalPlan: goalPlan)
     }
 
     private func applyPolicy(to toolCalls: [ToolCall], context: ContextPack) -> [AgentAction] {
@@ -109,7 +115,29 @@ public final class AgentOrchestrator: @unchecked Sendable {
         let summary: String
     }
 
-    private func resolveGoalPlan(context: ContextPack, userGoal: String) async -> GoalPlan {
+    private func planSummaryTool(context: ContextPack, goalPlan: GoalPlan) -> PlannedAction? {
+        guard shouldSummarizeWithoutTools(goalPlan: goalPlan) else {
+            return nil
+        }
+        guard model is StreamingModelRunner else {
+            return nil
+        }
+        let summary = summaryToolIntro(goalPlan: goalPlan)
+        let toolCall = ToolCall(name: .contentSummarize, arguments: [:])
+        return PlannedAction(toolCall: toolCall, summary: summary)
+    }
+
+    private func summaryToolIntro(goalPlan: GoalPlan) -> String {
+        if goalPlan.intent == .commentSummary || goalPlan.wantsComments {
+            return "Summarizing the discussion on this page."
+        }
+        if goalPlan.intent == .itemSummary {
+            return "Summarizing the main content on this page."
+        }
+        return "Summarizing the page content."
+    }
+
+    public func resolveGoalPlan(context: ContextPack, userGoal: String) async -> GoalPlan {
         if let existing = context.goalPlan {
             return existing
         }
@@ -136,24 +164,6 @@ public final class AgentOrchestrator: @unchecked Sendable {
             recentToolResults: context.recentToolResults,
             tabs: context.tabs,
             goalPlan: goalPlan,
-            runId: context.runId,
-            step: context.step,
-            maxSteps: context.maxSteps
-        )
-    }
-
-    private func contextWithMode(_ context: ContextPack, mode: SiteMode) -> ContextPack {
-        if context.mode == mode {
-            return context
-        }
-        return ContextPack(
-            origin: context.origin,
-            mode: mode,
-            observation: context.observation,
-            recentToolCalls: context.recentToolCalls,
-            recentToolResults: context.recentToolResults,
-            tabs: context.tabs,
-            goalPlan: context.goalPlan,
             runId: context.runId,
             step: context.step,
             maxSteps: context.maxSteps
@@ -265,6 +275,27 @@ public final class AgentOrchestrator: @unchecked Sendable {
         }
         LaikaLogger.logAgentEvent(
             type: "agent.plan_action",
+            runId: context.runId,
+            step: context.step,
+            maxSteps: context.maxSteps,
+            payload: payload
+        )
+    }
+
+    private func logFinalSummary(summary: String, context: ContextPack, goalPlan: GoalPlan, source: String) {
+        let preview = truncateForLog(summary, maxChars: 360)
+        let words = normalizeForMatch(summary).split(separator: " ").count
+        let payload: [String: JSONValue] = [
+            "summaryPreview": .string(preview),
+            "summaryChars": .number(Double(summary.count)),
+            "summaryWords": .number(Double(words)),
+            "intent": .string(goalPlan.intent.rawValue),
+            "wantsComments": .bool(goalPlan.wantsComments),
+            "mode": .string(context.mode.rawValue),
+            "source": .string(source)
+        ]
+        LaikaLogger.logAgentEvent(
+            type: "agent.final_summary",
             runId: context.runId,
             step: context.step,
             maxSteps: context.maxSteps,
@@ -495,6 +526,7 @@ public final class AgentOrchestrator: @unchecked Sendable {
         let targetHost = hostForURL(target.url)
         let scored = candidates.map { link -> (ObservedItemLink, Int) in
             var score = 0
+            score += commentSignalScore(text: link.title, url: link.url)
             let linkHost = hostForURL(link.url)
             if !originHost.isEmpty && linkHost == originHost {
                 score += 2
@@ -514,6 +546,19 @@ public final class AgentOrchestrator: @unchecked Sendable {
             return lhs.1 > rhs.1
         }
         return sorted.first?.0 ?? candidates.first
+    }
+
+    private func commentSignalScore(text: String, url: String) -> Int {
+        let lowerText = text.lowercased()
+        let lowerURL = url.lowercased()
+        let signals = ["comment", "comments", "discussion", "discuss", "thread", "reply", "replies"]
+        if signals.contains(where: { lowerText.contains($0) }) {
+            return 5
+        }
+        if signals.contains(where: { lowerURL.contains($0) }) {
+            return 4
+        }
+        return 0
     }
 
     private func hostForURL(_ raw: String) -> String {
@@ -541,33 +586,22 @@ public final class AgentOrchestrator: @unchecked Sendable {
         return normalized.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
-    private func generateObservedSummary(context: ContextPack, userGoal: String, goalPlan: GoalPlan) async throws -> String {
-        let focus = summaryFocus(context: context, goalPlan: goalPlan)
+    private func generateSummaryFallback(context: ContextPack, userGoal: String, goalPlan: GoalPlan) async throws -> String {
         let format = summaryFormat(goalPlan: goalPlan)
-        let initial = try await model.generatePlan(context: context, userGoal: userGoal)
-        var summary = initial.summary
-        var grounding = evaluateGrounding(summary: summary, context: context, focus: focus)
-        if !grounding.isSatisfied {
-            let retryGoal = buildGroundingRetryGoal(userGoal: userGoal, requiredCount: grounding.requiredCount, focus: focus)
-            let retry = try await model.generatePlan(context: context, userGoal: retryGoal)
-            summary = retry.summary
-            grounding = evaluateGrounding(summary: summary, context: context, focus: focus)
-        }
-        var output = enforceGrounding(summary: summary, context: context, grounding: grounding, focus: focus)
-        let headings = requiredHeadings(for: format)
-        if !headings.isEmpty && !containsHeadings(output, headings: headings) {
-            let retryGoal = buildHeadingRetryGoal(userGoal: userGoal, headings: headings)
-            let retry = try await model.generatePlan(context: context, userGoal: retryGoal)
-            output = retry.summary
-        }
-        if !headings.isEmpty && !containsHeadings(output, headings: headings) {
-            if let structured = structuredSummaryFromText(output, format: format, context: context) {
-                output = structured
-            } else {
-                output = buildStructuredFallback(format: format, context: context)
+        let summaryService = SummaryService(model: model)
+        do {
+            let summary = try await summaryService.summarize(
+                context: context,
+                goalPlan: goalPlan,
+                userGoal: userGoal,
+                maxTokens: nil
+            )
+            if !summary.isEmpty {
+                return summary
             }
+        } catch {
         }
-        return output
+        return buildSummaryFallback(format: format, context: context)
     }
 
     private func finalizeSummaryIfNeeded(
@@ -644,6 +678,8 @@ public final class AgentOrchestrator: @unchecked Sendable {
             return "Scrolling to see more content."
         case .browserObserveDom:
             return "Reading the page for more detail."
+        case .contentSummarize:
+            return summaryToolIntro(goalPlan: context.goalPlan ?? .unknown)
         case .browserBack:
             return "Going back to the previous page."
         case .browserForward:
@@ -888,7 +924,7 @@ public final class AgentOrchestrator: @unchecked Sendable {
         if goalPlan.intent == .itemSummary {
             return .pageText
         }
-        if !context.observation.items.isEmpty {
+        if !context.observation.items.isEmpty || shouldUseMainLinkFallback(context: context) {
             return .mainLinks
         }
         return .pageText
@@ -1015,11 +1051,7 @@ public final class AgentOrchestrator: @unchecked Sendable {
         if limit <= 0 {
             return []
         }
-        let keyFacts = SummaryHeuristics.extractKeyFacts(text: text, title: title, maxItems: limit)
-        if !keyFacts.isEmpty {
-            return keyFacts
-        }
-        return SummaryHeuristics.pickSentences(text: text, maxItems: limit)
+        return TextUtils.firstSentences(text, maxItems: limit, minLength: 32, maxLength: 240)
     }
 
     private func metricSnippets(from elements: [ObservedElement], limit: Int) -> [String] {
@@ -1105,7 +1137,11 @@ public final class AgentOrchestrator: @unchecked Sendable {
                 continue
             }
             seen.insert(key)
-            let snippet = truncateText(item.snippet.trimmingCharacters(in: .whitespacesAndNewlines), maxChars: 180)
+            let snippet = SnippetFormatter.format(
+                item.snippet,
+                title: title,
+                maxChars: 180
+            )
             if snippet.isEmpty {
                 output.append(title)
             } else {
@@ -1125,39 +1161,42 @@ public final class AgentOrchestrator: @unchecked Sendable {
         return String(text.prefix(maxChars)) + "…"
     }
 
+    private func truncateForLog(_ text: String, maxChars: Int) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return truncateText(trimmed, maxChars: maxChars)
+    }
+
     private func buildStructuredFallback(format: SummaryFormat, context: ContextPack) -> String {
+        return buildSummaryFallback(format: format, context: context)
+    }
+
+    private func buildSummaryFallback(format: SummaryFormat, context: ContextPack) -> String {
+        let input = SummaryInputBuilder.build(context: context, goalPlan: context.goalPlan ?? .unknown)
+        let baseText = input.text
+        let sentences = TextUtils.firstSentences(baseText, maxItems: 5, minLength: 24, maxLength: 280)
         let title = context.observation.title
         let url = context.observation.url
-        let combined = combinedBlockText(from: context)
-        let baseSourceText = combined.isEmpty ? context.observation.text : combined
-        let keyFacts = SummaryHeuristics.extractKeyFacts(text: baseSourceText, title: title, maxItems: 4)
-        let baseSentences = SummaryHeuristics.pickSentences(text: baseSourceText, maxItems: 3)
-        let notable = pickNotableSentence(from: keyFacts + baseSentences)
 
         switch format {
         case .topicDetail:
             let overview = buildOverview(title: title, url: url, fallback: "Topic at \(url).")
-            let whatItIs = baseSentences.prefix(2).joined(separator: " ")
-            let keyPoints = keyFacts.isEmpty ? "Not stated in the page." : keyFacts.joined(separator: " ")
-            let notableText = notable ?? "Not stated in the page."
+            let whatItIs = sentences.first ?? "Not stated in the page."
+            let keyPoints = sentences.dropFirst().prefix(2).joined(separator: " ")
+            let notable = pickNotableSentence(from: sentences) ?? "Not stated in the page."
             let nextStep = "Ask for comments or a deeper technical breakdown."
             return [
                 "Topic overview: \(overview)",
-                "What it is: \(whatItIs.isEmpty ? "Not stated in the page." : whatItIs)",
-                "Key points: \(keyPoints)",
-                "Why it is notable: \(notableText)",
+                "What it is: \(whatItIs)",
+                "Key points: \(keyPoints.isEmpty ? "Not stated in the page." : keyPoints)",
+                "Why it is notable: \(notable)",
                 "Optional next step: \(nextStep)"
             ].joined(separator: "\n")
         case .commentDetail:
-            let commentTexts = context.observation.comments.map { $0.text }.joined(separator: " ")
-            let commentSource = commentTexts.isEmpty ? baseSourceText : commentTexts
-            let commentFacts = SummaryHeuristics.extractKeyFacts(text: commentSource, title: title, maxItems: 5)
-            let commentSentences = SummaryHeuristics.pickSentences(text: commentSource, maxItems: 4)
+            let themes = sentences.first ?? "Not stated in the page."
             let authors = collectCommentAuthors(from: context, limit: 4)
-            let themes = commentSentences.isEmpty ? "Not stated in the page." : commentSentences.joined(separator: " ")
-            let contributors = authors.isEmpty ? (commentFacts.first ?? "Not stated in the page.") : authors.joined(separator: ", ")
-            let clarifications = commentFacts.dropFirst().first ?? "Not stated in the page."
-            let reactions = pickNotableSentence(from: commentFacts + commentSentences) ?? "Not stated in the page."
+            let contributors = authors.isEmpty ? "Not stated in the page." : authors.joined(separator: ", ")
+            let clarifications = sentences.dropFirst().first ?? "Not stated in the page."
+            let reactions = pickNotableSentence(from: sentences) ?? "Not stated in the page."
             return [
                 "Comment themes: \(themes)",
                 "Notable contributors or tools: \(contributors)",
@@ -1165,26 +1204,15 @@ public final class AgentOrchestrator: @unchecked Sendable {
                 "Reactions or viewpoints: \(reactions)"
             ].joined(separator: "\n")
         case .plain:
-            if !context.observation.items.isEmpty {
-                let totalCount = context.observation.items.count
-                let topItems = context.observation.items.prefix(6)
-                var sentences: [String] = []
-                sentences.append("The page lists \(totalCount) items.")
-                for item in topItems {
-                    let titleText = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let snippetText = truncateText(item.snippet.trimmingCharacters(in: .whitespacesAndNewlines), maxChars: 180)
-                    if titleText.isEmpty {
-                        continue
-                    }
-                    if snippetText.isEmpty {
-                        sentences.append("\(titleText).")
-                    } else {
-                        sentences.append("\(titleText): \(snippetText)")
-                    }
+            if input.kind == .list {
+                let lines = baseText.split(separator: "\n").map { String($0) }
+                let bodyLines = lines.filter { !$0.hasPrefix("Title:") && !$0.hasPrefix("URL:") }
+                let preview = bodyLines.prefix(6).joined(separator: " ")
+                if !preview.isEmpty {
+                    return preview
                 }
-                return sentences.joined(separator: " ")
             }
-            return SummaryHeuristics.pickSentences(text: baseSourceText, maxItems: 5).joined(separator: " ")
+            return sentences.joined(separator: " ")
         }
     }
 
@@ -1195,7 +1223,7 @@ public final class AgentOrchestrator: @unchecked Sendable {
         }
         switch format {
         case .topicDetail:
-            let sentences = SummaryHeuristics.pickSentences(text: trimmed, maxItems: 5, minLength: 24, maxLength: 280)
+            let sentences = TextUtils.firstSentences(trimmed, maxItems: 5, minLength: 24, maxLength: 280)
             let overview = buildOverview(title: context.observation.title, url: context.observation.url, fallback: "Topic at \(context.observation.url).")
             let whatItIs = sentences.first ?? trimmed
             let keyPoints = sentences.dropFirst().prefix(2).joined(separator: " ")
@@ -1209,7 +1237,7 @@ public final class AgentOrchestrator: @unchecked Sendable {
                 "Optional next step: \(nextStep)"
             ].joined(separator: "\n")
         case .commentDetail:
-            let sentences = SummaryHeuristics.pickSentences(text: trimmed, maxItems: 4, minLength: 24, maxLength: 280)
+            let sentences = TextUtils.firstSentences(trimmed, maxItems: 4, minLength: 24, maxLength: 280)
             let themes = sentences.first ?? trimmed
             let authors = collectCommentAuthors(from: context, limit: 4)
             let contributors = authors.isEmpty ? "Not stated in the page." : authors.joined(separator: ", ")

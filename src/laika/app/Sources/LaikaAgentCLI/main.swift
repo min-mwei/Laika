@@ -5,7 +5,6 @@ import LaikaShared
 
 struct CLIArgs {
     let goal: String
-    let mode: SiteMode
     let origin: String
     let modelURL: URL?
     let useStatic: Bool
@@ -14,7 +13,6 @@ struct CLIArgs {
 
 func parseArgs() -> CLIArgs? {
     var goal: String?
-    var mode: SiteMode = .assist
     var origin: String = "https://example.com"
     var modelURL: URL?
     var useStatic = false
@@ -26,10 +24,6 @@ func parseArgs() -> CLIArgs? {
         switch arg {
         case "--goal":
             goal = iterator.next()
-        case "--mode":
-            if let value = iterator.next(), let parsed = SiteMode(rawValue: value) {
-                mode = parsed
-            }
         case "--origin":
             if let value = iterator.next() {
                 origin = value
@@ -54,7 +48,6 @@ func parseArgs() -> CLIArgs? {
     }
     return CLIArgs(
         goal: goalValue,
-        mode: mode,
         origin: origin,
         modelURL: modelURL,
         useStatic: useStatic,
@@ -64,7 +57,7 @@ func parseArgs() -> CLIArgs? {
 
 func usage() {
     let message = """
-Usage: laika-agent --goal "..." [--mode observe|assist] [--origin https://example.com] [--model-dir /path] [--max-tokens 2048] [--static]
+Usage: laika-agent --goal "..." [--origin https://example.com] [--model-dir /path] [--max-tokens 2048] [--static]
 """
     print(message)
 }
@@ -91,7 +84,7 @@ struct LaikaAgentCLI {
         )
         let context = ContextPack(
             origin: args.origin,
-            mode: args.mode,
+            mode: .assist,
             observation: observation,
             recentToolCalls: []
         )

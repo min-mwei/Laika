@@ -37,6 +37,13 @@ Run the Hacker News scenario:
 node src/laika/automation_harness/scripts/laika_harness.js --scenario src/laika/automation_harness/scripts/scenarios/hn.json
 ```
 
+Run the BBC or WSJ scenarios:
+
+```bash
+node src/laika/automation_harness/scripts/laika_harness.js --scenario src/laika/automation_harness/scripts/scenarios/bbc.json
+node src/laika/automation_harness/scripts/laika_harness.js --scenario src/laika/automation_harness/scripts/scenarios/wsj.json
+```
+
 Run custom goals:
 
 ```bash

@@ -1,7 +1,7 @@
 "use strict";
 
 var NATIVE_APP_ID = "com.laika.Laika";
-var statusEl = document.getElementById("native-status");
+var statusEl = document.getElementById("agent-status");
 var goalInput = document.getElementById("goal");
 var sendButton = document.getElementById("send");
 var chatLog = document.getElementById("chat-log");
@@ -114,8 +114,15 @@ async function loadMaxTokens() {
 }
 
 function setStatus(text) {
-  statusEl.textContent = text;
-  logDebug("status: " + text);
+  var output = text || "";
+  if (output.indexOf("Agent:") !== 0) {
+    output = output.replace(/^Status:/, "Agent:");
+    if (output.indexOf("Agent:") !== 0) {
+      output = "Agent: " + output;
+    }
+  }
+  statusEl.textContent = output;
+  logDebug("status: " + output);
 }
 
 function labelForRole(role) {
@@ -170,7 +177,7 @@ function formatToolCall(action) {
   return name + (argText ? " (" + argText + ")" : "");
 }
 
-function appendActionPrompt(action, tabId) {
+function appendActionPrompt(action, tabId, toolOptions) {
   return new Promise(function (resolve) {
   var message = document.createElement("div");
   message.className = "message";
@@ -188,7 +195,7 @@ function appendActionPrompt(action, tabId) {
   approveButton.addEventListener("click", function () {
     approveButton.disabled = true;
     rejectButton.disabled = true;
-    runTool(action, tabId).then(function (result) {
+    runTool(action, tabId, toolOptions).then(function (result) {
       resolve({ decision: "approve", result: result });
     });
   });
@@ -224,17 +231,112 @@ async function sendNativeMessage(payload) {
 }
 
 async function checkNative() {
-  setStatus("Native: checking...");
+  setStatus("Status: connecting...");
   try {
     var response = await sendNativeMessage({ type: "ping" });
     if (response && response.ok) {
-      setStatus("Native: ready");
+      setStatus("Status: ready");
       return;
     }
-    setStatus("Native: error");
+    setStatus("Status: error");
   } catch (error) {
-    setStatus("Native: offline");
+    setStatus("Status: offline");
   }
+}
+
+function isSummaryGoalPlan(goalPlan) {
+  if (!goalPlan || typeof goalPlan.intent !== "string") {
+    return false;
+  }
+  if (goalPlan.intent === "page_summary" || goalPlan.intent === "item_summary" || goalPlan.intent === "comment_summary") {
+    return true;
+  }
+  return goalPlan.wantsComments === true;
+}
+
+function buildSummaryContext(params) {
+  if (!params || !params.observation) {
+    return null;
+  }
+  var origin = "";
+  try {
+    origin = new URL(params.observation.url).origin;
+  } catch (error) {
+    origin = params.observation.url || "";
+  }
+  return {
+    origin: origin,
+    mode: "assist",
+    runId: params.runId || null,
+    step: typeof params.step === "number" ? params.step : null,
+    maxSteps: typeof params.maxSteps === "number" ? params.maxSteps : null,
+    observation: params.observation,
+    recentToolCalls: Array.isArray(params.recentToolCalls) ? params.recentToolCalls : [],
+    recentToolResults: Array.isArray(params.recentToolResults) ? params.recentToolResults : [],
+    tabs: Array.isArray(params.tabs) ? params.tabs : [],
+    goalPlan: params.goalPlan || null
+  };
+}
+
+async function startSummaryStream(goal, context, goalPlan) {
+  var payload = {
+    type: "summary.start",
+    maxTokens: clampMaxTokens(maxTokensSetting),
+    request: {
+      goal: goal,
+      context: context
+    }
+  };
+  if (goalPlan) {
+    payload.goalPlan = goalPlan;
+  }
+  return await sendNativeMessage(payload);
+}
+
+async function pollSummaryStream(streamId) {
+  return await sendNativeMessage({ type: "summary.poll", streamId: streamId });
+}
+
+async function cancelSummaryStream(streamId) {
+  return await sendNativeMessage({ type: "summary.cancel", streamId: streamId });
+}
+
+async function consumeSummaryStream(streamId) {
+  var message = appendMessage("assistant", "");
+  var body = message.lastChild;
+  var text = "";
+  var delayMs = 140;
+  var replaceMarker = "<<LAIKA_SUMMARY_REPLACE>>";
+  for (;;) {
+    var result = await pollSummaryStream(streamId);
+    if (!result || result.ok !== true) {
+      appendMessage("system", "Summary stream failed.");
+      break;
+    }
+    if (Array.isArray(result.chunks) && result.chunks.length > 0) {
+      text += result.chunks.join("");
+      var markerIndex = text.indexOf(replaceMarker);
+      if (markerIndex >= 0) {
+        text = text.slice(markerIndex + replaceMarker.length).trim();
+      }
+      body.textContent = text;
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+    if (result.error) {
+      appendMessage("system", "Summary stream error: " + result.error);
+      break;
+    }
+    if (result.done) {
+      break;
+    }
+    await sleep(delayMs);
+  }
+  if (text.trim()) {
+    lastAssistantSummary = text;
+  } else if (message && message.parentNode) {
+    message.parentNode.removeChild(message);
+  }
+  return text;
 }
 
 async function observePage() {
@@ -331,8 +433,30 @@ async function requestPlan(goal, context) {
   return await sendNativeMessage(payload);
 }
 
-async function runTool(action, tabId) {
+async function runTool(action, tabId, options) {
   logDebug("Running tool " + action.toolCall.name);
+  if (action.toolCall.name === "content.summarize") {
+    if (!options || !options.summaryContext) {
+      appendMessage("system", "Summary failed: missing context.");
+      return { status: "error", error: "missing_context" };
+    }
+    setStatus("Status: summarizing...");
+    try {
+      var streamResponse = await startSummaryStream(options.goal || "", options.summaryContext, options.goalPlan || null);
+      if (streamResponse && streamResponse.ok && streamResponse.stream && streamResponse.stream.id) {
+        var summaryText = await consumeSummaryStream(streamResponse.stream.id);
+        if (summaryText && summaryText.trim()) {
+          return { status: "ok", summary: summaryText };
+        }
+        return { status: "error", error: "empty_summary" };
+      }
+      appendMessage("system", "Summary failed: no stream.");
+      return { status: "error", error: "no_stream" };
+    } catch (error) {
+      appendMessage("system", "Summary failed: " + error.message);
+      return { status: "error", error: error.message };
+    }
+  }
   try {
     var payload = {
       type: "laika.tool",
@@ -363,6 +487,10 @@ function buildToolResult(toolCall, toolName, rawResult) {
   var payload = {};
   if (rawResult && rawResult.error) {
     payload.error = rawResult.error;
+  }
+  if (toolName === "content.summarize" && rawResult && typeof rawResult.summary === "string") {
+    payload.summary = rawResult.summary;
+    payload.summaryChars = rawResult.summary.length;
   }
   if (toolName === "browser.open_tab" && rawResult && typeof rawResult.tabId === "number") {
     payload.tabId = rawResult.tabId;
@@ -419,6 +547,7 @@ sendButton.addEventListener("click", async function () {
   lastAssistantSummary = "";
 
   try {
+    setStatus("Status: observing page...");
     await loadMaxTokens();
     var runId = generateRunId();
     var tabsContext = await listTabContext();
@@ -433,7 +562,7 @@ sendButton.addEventListener("click", async function () {
     var recentToolResults = [];
 
     for (var step = 1; step <= maxSteps; step += 1) {
-      setStatus("Native: thinking...");
+      setStatus("Status: planning...");
       var context = {
         mode: mode,
         runId: runId,
@@ -455,10 +584,39 @@ sendButton.addEventListener("click", async function () {
         appendMessage("system", "Invalid plan response: " + validation.error);
         return;
       }
+      var goalPlan = plan.goalPlan || null;
+      var summaryContext = buildSummaryContext({
+        runId: context.runId,
+        step: context.step,
+        maxSteps: context.maxSteps,
+        observation: lastObservation,
+        recentToolCalls: recentToolCalls.slice(-8),
+        recentToolResults: recentToolResults.slice(-8),
+        tabs: tabsContext,
+        goalPlan: goalPlan
+      });
+      var toolOptions = {
+        goal: goal,
+        goalPlan: goalPlan,
+        summaryContext: summaryContext
+      };
 
       var nextAction = pickNextAction(plan.actions);
       if (!nextAction) {
-        if (plan.summary && plan.summary !== lastAssistantSummary) {
+        var streamed = false;
+        if (isSummaryGoalPlan(goalPlan) && summaryContext) {
+          setStatus("Status: summarizing...");
+          try {
+            var streamResponse = await startSummaryStream(goal, summaryContext, goalPlan);
+            if (streamResponse && streamResponse.ok && streamResponse.stream && streamResponse.stream.id) {
+              var streamedText = await consumeSummaryStream(streamResponse.stream.id);
+              streamed = !!(streamedText && streamedText.trim());
+            }
+          } catch (error) {
+          }
+        }
+        if (!streamed && plan.summary && plan.summary !== lastAssistantSummary) {
+          setStatus("Status: summarizing...");
           appendMessage("assistant", plan.summary);
           lastAssistantSummary = plan.summary;
         }
@@ -467,6 +625,7 @@ sendButton.addEventListener("click", async function () {
       if (nextAction.policy.decision === "deny") {
         appendMessage("system", "Blocked: " + nextAction.policy.reasonCode);
         if (plan.summary && plan.summary !== lastAssistantSummary) {
+          setStatus("Status: summarizing...");
           appendMessage("assistant", plan.summary);
           lastAssistantSummary = plan.summary;
         }
@@ -475,6 +634,7 @@ sendButton.addEventListener("click", async function () {
       if (step === maxSteps) {
         appendMessage("system", "Step limit reached.");
         if (plan.summary && plan.summary !== lastAssistantSummary) {
+          setStatus("Status: summarizing...");
           appendMessage("assistant", plan.summary);
           lastAssistantSummary = plan.summary;
         }
@@ -484,38 +644,53 @@ sendButton.addEventListener("click", async function () {
       var approval = null;
       if (nextAction.policy.decision === "ask") {
         if (plan.summary && plan.summary !== lastAssistantSummary) {
+          setStatus("Status: summarizing...");
           appendMessage("assistant", plan.summary);
           lastAssistantSummary = plan.summary;
         }
-        approval = await appendActionPrompt(nextAction, tabIdForPlan);
+        setStatus("Status: awaiting approval...");
+        approval = await appendActionPrompt(nextAction, tabIdForPlan, toolOptions);
         if (!approval || approval.decision !== "approve") {
           appendMessage("system", "Stopped: action not approved.");
           break;
         }
       } else {
-        approval = { decision: "approve", result: await runTool(nextAction, tabIdForPlan) };
+        setStatus("Status: running action...");
+        approval = { decision: "approve", result: await runTool(nextAction, tabIdForPlan, toolOptions) };
       }
 
       var toolResult = approval.result;
       recentToolCalls.push(nextAction.toolCall);
       recentToolResults.push(buildToolResult(nextAction.toolCall, nextAction.toolCall.name, toolResult));
 
+      if (nextAction.toolCall.name === "content.summarize") {
+        if (toolResult && toolResult.status === "ok" && typeof toolResult.summary === "string") {
+          lastAssistantSummary = toolResult.summary;
+        } else if (plan.summary && plan.summary !== lastAssistantSummary) {
+          appendMessage("assistant", plan.summary);
+          lastAssistantSummary = plan.summary;
+        }
+        break;
+      }
+
       if (toolResult && typeof toolResult.tabId === "number") {
         tabIdForPlan = toolResult.tabId;
       }
       if (nextAction.toolCall.name === "browser.observe_dom" && toolResult && toolResult.observation) {
+        setStatus("Status: observing page...");
         lastObservation = toolResult.observation;
         if (typeof toolResult.tabId === "number") {
           tabIdForPlan = toolResult.tabId;
         }
       } else {
+        setStatus("Status: observing page...");
         tabsContext = await listTabContext();
         var updated = await observeWithRetries(observeOptions, tabIdForPlan);
         lastObservation = updated.observation;
         tabIdForPlan = updated.tabId;
       }
     }
-    setStatus("Native: ready");
+    setStatus("Status: ready");
   } catch (error) {
     if (error && (error.message === "no_context" || error.message === "no_active_tab")) {
       explainMissingContext();

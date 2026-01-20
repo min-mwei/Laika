@@ -1,7 +1,6 @@
 import Foundation
 
 public enum SiteMode: String, Codable, Sendable {
-    case observe
     case assist
 }
 
@@ -45,6 +44,8 @@ public final class PolicyGate: Sendable {
 
     public func decide(for toolCall: ToolCall, context: PolicyContext) -> PolicyResult {
         switch toolCall.name {
+        case .contentSummarize:
+            return PolicyResult(decision: .allow, reasonCode: "summarize_allowed")
         case .browserObserveDom:
             return PolicyResult(decision: .allow, reasonCode: "observe_allowed")
         case .browserClick,
@@ -56,9 +57,6 @@ public final class PolicyGate: Sendable {
              .browserForward,
              .browserRefresh,
              .browserSelect:
-            if context.mode == .observe {
-                return PolicyResult(decision: .deny, reasonCode: "observe_mode_blocks_actions")
-            }
             if context.fieldKind == .credential || context.fieldKind == .payment || context.fieldKind == .personalId {
                 return PolicyResult(decision: .deny, reasonCode: "sensitive_field_blocked")
             }

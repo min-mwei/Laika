@@ -147,7 +147,7 @@ Observation budgets (current):
 
 Pushing toward a 32K token window (design notes):
 
-- **Raise observation budgets** for high-signal pages. Example target: `maxChars` 8k–16k and `maxElements` 80–160 in Assist mode. Keep smaller caps for Observe-only.
+- **Raise observation budgets** for high-signal pages. Example target: `maxChars` 8k–16k and `maxElements` 80–160. Keep smaller caps for quick summaries.
 - **Chunk the observation** when text exceeds a single budget: collect multiple segments (e.g., `chunkIndex`, `chunkCount`, `nextCursor`) and merge or summarize in the Agent Core.
 - **Stream chunks** to the Agent Core so the UI stays responsive and the model can start summarizing before the full page is captured.
 - **Compress before planning**: summarize large text into a compact “page brief” and keep only selected element handles in the final context pack.
@@ -201,11 +201,16 @@ Long-context guidance (from `docs/local_llm.md`):
 | Interaction | `browser.type` | Type text into an input/textarea by `handleId`. | `{ "handleId": "laika-7", "text": "query" }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
 | Interaction | `browser.scroll` | Scroll the page by a vertical delta. | `{ "deltaY": 400 }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
 | Interaction | `browser.select` | Select a dropdown option by `handleId`. | `{ "handleId": "laika-9", "value": "Option" }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
+| Content actions | `content.summarize` | Summarize page or scoped element. | `{ "scope": "page"|"item"|"comments" }` or `{ "handleId": "laika-5" }` | Swift Agent Core (`SummaryService`) | Swift (local model) |
+
+Notes for `content.summarize`:
+
+- Summaries are validated against observation anchors; if the output is ungrounded, Laika falls back to an extractive summary built from the observed text/items.
+- Streaming summaries may replace provisional output when the validator fails.
 
 ## Proposed tools (not yet implemented)
 
 No additional tools are queued beyond the current catalog.
-| Content actions | `content.summarize` | Summarize page or scoped element. | `{ "scope": "page" }` or `{ "handleId": "laika-5" }` | Swift Agent Core | Swift (local model) |
 | Content actions | `content.find` | Search in-page or on the web for more info. | `{ "query": "SEC filing deadlines", "scope": "page"|"web" }` | Swift + `background.js` | Swift + extension background |
 
 ## Where tools are defined and gated
@@ -218,8 +223,7 @@ No additional tools are queued beyond the current catalog.
 Current policy behavior:
 
 - `browser.observe_dom` is allowed.
-- All other tools are denied in `observe` mode.
-- In `assist` mode, actions are marked `ask` by default (approval required).
+- Action tools are marked `ask` by default (approval required).
 - Sensitive field blocking is defined in Policy Gate, but `fieldKind` is currently always `.unknown` in the orchestrator.
 
 ## Autodrive guidance

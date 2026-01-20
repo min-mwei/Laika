@@ -2,21 +2,12 @@ import XCTest
 @testable import LaikaShared
 
 final class PolicyGateTests: XCTestCase {
-    func testObserveAllowsObservation() {
+    func testAssistAllowsObservation() {
         let gate = PolicyGate()
-        let context = PolicyContext(origin: "https://example.com", mode: .observe, fieldKind: .unknown)
+        let context = PolicyContext(origin: "https://example.com", mode: .assist, fieldKind: .unknown)
         let call = ToolCall(name: .browserObserveDom, arguments: [:])
         let result = gate.decide(for: call, context: context)
         XCTAssertEqual(result.decision, .allow)
-    }
-
-    func testObserveBlocksActions() {
-        let gate = PolicyGate()
-        let context = PolicyContext(origin: "https://example.com", mode: .observe, fieldKind: .unknown)
-        let call = ToolCall(name: .browserClick, arguments: [:])
-        let result = gate.decide(for: call, context: context)
-        XCTAssertEqual(result.decision, .deny)
-        XCTAssertEqual(result.reasonCode, "observe_mode_blocks_actions")
     }
 
     func testSensitiveFieldBlocksActions() {

@@ -15,7 +15,8 @@
     "browser.back": true,
     "browser.forward": true,
     "browser.refresh": true,
-    "browser.select": true
+    "browser.select": true,
+    "content.summarize": true
   };
 
   function validateToolCall(toolCall) {
@@ -99,6 +100,15 @@
     }
     if (toolCall.name === "browser.back" || toolCall.name === "browser.forward" || toolCall.name === "browser.refresh") {
       return Object.keys(args).length === 0 ? null : "no arguments allowed";
+    }
+    if (toolCall.name === "content.summarize") {
+      if (typeof args.scope !== "undefined" && typeof args.scope !== "string") {
+        return "summarize.scope must be string";
+      }
+      if (typeof args.handleId !== "undefined" && typeof args.handleId !== "string") {
+        return "summarize.handleId must be string";
+      }
+      return null;
     }
 
     return "unsupported tool";
