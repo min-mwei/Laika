@@ -32,6 +32,37 @@
     return handle;
   }
 
+  function isEditableElement(element) {
+    if (!element) {
+      return false;
+    }
+    var tag = element.tagName ? element.tagName.toLowerCase() : "";
+    if (tag === "input" || tag === "textarea" || tag === "select") {
+      return true;
+    }
+    if (element.isContentEditable) {
+      return true;
+    }
+    if (element.hasAttribute && element.hasAttribute("contenteditable")) {
+      var editable = element.getAttribute("contenteditable");
+      if (editable === "" || editable === "true") {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function hasEditableAncestor(element) {
+    var current = element;
+    while (current) {
+      if (isEditableElement(current)) {
+        return true;
+      }
+      current = current.parentElement;
+    }
+    return false;
+  }
+
   function getLabel(element) {
     if (!element) {
       return "";
@@ -40,11 +71,30 @@
     if (aria) {
       return utils.normalizeWhitespace(aria);
     }
+    var tagName = element.tagName ? element.tagName.toLowerCase() : "";
+    if (tagName === "input" || tagName === "textarea" || tagName === "select") {
+      if (element.labels && element.labels.length > 0) {
+        var labelText = utils.normalizeWhitespace(element.labels[0].innerText || "");
+        if (labelText) {
+          return labelText;
+        }
+      }
+      var placeholder = element.getAttribute("placeholder");
+      if (placeholder) {
+        return utils.normalizeWhitespace(placeholder);
+      }
+      var name = element.getAttribute("name") || element.getAttribute("id");
+      if (name) {
+        return utils.normalizeWhitespace(name);
+      }
+      var inputType = element.getAttribute("type") || element.type || "";
+      if (inputType) {
+        return "input(" + utils.normalizeWhitespace(inputType) + ")";
+      }
+      return tagName;
+    }
     if (element.innerText) {
       return utils.normalizeWhitespace(element.innerText);
-    }
-    if (element.value) {
-      return utils.normalizeWhitespace(element.value);
     }
     return "";
   }
@@ -238,6 +288,9 @@
       if (!isNodeVisible(node)) {
         continue;
       }
+      if (hasEditableAncestor(node.parentElement)) {
+        continue;
+      }
       var text = utils.normalizeWhitespace(node.nodeValue);
       if (!text) {
         continue;
@@ -257,6 +310,9 @@
 
   function isBlockCandidate(element) {
     if (!element || !element.tagName) {
+      return false;
+    }
+    if (hasEditableAncestor(element)) {
       return false;
     }
     if (!isTextContainerVisible(element)) {
@@ -293,6 +349,53 @@
 
   function roundDensity(value) {
     return Math.round(value * 100) / 100;
+  }
+
+  function textQualityScore(text) {
+    var normalized = utils.normalizeWhitespace(text);
+    if (!normalized) {
+      return 0.3;
+    }
+    var words = normalized.split(" ");
+    var wordCount = words.length || 1;
+    var shortWords = 0;
+    for (var i = 0; i < words.length; i += 1) {
+      if (words[i].length <= 2) {
+        shortWords += 1;
+      }
+    }
+    var letters = 0;
+    var uppercase = 0;
+    var digits = 0;
+    for (var j = 0; j < normalized.length; j += 1) {
+      var ch = normalized.charAt(j);
+      if (/[A-Z]/.test(ch)) {
+        letters += 1;
+        uppercase += 1;
+      } else if (/[a-z]/.test(ch)) {
+        letters += 1;
+      } else if (/[0-9]/.test(ch)) {
+        digits += 1;
+      }
+    }
+    var total = letters + digits;
+    if (total === 0) {
+      return 0.3;
+    }
+    var letterRatio = letters / total;
+    var upperRatio = letters > 0 ? uppercase / letters : 0;
+    var shortRatio = shortWords / wordCount;
+    var score = 1;
+    if (letterRatio < 0.6) {
+      score *= 0.6;
+    }
+    if (upperRatio > 0.6) {
+      score *= 0.6;
+    }
+    if (shortRatio > 0.4) {
+      score *= 0.7;
+    }
+    return Math.max(0.3, Math.min(1, score));
   }
 
   function collectTextBlocks(root, maxBlocks, maxPrimaryChars) {
@@ -333,7 +436,8 @@
       var tag = element.tagName ? element.tagName.toLowerCase() : "";
       var role = element.getAttribute("role") || "";
       var handleId = ensureHandle(element) || "";
-      var score = rawText.length * (1 - stats.density);
+      var quality = textQualityScore(rawText);
+      var score = rawText.length * (1 - stats.density) * quality;
       if (tag === "article" || tag === "main") {
         score += 200;
       }
@@ -869,15 +973,32 @@
       "img",
       "script",
       "style",
+      "time",
+      "[datetime]",
+      "[data-time]",
       ".reply",
       ".comment-actions",
       ".actions",
       ".age",
+      ".time",
+      ".timestamp",
       ".user",
       ".username",
       ".author",
       ".byline",
-      ".comment-author"
+      ".comment-author",
+      ".nav",
+      ".navs",
+      ".navigation",
+      ".controls",
+      ".meta",
+      ".metadata",
+      ".permalink",
+      "[rel=\"author\"]",
+      "[itemprop=\"author\"]",
+      "[data-author]",
+      "a[href*=\"user\"]",
+      "a[href*=\"profile\"]"
     ];
     var removals = clone.querySelectorAll(removeSelectors.join(","));
     for (var i = 0; i < removals.length; i += 1) {
@@ -970,7 +1091,9 @@
         ".user",
         ".username",
         ".byline",
-        ".comment-author"
+        ".comment-author",
+        "a[href*=\"user\"]",
+        "a[href*=\"profile\"]"
       ], 80);
       var age = findMetaText(container, [
         "time",

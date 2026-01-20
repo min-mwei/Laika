@@ -58,7 +58,7 @@ enum ToolCallParser {
         } catch {
             let trimmed = sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
-                return ModelResponse(toolCalls: [], summary: "")
+                return ModelResponse(toolCalls: [], summary: trimmed)
             }
             throw error
         }

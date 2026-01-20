@@ -67,10 +67,10 @@ public struct SummaryService {
             systemPrompt: prompts.system,
             userPrompt: prompts.user,
             maxTokens: summaryTokenBudget(goalPlan: goalPlan, requested: maxTokens),
-            temperature: 0.5,
+            temperature: 0.7,
             topP: 0.8,
-            repetitionPenalty: 1.2,
-            repetitionContextSize: 128,
+            repetitionPenalty: 1.3,
+            repetitionContextSize: 192,
             enableThinking: false
         )
         let rawStream = streaming.streamText(settings)
@@ -101,9 +101,9 @@ public struct SummaryService {
         let base: Int
         switch goalPlan.intent {
         case .itemSummary, .commentSummary:
-            base = 1000
+            base = 1200
         case .pageSummary:
-            base = 800
+            base = 1000
         case .action, .unknown:
             base = 700
         }
@@ -148,17 +148,24 @@ public struct SummaryService {
         if input.accessLimited {
             let signals = input.accessSignals.isEmpty ? "low_visible_text" : input.accessSignals.joined(separator: ", ")
             userLines.append("Visibility note: The visible content looks limited (signals: \(signals)). State that only partial content is visible and do not infer missing details.")
+        } else if input.accessSignals.contains("low_signal_text") {
+            userLines.append("Content note: The visible text is mostly data labels or repeated UI text. Summarize at a high level using the page title and any clear sentences without copying repetitive strings.")
         }
 
         if format == .plain {
-            userLines.append("Format: 2-3 short paragraphs (2-3 sentences each). Mention notable numbers or rankings when present.")
+            if input.kind == .list {
+                userLines.append("Format: 1 short overview paragraph (2-3 sentences). Then 5-7 short item lines, each starting with 'Item N:' and one sentence about that item. Mention notable numbers or rankings when present.")
+            } else {
+                userLines.append("Format: 2-3 short paragraphs (2-3 sentences each). Mention notable numbers or rankings when present.")
+            }
         } else if format == .topicDetail {
             userLines.append("Format: Use headings with 2-3 sentence paragraphs. Headings must be plain text with a trailing colon.")
             userLines.append("Headings: Topic overview:, What it is:, Key points:, Why it is notable:, Optional next step:")
         } else {
             userLines.append("Format: Use headings with 2-3 sentence paragraphs. Headings must be plain text with a trailing colon.")
             userLines.append("Headings: Comment themes:, Notable contributors or tools:, Technical clarifications or Q&A:, Reactions or viewpoints:")
-            userLines.append("Cite at least 3 distinct comments or authors using short phrases from the input.")
+            userLines.append("Cite at least 2 distinct comments or authors using short phrases from the input.")
+            userLines.append("If an Authors line is present, list at least two names under Notable contributors or tools.")
             userLines.append("Each heading must include at least one sentence. If missing, write 'Not stated in the page'.")
         }
         if input.kind == .list {
@@ -183,7 +190,76 @@ public struct SummaryService {
 
     private func sanitizeSummary(_ text: String) -> String {
         let cleaned = TextUtils.stripMarkdown(text)
-        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        let deduped = dedupeLines(cleaned)
+        let collapsed = collapseRepeatedTokens(deduped)
+        return collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func dedupeLines(_ text: String) -> String {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        var seen: Set<String> = []
+        var seenBodies: Set<String> = []
+        var output: [String] = []
+        output.reserveCapacity(lines.count)
+        for rawLine in lines {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                output.append("")
+                continue
+            }
+            if let colonIndex = trimmed.firstIndex(of: ":") {
+                let heading = trimmed[..<colonIndex]
+                let bodyStart = trimmed.index(after: colonIndex)
+                let body = trimmed[bodyStart...].trimmingCharacters(in: .whitespaces)
+                let bodyKey = normalizeForMatch(body)
+                if !bodyKey.isEmpty {
+                    if seenBodies.contains(bodyKey) {
+                        output.append("\(heading): Not stated in the page.")
+                        continue
+                    }
+                    seenBodies.insert(bodyKey)
+                }
+            }
+            let key = normalizeForMatch(trimmed)
+            if seen.contains(key) {
+                continue
+            }
+            seen.insert(key)
+            output.append(trimmed)
+        }
+        return output.joined(separator: "\n")
+    }
+
+    private func collapseRepeatedTokens(_ text: String) -> String {
+        let tokens = text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+        guard tokens.count >= 8 else {
+            return text
+        }
+        var output: [Substring] = []
+        output.reserveCapacity(tokens.count)
+        var index = 0
+        let maxWindow = min(24, tokens.count / 2)
+        while index < tokens.count {
+            var collapsed = false
+            for window in stride(from: maxWindow, through: 4, by: -1) {
+                let nextIndex = index + window
+                let endIndex = nextIndex + window
+                if endIndex > tokens.count {
+                    continue
+                }
+                if tokens[index..<nextIndex] == tokens[nextIndex..<endIndex] {
+                    output.append(contentsOf: tokens[index..<nextIndex])
+                    index = nextIndex
+                    collapsed = true
+                    break
+                }
+            }
+            if !collapsed {
+                output.append(tokens[index])
+                index += 1
+            }
+        }
+        return output.joined(separator: " ")
     }
 
     private func hasMeaningfulContent(_ input: SummaryInput) -> Bool {
@@ -200,6 +276,9 @@ public struct SummaryService {
         let lower = trimmed.lowercased()
         let banned = ["untrusted", "system prompt", "safety policy", "do not follow", "do not trust"]
         if banned.contains(where: { lower.contains($0) }) {
+            return .ungrounded
+        }
+        if isHighlyRepetitive(trimmed) {
             return .ungrounded
         }
         let anchors = extractAnchors(from: input)
@@ -338,7 +417,7 @@ public struct SummaryService {
         let format = summaryFormat(goalPlan: goalPlan)
         let lines = input.text.split(separator: "\n").map { String($0) }
         let bodyText = lines.filter { !isMetadataLine($0) }.joined(separator: " ")
-        let sentences = TextUtils.firstSentences(bodyText, maxItems: 5, minLength: 24, maxLength: 240)
+        let sentences = meaningfulSentences(bodyText, maxItems: 5)
         switch format {
         case .plain:
             if input.kind == .list {
@@ -355,7 +434,7 @@ public struct SummaryService {
         case .topicDetail:
             let title = context.observation.title.isEmpty ? context.observation.url : context.observation.title
             let overview = title.isEmpty ? "Topic at \(context.observation.url)." : title
-            let whatItIs = sentences.first ?? limitedContentResponse(input: input)
+            let whatItIs = sentences.first ?? "The page appears data-heavy, with limited narrative text visible."
             let keyPoints = sentences.dropFirst().prefix(2).joined(separator: " ")
             let notable = sentences.dropFirst(2).first ?? limitedContentResponse(input: input)
             let nextStep = "Ask for comments or a deeper breakdown."
@@ -376,6 +455,84 @@ public struct SummaryService {
                 "Reactions or viewpoints: \(limitedContentResponse(input: input))"
             ].joined(separator: "\n")
         }
+    }
+
+    private func meaningfulSentences(_ text: String, maxItems: Int) -> [String] {
+        let normalized = TextUtils.normalizeWhitespace(text)
+        if normalized.isEmpty {
+            return []
+        }
+        let sentences = TextUtils.splitSentences(normalized)
+        var output: [String] = []
+        output.reserveCapacity(maxItems)
+        for sentence in sentences {
+            let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                continue
+            }
+            if isLowSignalSentence(trimmed) {
+                continue
+            }
+            output.append(trimmed.count > 240 ? String(trimmed.prefix(240)) + "..." : trimmed)
+            if output.count >= maxItems {
+                break
+            }
+        }
+        return output
+    }
+
+    private func isLowSignalSentence(_ text: String) -> Bool {
+        let words = text.split(separator: " ")
+        let wordCount = words.count
+        if wordCount < 6 && text.count < 120 {
+            return true
+        }
+        let lowerWords = words.map { $0.lowercased() }
+        let uniqueCount = Set(lowerWords).count
+        let diversity = wordCount > 0 ? Double(uniqueCount) / Double(wordCount) : 0
+        if wordCount >= 12 && diversity < 0.4 {
+            return true
+        }
+        var letters = 0
+        var uppercase = 0
+        var digits = 0
+        var shortWords = 0
+        for word in words where word.count <= 2 {
+            shortWords += 1
+        }
+        for scalar in text.unicodeScalars {
+            if CharacterSet.letters.contains(scalar) {
+                letters += 1
+                if CharacterSet.uppercaseLetters.contains(scalar) {
+                    uppercase += 1
+                }
+            } else if CharacterSet.decimalDigits.contains(scalar) {
+                digits += 1
+            }
+        }
+        let total = letters + digits
+        if total == 0 {
+            return true
+        }
+        let upperRatio = letters > 0 ? Double(uppercase) / Double(letters) : 0
+        let digitRatio = Double(digits) / Double(total)
+        let shortRatio = wordCount > 0 ? Double(shortWords) / Double(wordCount) : 0
+        if wordCount < 60 {
+            if upperRatio > 0.6 || digitRatio > 0.45 || shortRatio > 0.45 {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func isHighlyRepetitive(_ text: String) -> Bool {
+        let tokens = text.lowercased().split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+        guard tokens.count >= 30 else {
+            return false
+        }
+        let unique = Set(tokens).count
+        let diversity = Double(unique) / Double(tokens.count)
+        return diversity < 0.4
     }
 
     private func extractReplacement(from chunk: String) -> String? {

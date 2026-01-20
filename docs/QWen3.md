@@ -1,112 +1,148 @@
-# Qwen3-0.6B: Practical One‑Pager (Thinking, Streaming, Repetition)
+# Qwen3-0.6B Programming Guide (Thinking, Tools, Streaming, Deployment)
 
-This note is a compact set of patterns for using `Qwen/Qwen3-0.6B` effectively: **thinking vs non-thinking**, **streaming**, and **repetition mitigation**.
+This note compiles official guidance on programming `Qwen/Qwen3-0.6B` with Transformers, vLLM, SGLang, and Qwen-Agent. It focuses on chat templating, thinking control, tool calling, and common pitfalls.
 
 ## Quick facts
 
-- Context length: 32,768 tokens
-- License: Apache-2.0
-- Requires `transformers>=4.51.0` (older versions may raise `KeyError: 'qwen3'`)
+- Context length: 32,768 tokens (pretraining). Can be extended to 131,072 with YaRN RoPE scaling.
+- Parameters: 0.6B, 28 layers, 16/8 heads (Q/KV), tied embeddings.
+- License: Apache-2.0.
+- Languages: 100+ languages and dialects across Qwen3.
+- Transformers: >=4.51.0 required; torch >=2.6 recommended; GPU recommended.
+- Default behavior: thinking mode enabled, outputs include a `<think>...</think>` block.
 
-## Thinking vs non-thinking mode
+## Basic usage (Transformers)
 
-### Hard switch (recommended): `enable_thinking`
-
-Qwen3 “thinking mode” is on by default. In Transformers, control it via the chat template:
+### Pipeline (multi-turn)
 
 ```python
-text = tokenizer.apply_chat_template(
-    messages,
-    tokenize=False,
-    add_generation_prompt=True,
-    enable_thinking=False,  # non-thinking mode
+from transformers import pipeline
+
+model_name = "Qwen/Qwen3-0.6B"
+generator = pipeline(
+    "text-generation",
+    model_name,
+    torch_dtype="auto",
+    device_map="auto",
 )
+
+messages = [{"role": "user", "content": "Give me a short intro to LLMs."}]
+messages = generator(messages, max_new_tokens=256)[0]["generated_text"]
 ```
 
-- `enable_thinking=True`: model may emit a `<think>...</think>` block followed by the final answer.
-- `enable_thinking=False`: model will not generate the `<think>...</think>` block.
-
-### Soft switch (per-turn): `/think` and `/no_think`
-
-When `enable_thinking=True`, you can toggle thinking on a per-message basis by adding `/think` or `/no_think` in a user or system message (the most recent instruction wins):
-
-```python
-messages = [
-  {"role": "system", "content": "You are concise."},
-  {"role": "user", "content": "Explain attention in one sentence. /no_think"},
-  {"role": "user", "content": "Now solve 38*47 and show work. /think"},
-]
-```
-
-### Best practice: don’t keep thinking content in history
-
-In multi-turn chat, keep only the final answer in history (exclude `<think>...</think>`). If you use Qwen’s official Jinja chat template, it will strip thinking content from assistant messages when formatting history; if you don’t, strip it yourself before saving.
-
-## Local inference (Transformers)
-
-### Minimal chat (non-thinking)
+### Manual generate (chat template)
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-MODEL = "Qwen/Qwen3-0.6B"
-tokenizer = AutoTokenizer.from_pretrained(MODEL)
-model = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype="auto", device_map="auto")
+model_name = "Qwen/Qwen3-0.6B"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    torch_dtype="auto",
+    device_map="auto",
+)
 
 messages = [{"role": "user", "content": "Explain KV cache in 3 bullets. /no_think"}]
-text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+text = tokenizer.apply_chat_template(
+    messages,
+    tokenize=False,
+    add_generation_prompt=True,
+    enable_thinking=False,
+)
 inputs = tokenizer([text], return_tensors="pt").to(model.device)
-
-out = model.generate(
+output = model.generate(
     **inputs,
     max_new_tokens=256,
     do_sample=True,
     temperature=0.7,
     top_p=0.8,
     top_k=20,
-    repetition_penalty=1.1,
 )
-print(tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True))
+print(tokenizer.decode(output[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True))
 ```
 
-### Thinking mode + extracting `<think>...</think>`
+## Thinking control
+
+### Hard switch: enable_thinking (recommended)
 
 ```python
-messages = [{"role": "user", "content": "Solve 38*47 and show your work. /think"}]
-text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=True)
-inputs = tokenizer([text], return_tensors="pt").to(model.device)
-
-out = model.generate(
-    **inputs,
-    max_new_tokens=512,
-    do_sample=True,
-    temperature=0.6,
-    top_p=0.95,
-    top_k=20,
+text = tokenizer.apply_chat_template(
+    messages,
+    tokenize=False,
+    add_generation_prompt=True,
+    enable_thinking=False,  # True by default
 )
-decoded = tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-
-thinking, answer = "", decoded
-if "</think>" in decoded:
-    before, after = decoded.split("</think>", 1)
-    thinking = before.split("<think>", 1)[-1].strip()
-    answer = after.strip()
-
-print("answer:", answer)
 ```
 
-### Streaming (token-by-token) with `TextIteratorStreamer`
+### Soft switch: /think and /no_think (stateful)
+
+When `enable_thinking=True`, add `/think` or `/no_think` to a system or user message. The most recent instruction wins across turns.
+
+### Stateless one-turn disable (strict)
+
+Transformers docs also show a stateless way to disable thinking for one turn by appending an assistant message that only contains:
+
+```
+<think>
+
+</think>
+
+```
+
+This is strict for that single turn and does not affect later turns.
+
+### Behavior notes
+
+- With `enable_thinking=True`, responses always include a `<think>...</think>` block. If the user says `/no_think`, the block may be empty.
+- With `enable_thinking=False`, `/think` and `/no_think` are ignored and no `<think>` block is emitted.
+
+## Parsing thinking content
+
+- Simple split: split on `</think>` and take the tail as the final answer.
+- Token id method: the model card uses token id `151668` (</think>) to split output ids.
+- Structured parse (from Qwen docs):
+
+```python
+import copy
+import re
+
+def parse_thinking_content(messages):
+    messages = copy.deepcopy(messages)
+    for message in messages:
+        if message["role"] != "assistant":
+            continue
+        m = re.match(r"<think>\n(.+)</think>\n\n", message["content"], flags=re.DOTALL)
+        if not m:
+            continue
+        message["content"] = message["content"][len(m.group(0)):]
+        thinking = m.group(1).strip()
+        if thinking:
+            message["reasoning_content"] = thinking
+    return messages
+```
+
+Best practice: do not keep thinking content in history. Store only the final answer in multi-turn chat.
+
+## Sampling and repetition (best practices)
+
+- Thinking mode: temperature 0.6, top_p 0.95, top_k 20, min_p 0. Do not use greedy decoding.
+- Non-thinking mode: temperature 0.7, top_p 0.8, top_k 20, min_p 0.
+- presence_penalty: tune in [0, 2]. Qwen suggests 1.5 when you see repetition.
+- Output length: 32,768 tokens is recommended for most queries; for complex benchmark tasks, 38,912 tokens can help.
+- Standardize outputs for evaluation (example: math prompts with `\boxed{}`; multiple choice using JSON `"answer": "C"`).
+
+## Streaming
 
 ```python
 from transformers import TextIteratorStreamer
 import threading
 
-messages = [{"role": "user", "content": "Explain KV cache in 3 bullets. /no_think"}]
 text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
 inputs = tokenizer([text], return_tensors="pt").to(model.device)
 
 streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
-gen_kwargs = dict(
+threading.Thread(target=model.generate, kwargs=dict(
     **inputs,
     streamer=streamer,
     max_new_tokens=256,
@@ -114,33 +150,50 @@ gen_kwargs = dict(
     temperature=0.7,
     top_p=0.8,
     top_k=20,
-)
-threading.Thread(target=model.generate, kwargs=gen_kwargs).start()
+)).start()
+
 for chunk in streamer:
     print(chunk, end="", flush=True)
 ```
 
-## Serving via an OpenAI-compatible endpoint (vLLM / SGLang)
+## OpenAI-compatible serving (vLLM and SGLang)
 
-### Run a server
+### vLLM
 
 ```bash
-# vLLM (OpenAI-compatible API at http://localhost:8000/v1 by default)
 vllm serve Qwen/Qwen3-0.6B
-
-# Optional: split thinking content into `reasoning_content` (not OpenAI API compatible)
-# vLLM>=0.9.0:
-vllm serve Qwen/Qwen3-0.6B --reasoning-parser qwen3
-# vLLM<=0.8.x:
-vllm serve Qwen/Qwen3-0.6B --enable-reasoning --reasoning-parser deepseek_r1
-
-# SGLang (OpenAI-compatible API at http://localhost:30000/v1 by default)
-python -m sglang.launch_server --model-path Qwen/Qwen3-0.6B
 ```
 
-### Raw HTTP: disable thinking (hard switch)
+Parsing reasoning into `reasoning_content`:
 
-`chat_template_kwargs.enable_thinking` is not part of the OpenAI API spec, but vLLM/SGLang support it:
+```bash
+# vLLM 0.9.0+
+vllm serve Qwen/Qwen3-0.6B --reasoning-parser qwen3
+
+# vLLM 0.8.5 and earlier
+vllm serve Qwen/Qwen3-0.6B --enable-reasoning --reasoning-parser deepseek_r1
+```
+
+Notes:
+
+- `chat_template_kwargs.enable_thinking` is not part of the OpenAI API spec.
+- As of vLLM 0.8.5, `enable_thinking=False` is not compatible with reasoning parsing; this is fixed with the `qwen3` parser in vLLM 0.9.0.
+- To strictly disable thinking for all requests, use the provided `qwen3_nonthinking.jinja` chat template at server startup.
+
+### SGLang
+
+```bash
+python -m sglang.launch_server --model-path Qwen/Qwen3-0.6B
+python -m sglang.launch_server --model-path Qwen/Qwen3-0.6B --reasoning-parser qwen3
+```
+
+Notes:
+
+- `enable_thinking` can be passed in `chat_template_kwargs` but it is not OpenAI API compatible.
+- A custom `qwen3_nonthinking.jinja` template can enforce no-thinking at the server level.
+- SGLang warns that `enable_thinking=False` may not be compatible with reasoning parsing.
+
+### Raw HTTP (disable thinking, vLLM or SGLang)
 
 ```bash
 curl http://localhost:8000/v1/chat/completions \
@@ -157,46 +210,56 @@ curl http://localhost:8000/v1/chat/completions \
   }'
 ```
 
-### Python OpenAI SDK (streaming) + disabling thinking
+## Tool and function calling
 
-`enable_thinking` is a chat-template feature, not part of the OpenAI API spec. vLLM/SGLang expose it via a non-standard extension (example below).
+- Qwen3 recommends Hermes-style tool use for best function calling quality.
+- Avoid stopword-based tool call templates (like ReAct) with reasoning models because stopwords can appear inside `<think>` content.
+- Tool schema uses JSON Schema. Tool arguments are JSON-formatted strings in tool calls.
+- The Qwen3 tokenizer chat template already includes Hermes tool use, so vLLM can parse tool calls with:
 
-```python
-from openai import OpenAI
-
-client = OpenAI(api_key="EMPTY", base_url="http://localhost:8000/v1")
-stream = client.chat.completions.create(
-    model="Qwen/Qwen3-0.6B",
-    messages=[{"role": "user", "content": "Explain transformers in 3 bullets. /no_think"}],
-    stream=True,
-    temperature=0.7,
-    top_p=0.8,
-    presence_penalty=1.5,  # helps if you see endless repetitions
-    extra_body={
-        "top_k": 20,
-        "chat_template_kwargs": {"enable_thinking": False},
-    },
-)
-for chunk in stream:
-    delta = chunk.choices[0].delta.content or ""
-    if delta:
-        print(delta, end="", flush=True)
-print()
+```bash
+vllm serve Qwen/Qwen3-0.6B --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3
 ```
 
-## Repetition / “endless loop” checklist
+- Qwen-Agent wraps tool calling for Qwen3 and can sit on top of an OpenAI-compatible endpoint. It currently expects `functions` rather than `tools`:
 
-- Don’t use greedy decoding in thinking mode; use sampling.
-- Use Qwen’s recommended sampling presets:
-  - Thinking: `temperature=0.6`, `top_p=0.95`, `top_k=20`
-  - Non-thinking: `temperature=0.7`, `top_p=0.8`, `top_k=20`
-- If supported by your runtime, tune `presence_penalty` in `[0, 2]` (Qwen suggests `1.5` when you see endless repetitions; higher values can cause occasional language mixing).
-- Always set a sane `max_new_tokens`/`max_tokens` and constrain format (“3 bullets, <50 words”) to prevent run-on output.
+```python
+functions = [tool["function"] for tool in tools]
+```
+
+## Quantization notes
+
+- Qwen3 provides FP8 and AWQ variants (check HF model list for `Qwen/Qwen3-<size>-FP8` and `Qwen/Qwen3-<size>-AWQ`).
+- FP8 requires GPUs with compute capability > 8.9 (Ada Lovelace, Hopper, or newer).
+- Transformers 4.51 has known issues with FP8 across GPUs; workarounds include `CUDA_LAUNCH_BLOCKING=1` or patching `finegrained_fp8.py`.
+
+## Long context with YaRN (Transformers)
+
+Qwen3 pretraining context is 32,768 tokens, but YaRN RoPE scaling can extend this to 131,072.
+
+```json
+{
+  "max_position_embeddings": 131072,
+  "rope_scaling": {
+    "rope_type": "yarn",
+    "factor": 4.0,
+    "original_max_position_embeddings": 32768
+  }
+}
+```
+
+Notes:
+
+- Transformers uses static YaRN; enable only when you need long context.
+- As of Transformers 4.52.3, `rope_scaling.factor` may be overridden by `max_position_embeddings/original_max_position_embeddings`. See HF issue 38224.
 
 ## References
 
 - Model card: https://huggingface.co/Qwen/Qwen3-0.6B
-- Blog: https://qwenlm.github.io/blog/qwen3/
-- GitHub: https://github.com/QwenLM/Qwen3
-- Docs: https://qwen.readthedocs.io/en/latest/
-- Technical report (arXiv): https://arxiv.org/abs/2505.09388
+- Qwen3 blog: https://qwenlm.github.io/blog/qwen3/
+- Qwen3 GitHub: https://github.com/QwenLM/Qwen3
+- Qwen docs (Transformers): https://qwen.readthedocs.io/en/latest/inference/transformers.html
+- Qwen docs (vLLM): https://qwen.readthedocs.io/en/latest/deployment/vllm.html
+- Qwen docs (SGLang): https://qwen.readthedocs.io/en/latest/deployment/sglang.html
+- Qwen docs (Function Calling): https://qwen.readthedocs.io/en/latest/framework/function_call.html
+- Technical report: https://arxiv.org/abs/2505.09388

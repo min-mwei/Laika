@@ -450,8 +450,13 @@ async function runTool(action, tabId, options) {
         }
         return { status: "error", error: "empty_summary" };
       }
-      appendMessage("system", "Summary failed: no stream.");
-      return { status: "error", error: "no_stream" };
+      var errorMessage = "Summary failed: no stream.";
+      var errorDetail = streamResponse && streamResponse.error ? String(streamResponse.error) : "";
+      if (errorDetail) {
+        errorMessage = "Summary failed: " + errorDetail;
+      }
+      appendMessage("system", errorMessage);
+      return { status: "error", error: errorDetail || "no_stream" };
     } catch (error) {
       appendMessage("system", "Summary failed: " + error.message);
       return { status: "error", error: error.message };

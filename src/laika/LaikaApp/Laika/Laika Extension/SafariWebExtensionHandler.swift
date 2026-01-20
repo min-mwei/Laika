@@ -12,6 +12,7 @@ import SafariServices
 import os.log
 
 private let log = OSLog(subsystem: "com.laika.Laika", category: "native")
+private let sharedAgent = NativeAgent()
 
 private actor NativeAgent {
     private var modelURL: URL?
@@ -46,38 +47,7 @@ private actor NativeAgent {
             request.context.observation.text.count,
             request.context.observation.elements.count
         )
-        let resolvedURL = resolveModelURL()
-        let nextRunner: ModelRunner
-        if let resolvedURL {
-            let tokens = normalizeMaxTokens(maxTokens)
-            if runner == nil || modelURL != resolvedURL || self.maxTokens != tokens {
-                os_log(
-                    "Using MLX model at %{public}@ (maxTokens=%{public}d)",
-                    log: log,
-                    type: .info,
-                    resolvedURL.path,
-                    tokens
-                )
-                runner = ModelRouter(preferred: .mlx, modelURL: resolvedURL, maxTokens: tokens)
-                modelURL = resolvedURL
-                self.maxTokens = tokens
-                orchestrator = AgentOrchestrator(model: runner ?? StaticModelRunner())
-                summaryService = SummaryService(model: runner ?? StaticModelRunner())
-            }
-            nextRunner = runner ?? StaticModelRunner()
-        } else {
-            os_log("No model directory found; using static fallback", log: log, type: .info)
-            nextRunner = StaticModelRunner()
-            orchestrator = AgentOrchestrator(model: nextRunner)
-            summaryService = SummaryService(model: nextRunner)
-        }
-
-        if orchestrator == nil {
-            orchestrator = AgentOrchestrator(model: nextRunner)
-        }
-        if summaryService == nil {
-            summaryService = SummaryService(model: nextRunner)
-        }
+        let nextRunner = ensureRunner(maxTokens: maxTokens)
         let response = try await orchestrator!.runOnce(context: request.context, userGoal: request.goal)
         os_log("Plan response actions=%{public}d", log: log, type: .info, response.actions.count)
         return response
@@ -85,6 +55,7 @@ private actor NativeAgent {
 
     func startSummaryStream(request: PlanRequest, goalPlanHint: GoalPlan?, maxTokens: Int?) async throws -> String {
         try request.validate()
+        _ = ensureRunner(maxTokens: maxTokens)
         guard let orchestrator else {
             throw ModelError.modelUnavailable("Agent unavailable.")
         }
@@ -160,6 +131,47 @@ private actor NativeAgent {
         return min(max(value, minTokens), maxCap)
     }
 
+    @discardableResult
+    private func ensureRunner(maxTokens: Int?) -> ModelRunner {
+        let resolvedURL = resolveModelURL()
+        let tokens = normalizeMaxTokens(maxTokens)
+        let nextRunner: ModelRunner
+        if let resolvedURL {
+            if runner == nil || modelURL != resolvedURL || self.maxTokens != tokens {
+                os_log(
+                    "Using MLX model at %{public}@ (maxTokens=%{public}d)",
+                    log: log,
+                    type: .info,
+                    resolvedURL.path,
+                    tokens
+                )
+                runner = ModelRouter(preferred: .mlx, modelURL: resolvedURL, maxTokens: tokens)
+                modelURL = resolvedURL
+                self.maxTokens = tokens
+                orchestrator = nil
+                summaryService = nil
+            }
+            nextRunner = runner ?? StaticModelRunner()
+        } else {
+            os_log("No model directory found; using static fallback", log: log, type: .info)
+            let fallback = StaticModelRunner()
+            runner = fallback
+            modelURL = nil
+            self.maxTokens = tokens
+            orchestrator = nil
+            summaryService = nil
+            nextRunner = fallback
+        }
+
+        if orchestrator == nil {
+            orchestrator = AgentOrchestrator(model: nextRunner)
+        }
+        if summaryService == nil {
+            summaryService = SummaryService(model: nextRunner)
+        }
+        return nextRunner
+    }
+
     private func resolveModelURL() -> URL? {
         if let resourceURL = Bundle.main.resourceURL {
             let bundledURL = resourceURL
@@ -196,7 +208,7 @@ private actor NativeAgent {
 }
 
 class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
-    private let agent = NativeAgent()
+    private let agent = sharedAgent
 
     func beginRequest(with context: NSExtensionContext) {
         let request = context.inputItems.first as? NSExtensionItem

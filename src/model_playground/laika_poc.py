@@ -62,6 +62,63 @@ class ObservedElement:
 
 
 @dataclass
+class ObservedTextBlock:
+    tag: str
+    role: str
+    text: str
+    link_count: int
+    link_density: float
+    handle_id: Optional[str] = None
+
+
+@dataclass
+class ObservedItemLink:
+    title: str
+    url: str
+    handle_id: Optional[str] = None
+
+
+@dataclass
+class ObservedItem:
+    title: str
+    url: str
+    snippet: str
+    tag: str
+    link_count: int
+    link_density: float
+    handle_id: Optional[str] = None
+    links: List[ObservedItemLink] = field(default_factory=list)
+
+
+@dataclass
+class ObservedOutlineItem:
+    level: int
+    tag: str
+    role: str
+    text: str
+
+
+@dataclass
+class ObservedPrimaryContent:
+    tag: str
+    role: str
+    text: str
+    link_count: int
+    link_density: float
+    handle_id: Optional[str] = None
+
+
+@dataclass
+class ObservedComment:
+    text: str
+    author: Optional[str] = None
+    age: Optional[str] = None
+    score: Optional[str] = None
+    depth: int = 0
+    handle_id: Optional[str] = None
+
+
+@dataclass
 class HNComment:
     comment_id: str
     author: str
@@ -87,6 +144,11 @@ class Observation:
     title: str
     text: str
     elements: List[ObservedElement]
+    blocks: List[ObservedTextBlock] = field(default_factory=list)
+    items: List[ObservedItem] = field(default_factory=list)
+    outline: List[ObservedOutlineItem] = field(default_factory=list)
+    primary: Optional[ObservedPrimaryContent] = None
+    comments: List[ObservedComment] = field(default_factory=list)
     topics: List[TopicSummary] = field(default_factory=list)
     hn_story: Optional[TopicSummary] = None
     hn_comments: List[HNComment] = field(default_factory=list)
@@ -188,6 +250,16 @@ _DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/121.0.0.0 Safari/537.36"
 )
+
+_DEFAULT_MAX_BLOCKS = 30
+_DEFAULT_MAX_PRIMARY_CHARS = 1200
+_DEFAULT_MAX_OUTLINE = 50
+_DEFAULT_MAX_OUTLINE_CHARS = 160
+_DEFAULT_MAX_ITEMS = 24
+_DEFAULT_MAX_ITEM_CHARS = 240
+_DEFAULT_MAX_COMMENTS = 24
+_DEFAULT_MAX_COMMENT_CHARS = 360
+_DEFAULT_MAX_LINKS_PER_ITEM = 6
 
 
 def _normalize_whitespace(text: str) -> str:
