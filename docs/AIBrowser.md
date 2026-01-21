@@ -16,6 +16,8 @@ Prototype UI note: the current build renders an attached, in-page **sidecar pane
 
 Prototype mode note: the current implementation runs in **assist-only** mode. Read-only tasks (summaries) are handled via the `content.summarize` tool plus policy gating; there is no separate observe-only mode in code.
 
+Prototype runtime note: the Safari extension’s native handler (`SafariWebExtensionHandler.swift`) hosts the model runner, orchestrator, and summary service in-process today. The automation harness uses `laika-server` (SwiftPM target) for local testing only. Moving inference into the companion app/XPC worker remains the target architecture.
+
 Convergence note: further changes should be driven by probe/prototype results (Safari/WebExtension behavior, IPC limits, sandboxed local inference), not more design expansion.
 
 Next steps (prototype checklist):
@@ -31,7 +33,7 @@ Next steps (prototype checklist):
 - Two execution surfaces: `Isolated` (default) + `My Browser` Connector (explicit opt-in)
 - On-device decisioning (default): planning + safety filtering run on your Mac; optional BYO OpenAI/Anthropic via redacted context packs
 - No cloud browser: automation executes locally (Safari tabs or local Isolated WKWebView); cloud inference is optional and uses redacted context packs
-- Compute placement: local inference runs in sandboxed Swift (app/XPC); the extension stays thin (observe/act + UI + routing)
+- Compute placement: **prototype** runs inference in the Safari extension handler (Swift); **target** moves inference to a sandboxed app/XPC worker while the extension stays thin (observe/act + UI + routing)
 - Security moat: tool-only contract + Policy Gate + capability tokens + injection hardening
 - Resumable automation: append-only SQLite run log; pause/resume; no surprise replays
 - Context management: SQLite context store + checkpoints; no general RAG/vector DB
@@ -188,6 +190,31 @@ Privacy boundary (what leaves the device):
 
 Laika is best modeled as a **Safari Web Extension** plus a **sandboxed macOS companion app**.
 
+### Prototype architecture (current build)
+
+The current prototype keeps all inference in the Safari extension’s native handler (Swift). The companion app is primarily a UI host and installer; the automation harness uses `laika-server` for local test runs.
+
+```text
+┌─────────────── Safari Tab (untrusted web) ────────────────┐
+│  Page DOM / JS / Network                                  │
+│   ┌───────────────┐     messages      ┌─────────────────┐ │
+│   │ Content Script│◀──────────────────▶│ Background/Worker│ │
+│   └───────────────┘                   └─────────────────┘ │
+└───────────────────────────────┬───────────────────────────┘
+                                │ native messaging (typed)
+                                ▼
+┌──── SafariWebExtensionHandler (Swift, extension process) ──┐
+│  Agent Orchestrator + Policy Gate + SummaryService         │
+│  ModelRunner (MLX/Qwen3)                                   │
+│  Summary streams: summary.start/poll/cancel                │
+└───────────────────────────────┬────────────────────────────┘
+                                │ tool results
+                                ▼
+Sidecar UI (popover.js) ── append-only chat + streaming summary
+```
+
+### Target architecture (planned)
+
 For simplicity, the diagram below focuses on the Safari-integrated “My Browser” surface. The isolated surface uses the same Agent Orchestrator + Policy Gate, but different “browser tool” implementations (app-owned WebView instead of extension content scripts).
 
 ```text
@@ -252,6 +279,13 @@ Content Script (extract/act) ──► Background Script ──► Native Messag
 - **If a cloud model is enabled**: send only a redacted context pack; never send cookies/session tokens; keep Policy Gate + local Guard/Filter enforcement on-device.
 - **What is persisted**: an append-only SQLite run log (tool calls, policy decisions, approvals, summaries) plus user-approved artifacts; avoid storing raw page text/screenshots on sensitive sites by default.
 - **At-rest protection**: Keychain for secrets; SQLite-backed context/audit logs + encrypted artifacts; strict scoping by `(profileId, site origin, tab, task)`.
+
+Summarization data path (current prototype):
+
+- `observe_dom` extracts visible text, blocks, items, outline, and comments from the DOM; navigation/overlays/ads are filtered in JS before they enter the context pack.
+- `SummaryInputBuilder` selects list vs page text vs comments and compacts the text (dedupe + low-signal filtering).
+- `SummaryService` chunk-summarizes long inputs with the local model, then produces a final summary; output streams to the UI and is **append-only** (no replacement).
+- Validation enforces grounding against anchors; if the stream is empty, a fallback summary is appended.
 
 ## Execution Surfaces (Isolated vs “My Browser” Connector)
 
@@ -633,6 +667,7 @@ Safari WebExtensions cannot access the GPU or the file system directly in a way 
 - **JS → native bridge (supported)**: the extension uses `browser.runtime.sendNativeMessage()` to reach the containing app’s native app extension handler. This is the intended, App Store-safe path for WebExtension ↔ native communication on Safari.
 - **Native bridge → Agent Core (IPC)**: forward requests to the Agent Core over typed IPC. Use an App Group-backed request/response queue as the reliability baseline; add XPC for lower latency where it proves stable in prototypes.
 - **Native bridge must stay thin**: validate schemas, enforce backpressure, and forward. Avoid long-running inference or file parsing inside the bridge process to reduce the risk of Safari killing the extension host.
+- **Prototype exception**: the current Safari extension handler hosts the model runner and summarizer in-process. This is a known deviation from the target architecture and is slated to move into the app/XPC worker.
 - **GPU-backed local inference lives in the app (or an XPC worker)**:
   - The Agent Core (single source of truth) calls an `LLM Worker` XPC service for inference. That worker may use Core ML / MLX / Metal for GPU acceleration and ships with **no network** entitlement.
   - This keeps model execution out of the JS environment and makes compute scheduling/budgets enforceable in one place.

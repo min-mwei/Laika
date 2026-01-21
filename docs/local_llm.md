@@ -36,6 +36,7 @@ Related:
 - LLM traces are written to `<base>/logs/llm.jsonl` (JSONL, append-only).
 - If the preferred location is blocked, Laika falls back to Application Support under the container (for example: `~/Library/Containers/<bundle-id>/Data/Library/Application Support/Laika/`).
 - Full prompt/output logging is enabled by default; set `LAIKA_LOG_FULL_LLM=0` to store only counts/metadata.
+- The automation harness uses `laika-server` (SwiftPM executable) to host the same Agent Core + ModelRunner outside Safari for test runs.
 
 ## Qwen3 output length
 
@@ -54,7 +55,18 @@ Related:
 
 ### Process placement (security + performance)
 
-Local inference must not run inside Safari’s JS extension environment. Laika runs models in Swift processes:
+Local inference must not run inside Safari’s JS extension environment. Laika runs models in Swift; the current prototype and the target architecture differ in where that Swift code lives.
+
+**Prototype (current):**
+
+```text
+Safari WebExtension (JS) ──native messaging──▶ SafariWebExtensionHandler (Swift)
+                                               │
+                                               ├── Agent Orchestrator + SummaryService
+                                               └── ModelRunner (MLX/Qwen3)
+```
+
+**Target (planned):**
 
 ```text
 Safari WebExtension (JS) ──native messaging──▶ Native app extension handler
@@ -116,6 +128,14 @@ In MVP, roles (2) and (3) can share one “main” model; roles (1) and (4) may 
 
 ---
 
+## Current Qwen3 usage (prototype)
+
+- Model: `Qwen3-0.6B-MLX-4bit` loaded from `src/laika/extension/lib/models/`.
+- Planning: JSON-only prompt; `enableThinking` toggles on for long goals. Plan budgets are small (roughly 256-384 tokens) for latency.
+- Goal parsing: uses short budgets (72-128 tokens) to keep intent extraction fast.
+- Summaries: `SummaryService` runs in non-thinking mode, streams output, and chunks long inputs before final summarization.
+- Streaming: the UI uses `summary.start/poll/cancel` and appends tokens; if the stream is empty, a fallback is appended.
+
 ## Model formats and runtimes
 
 Laika should support multiple runtimes behind a single Swift protocol (e.g., `ModelRuntime`), so “model choice” doesn’t leak into the rest of the agent.
@@ -154,11 +174,12 @@ Laika should support multiple runtimes behind a single Swift protocol (e.g., `Mo
   - not all architectures convert cleanly,
   - conversion/tooling cost (quantization, attention kernels, long-context variants).
 
-### MLX (optional / later)
+### MLX (current prototype)
 
-**Use when:** we want strong Metal acceleration with open model compatibility (especially Qwen-family weights) and we can justify the integration complexity.
+**Use when:** we want strong Metal acceleration with open model compatibility (especially Qwen-family weights).
 
-- MVP can ship without MLX if GGUF/llama.cpp covers the required model set.
+- Current prototype uses MLX for Qwen3-0.6B (4-bit) inside the Safari extension handler.
+- Long-term, MLX can remain the default local runtime, with GGUF/Core ML as optional alternatives.
 
 ---
 

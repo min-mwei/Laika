@@ -411,7 +411,6 @@ async function consumeSummaryStream(streamId) {
   var body = message.lastChild;
   var text = "";
   var delayMs = 140;
-  var replaceMarker = "<<LAIKA_SUMMARY_REPLACE>>";
   for (;;) {
     var result = await pollSummaryStream(streamId);
     if (!result || result.ok !== true) {
@@ -420,10 +419,6 @@ async function consumeSummaryStream(streamId) {
     }
     if (Array.isArray(result.chunks) && result.chunks.length > 0) {
       text += result.chunks.join("");
-      var markerIndex = text.indexOf(replaceMarker);
-      if (markerIndex >= 0) {
-        text = text.slice(markerIndex + replaceMarker.length).trim();
-      }
       body.textContent = text;
       chatLog.scrollTop = chatLog.scrollHeight;
     }
@@ -832,7 +827,6 @@ sendButton.addEventListener("click", async function () {
         tabIdForPlan = updated.tabId;
       }
     }
-    setStatus("Status: ready");
   } catch (error) {
     if (error && (error.message === "no_context" || error.message === "no_active_tab")) {
       explainMissingContext();

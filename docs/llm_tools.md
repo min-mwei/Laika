@@ -20,19 +20,12 @@ User
   │
   ▼
 Sidecar UI (in-page iframe in the active tab; fallback panel window: popover.html + popover.js)
-  │  native messaging
+  │  native messaging (plan + summary.start/poll/cancel)
   ▼
-Extension background (background.js)
-  │  observe/act routing
-  ▼
-Native bridge (SafariWebExtensionHandler.swift)
-  │  plan request
-  ▼
-Agent Core (AgentOrchestrator + PolicyGate)
-  │  model call
-  ▼
-Qwen3 (MLX) -> JSON tool_calls
-  │
+SafariWebExtensionHandler.swift (Swift, extension process)
+  │  Agent Orchestrator + PolicyGate + SummaryService
+  │  ModelRunner (MLX/Qwen3)
+  │  model call → JSON tool_calls
   ├─ allow/ask/deny in Policy Gate
   ▼
 Tool execution
@@ -41,7 +34,7 @@ Tool execution
   └─ background.js (tab actions)
   │
   ▼
-Tool results -> Agent Core -> sidecar UI
+Tool results / summary stream → sidecar UI
 ```
 
 ## Tool lifecycle (one step)
@@ -51,6 +44,12 @@ Tool results -> Agent Core -> sidecar UI
 3. Gate: Policy Gate returns allow/ask/deny per tool call.
 4. Act: allowed tools execute in JS or Swift.
 5. Re-observe: capture fresh state after changes or navigation.
+
+Summary path (read-only):
+
+- The planner emits `content.summarize`.
+- The UI calls `summary.start`, then polls `summary.poll` until `done`.
+- The summary stream is **append-only** in the UI; it is not replaced.
 
 ## Tool-calling contract (current)
 
@@ -107,7 +106,8 @@ Implementation details:
 
 - Prompt schema: `src/laika/model/Sources/LaikaModel/PromptBuilder.swift`.
 - Model runner: `src/laika/model/Sources/LaikaModel/MLXModelRunner.swift`.
-- Generation settings in code: `maxTokens=256`, `temperature=0.2`, `topP=0.9`.
+- Planner settings: non-thinking by default (0.7/0.8, 0.6/0.95 retries); thinking is enabled only for long goals.
+- Goal parse budgets are small for latency (72–128 tokens depending on goal length).
 - Parser: `src/laika/model/Sources/LaikaModel/ToolCallParser.swift`.
 - Model chat template (bundled with the MLX model) supports `<tool_call>...</tool_call>` tags when tools are provided: `src/laika/extension/lib/models/Qwen3-0.6B-MLX-4bit/chat_template.jinja`. Laika does not currently pass tool definitions into the template and instead uses a JSON-only prompt.
 
@@ -141,14 +141,14 @@ Multi-tab context (prototype):
 
 Observation budgets (current):
 
-- The sidecar requests `maxChars: 8000`, `maxElements: 120` (`src/laika/extension/popover.js`).
-- The content script can support larger defaults (`maxChars: 4000`, `maxElements: 50`) but the request controls the limit (`src/laika/extension/content_script.js`).
+- The sidecar requests `maxChars: 12000`, `maxElements: 160` with larger detail presets for deep tasks (`src/laika/extension/popover.js`).
+- The content script supports budgeted capture for text/blocks/items/outline/comments; the request controls the limit (`src/laika/extension/content_script.js`).
 - The sidecar also passes `maxTokens` for model output length (default 2048, capped at 8192).
 
 Pushing toward a 32K token window (design notes):
 
 - **Raise observation budgets** for high-signal pages. Example target: `maxChars` 8k–16k and `maxElements` 80–160. Keep smaller caps for quick summaries.
-- **Chunk the observation** when text exceeds a single budget: collect multiple segments (e.g., `chunkIndex`, `chunkCount`, `nextCursor`) and merge or summarize in the Agent Core.
+- **Chunk the observation** when text exceeds a single budget: collect multiple segments (e.g., `chunkIndex`, `chunkCount`, `nextCursor`) and merge or summarize in the Agent Core. (Chunking is already implemented for `content.summarize` inside `SummaryService`; observation chunking for planning is still a design note.)
 - **Stream chunks** to the Agent Core so the UI stays responsive and the model can start summarizing before the full page is captured.
 - **Compress before planning**: summarize large text into a compact “page brief” and keep only selected element handles in the final context pack.
 - **Token-aware budgeting**: estimate token cost per chunk and stop when a target token budget is reached.
@@ -181,6 +181,13 @@ Long-context guidance (from `docs/local_llm.md`):
 - Prefer read-only long-context modes for summarization.
 - Keep strict token budgets to avoid latency and battery impact.
 
+## Summary pipeline (current)
+
+1. `browser.observe_dom` extracts structured context: `text`, `blocks`, `primary`, `items`, `outline`, and `comments`.
+2. `SummaryInputBuilder` chooses a representation (list vs page text vs comments) and compacts text (dedupe + low-signal filtering).
+3. `SummaryService` chunk-summarizes long inputs, then produces a final summary using the local model.
+4. The UI streams summary output via `summary.start/poll` and appends tokens to the chat log.
+
 ## Tool categories
 
 - Core navigation: tab- or page-level movement.
@@ -201,12 +208,13 @@ Long-context guidance (from `docs/local_llm.md`):
 | Interaction | `browser.type` | Type text into an input/textarea by `handleId`. | `{ "handleId": "laika-7", "text": "query" }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
 | Interaction | `browser.scroll` | Scroll the page by a vertical delta. | `{ "deltaY": 400 }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
 | Interaction | `browser.select` | Select a dropdown option by `handleId`. | `{ "handleId": "laika-9", "value": "Option" }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
-| Content actions | `content.summarize` | Summarize page or scoped element. | `{ "scope": "page"|"item"|"comments" }` or `{ "handleId": "laika-5" }` | Swift Agent Core (`SummaryService`) | Swift (local model) |
+| Content actions | `content.summarize` | Summarize the page context using the latest observation + goal plan. | `{}` (arguments currently ignored; `scope`/`handleId` reserved) | Swift Agent Core (`SummaryService`) | Swift (local model) |
 
 Notes for `content.summarize`:
 
-- Summaries are validated against observation anchors; if the output is ungrounded, Laika falls back to an extractive summary built from the observed text/items.
-- Streaming summaries may replace provisional output when the validator fails.
+- Summaries are grounded against observation anchors; if the output is ungrounded, Laika appends a fallback only when the stream is empty.
+- The summary stream is append-only in the UI (no replacement).
+- Long inputs are chunked in `SummaryService` before final summarization.
 
 ## Proposed tools (not yet implemented)
 

@@ -5,6 +5,7 @@ This directory is reserved for the Safari extension, macOS companion app, and th
 
 ## Primary references
 - `docs/AIBrowser.md` for architecture and safety expectations.
+- `docs/automation.md` for automation harness flow, options, and scenario format.
 - `src/laika/PLAN.md` for the validation plan.
 - `src/local_llm_quantizer/README.md` for MLX 4-bit model conversion details.
 
@@ -29,9 +30,54 @@ This directory is reserved for the Safari extension, macOS companion app, and th
 ## Development process (required)
 1) Design and update the relevant design doc before coding.
 2) Implement, write code, and test locally.
-3) Run the Laika automation harness to validate behavior.
+3) Run the Laika automation harness to validate behavior (see `docs/automation.md`).
 4) Confirm the build works, logging is sufficient, then ask for manual user testing.
 5) Read logs and incorporate user feedback.
+
+## Build (Swift packages)
+
+```bash
+cd src/laika/app
+swift build
+```
+
+## Run the plan server (local model)
+
+Use the same model directory that Safari uses:
+
+```bash
+cd src/laika/app
+MLX_METAL_JIT=1 ./.build/arm64-apple-macosx/debug/laika-server \
+  --model-dir ../extension/lib/models/Qwen3-0.6B-MLX-4bit \
+  --port 8765
+```
+
+## Automation harness (Playwright)
+
+```bash
+cd src/laika/automation_harness
+npm install
+npx playwright install webkit
+node scripts/laika_harness.js --scenario scripts/scenarios/hn.json
+```
+
+## JavaScript unit tests (extension helpers)
+
+```bash
+node --test src/laika/extension/tests/*.js
+```
+
+## Swift tests (if present)
+
+```bash
+cd src/laika/app
+swift test
+```
+
+## Logs (debugging)
+
+- Extension logs: `~/Library/Containers/com.laika.Laika.Extension/Data/Laika/logs/llm.jsonl`
+- CLI/server logs: `~/Laika/logs/llm.jsonl` (override with `LAIKA_HOME=/path/to/Laika`)
 
 ## Mode policy
 - The prototype supports assist mode only; do not reintroduce observe-only mode branches.

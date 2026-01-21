@@ -183,10 +183,11 @@ public struct SummaryService {
                         continuation.yield(chunk)
                     }
                     let cleaned = sanitizeSummary(output)
-                    if validateSummary(cleaned, input: input, goalPlan: goalPlan) != .ok {
+                    if validateSummary(cleaned, input: input, goalPlan: goalPlan) != .ok, cleaned.isEmpty {
                         let fallback = fallbackSummary(input: input, context: context, goalPlan: goalPlan)
-                        let markerChunk = "\(replacementMarker)\n\(fallback)"
-                        continuation.yield(markerChunk)
+                        if !fallback.isEmpty {
+                            continuation.yield("\n" + fallback)
+                        }
                     }
                     continuation.finish()
                 } catch {
