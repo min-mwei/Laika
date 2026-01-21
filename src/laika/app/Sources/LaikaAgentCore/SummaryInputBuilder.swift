@@ -27,15 +27,27 @@ struct SummaryInputBuilder {
             }
             return buildFromEmptyComments(context: context)
         }
-        if goalPlan.intent == .itemSummary,
-           shouldUseItemSnippet(context: context),
-           let item = selectTargetItem(context: context, goalPlan: goalPlan) {
-            return buildFromItem(context: context, item: item)
+        if goalPlan.intent == .itemSummary {
+            let blockInput = buildFromBlocks(context: context, goalPlan: goalPlan)
+            let primaryChars = context.observation.primary?.text.count ?? 0
+            if isListObservation(context), shouldUseItemSnippet(context: context), primaryChars < 500 {
+                if let item = selectTargetItem(context: context, goalPlan: goalPlan) {
+                    return buildFromItem(context: context, item: item)
+                }
+            }
+            if !isLowSignalSummaryInput(blockInput) {
+                return blockInput
+            }
+            if shouldUseItemSnippet(context: context),
+               let item = selectTargetItem(context: context, goalPlan: goalPlan) {
+                return buildFromItem(context: context, item: item)
+            }
+            return blockInput
         }
         if isListObservation(context), !context.observation.items.isEmpty {
             return buildFromItems(context: context)
         }
-        return buildFromBlocks(context: context)
+        return buildFromBlocks(context: context, goalPlan: goalPlan)
     }
 
     private static func wantsComments(goalPlan: GoalPlan) -> Bool {
@@ -69,8 +81,8 @@ struct SummaryInputBuilder {
             }
             displayIndex += 1
             var line = "\(displayIndex). \(title)"
-            let snippet = SnippetFormatter.format(item.snippet, title: title, maxChars: 200)
-            if !snippet.isEmpty {
+            let snippet = formatSnippet(item.snippet, title: title, maxChars: 260)
+            if isUsefulSnippet(snippet) {
                 line += " — \(snippet)"
             }
             lines.append(line)
@@ -98,10 +110,18 @@ struct SummaryInputBuilder {
         var used = 0
         var authors: [String] = []
         var seenAuthors: Set<String> = []
+        var seenTexts: Set<String> = []
         for (index, comment) in context.observation.comments.prefix(28).enumerated() {
             let text = TextUtils.normalizeWhitespace(comment.text)
             if text.isEmpty {
                 continue
+            }
+            let textKey = normalizeForMatch(text)
+            if !textKey.isEmpty && seenTexts.contains(textKey) {
+                continue
+            }
+            if !textKey.isEmpty {
+                seenTexts.insert(textKey)
             }
             var prefix: [String] = []
             if let author = comment.author?.trimmingCharacters(in: .whitespacesAndNewlines), !author.isEmpty {
@@ -119,15 +139,15 @@ struct SummaryInputBuilder {
                 prefix.append(score)
             }
             let header = prefix.isEmpty ? "" : " (" + prefix.joined(separator: " · ") + ") "
-            let line = "Comment \(index + 1):" + header + TextUtils.truncate(text, maxChars: 280)
+            let line = "Comment \(index + 1):" + header + TextUtils.truncate(text, maxChars: 360)
             lines.append(line)
             used += 1
         }
         let titleLine = buildTitleLine(context: context)
-        let countLine = "Comment count: \(context.observation.comments.count)"
-        let authorLine = authors.isEmpty ? "" : "Authors: " + authors.prefix(6).joined(separator: "; ")
+        let countLine = "Comment count (metadata): \(context.observation.comments.count)"
+        let authorLine = authors.isEmpty ? "" : "Authors (metadata): " + authors.prefix(6).joined(separator: "; ")
         let body = lines.joined(separator: "\n")
-        let text = [titleLine, countLine, authorLine, body].filter { !$0.isEmpty }.joined(separator: "\n")
+        let text = [titleLine, body, authorLine, countLine].filter { !$0.isEmpty }.joined(separator: "\n")
         let signals = accessSignals(context: context, kind: .comments)
         return SummaryInput(
             kind: .comments,
@@ -167,8 +187,8 @@ struct SummaryInputBuilder {
         if !url.isEmpty {
             lines.append("URL: \(url)")
         }
-        let snippet = SnippetFormatter.format(item.snippet, title: title, maxChars: 360)
-        if !snippet.isEmpty {
+        let snippet = formatSnippet(item.snippet, title: title, maxChars: 420)
+        if isUsefulSnippet(snippet) {
             lines.append("Snippet: \(snippet)")
         }
         let titleLine = buildTitleLine(context: context)
@@ -187,33 +207,42 @@ struct SummaryInputBuilder {
         )
     }
 
-    private static func buildFromBlocks(context: ContextPack) -> SummaryInput {
+    private static func buildFromBlocks(context: ContextPack, goalPlan: GoalPlan) -> SummaryInput {
         var segments: [String] = []
         var usedBlocks = 0
         var usedPrimary = false
         var seen: Set<String> = []
+        let isDetail = goalPlan.intent == .itemSummary
 
+        let maxSentences = isDetail ? 8 : 12
         if let primary = context.observation.primary, isRelevant(primary: primary) {
             let normalized = TextUtils.normalizeWhitespace(primary.text)
             if !normalized.isEmpty {
-                let compacted = compactText(normalized)
-                if !compacted.isEmpty {
-                    segments.append(compacted)
-                    seen.insert(compacted.lowercased())
+                if !isPromotionalText(normalized) {
+                    let compacted = compactText(normalized, maxSentences: maxSentences)
+                    if !compacted.isEmpty {
+                        segments.append(compacted)
+                        seen.insert(compacted.lowercased())
+                    }
+                    usedPrimary = true
                 }
-                usedPrimary = true
             }
         }
 
-        for block in context.observation.blocks.prefix(20) {
-            if !isRelevant(block: block) {
+        let maxBlocks = isDetail ? 16 : 20
+        for block in context.observation.blocks.prefix(maxBlocks) {
+            if isDetail {
+                if !isRelevantDetail(block: block) {
+                    continue
+                }
+            } else if !isRelevant(block: block) {
                 continue
             }
             let normalized = TextUtils.normalizeWhitespace(block.text)
             if normalized.isEmpty {
                 continue
             }
-            let compacted = compactText(normalized)
+            let compacted = compactText(normalized, maxSentences: maxSentences)
             if compacted.isEmpty {
                 continue
             }
@@ -233,10 +262,15 @@ struct SummaryInputBuilder {
             }
         }
 
+        let outlineLines = buildOutlineLines(context: context)
         if segments.isEmpty {
-            let outlineLines = buildOutlineLines(context: context)
             if !outlineLines.isEmpty {
                 segments.append(outlineLines.joined(separator: "\n"))
+            }
+        } else if isDetail, !outlineLines.isEmpty {
+            let outlineText = outlineLines.joined(separator: "; ")
+            if !outlineText.isEmpty {
+                segments.insert("Outline: " + outlineText, at: 0)
             }
         }
 
@@ -247,23 +281,18 @@ struct SummaryInputBuilder {
         var textParts = [String]()
         if isLowSignalText(body) {
             reasons.append("low_signal_text")
-            if !titleLine.isEmpty {
-                textParts.append(titleLine)
-            } else {
-                textParts.append(body)
-            }
-        } else {
-            if !titleLine.isEmpty {
-                textParts.append(titleLine)
-            }
-            if !body.isEmpty {
-                textParts.append(body)
-            }
+        }
+        if !titleLine.isEmpty {
+            textParts.append(titleLine)
+        }
+        if !body.isEmpty {
+            textParts.append(body)
         }
         let text = textParts.joined(separator: "\n")
+        let maxChars = isDetail ? 7000 : 9000
         return SummaryInput(
             kind: .pageText,
-            text: TextUtils.truncate(text, maxChars: 9000),
+            text: TextUtils.truncate(text, maxChars: maxChars),
             usedItems: 0,
             usedBlocks: usedBlocks,
             usedComments: 0,
@@ -324,7 +353,7 @@ struct SummaryInputBuilder {
         return normalized.lowercased()
     }
 
-    private static func compactText(_ text: String) -> String {
+    private static func compactText(_ text: String, maxSentences: Int = 12) -> String {
         let sentences = TextUtils.splitSentences(text)
         guard !sentences.isEmpty else {
             return text
@@ -337,18 +366,184 @@ struct SummaryInputBuilder {
             if trimmed.isEmpty {
                 continue
             }
+            if isLowSignalSentence(trimmed) {
+                continue
+            }
+            if isUiHeavySentence(trimmed) {
+                continue
+            }
             let key = normalizeForMatch(trimmed)
             if key.isEmpty || seen.contains(key) {
                 continue
             }
             seen.insert(key)
             output.append(trimmed)
-            if output.count >= 12 {
+            if output.count >= maxSentences {
                 break
             }
         }
         let joined = output.joined(separator: " ")
         return collapseRepeatedTokens(joined)
+    }
+
+    private static func isLowSignalSentence(_ text: String) -> Bool {
+        let words = text.split(separator: " ")
+        let wordCount = words.count
+        if wordCount < 6 && text.count < 120 {
+            return true
+        }
+        let lowerWords = words.map { $0.lowercased() }
+        let uniqueCount = Set(lowerWords).count
+        let diversity = wordCount > 0 ? Double(uniqueCount) / Double(wordCount) : 0
+        if wordCount >= 12 && diversity < 0.4 {
+            return true
+        }
+        var letters = 0
+        var uppercase = 0
+        var digits = 0
+        var shortWords = 0
+        for word in words where word.count <= 2 {
+            shortWords += 1
+        }
+        for scalar in text.unicodeScalars {
+            if CharacterSet.letters.contains(scalar) {
+                letters += 1
+                if CharacterSet.uppercaseLetters.contains(scalar) {
+                    uppercase += 1
+                }
+            } else if CharacterSet.decimalDigits.contains(scalar) {
+                digits += 1
+            }
+        }
+        let total = letters + digits
+        if total == 0 {
+            return true
+        }
+        let upperRatio = letters > 0 ? Double(uppercase) / Double(letters) : 0
+        let digitRatio = Double(digits) / Double(total)
+        let shortRatio = wordCount > 0 ? Double(shortWords) / Double(wordCount) : 0
+        if wordCount < 60 {
+            if upperRatio > 0.6 || digitRatio > 0.45 || shortRatio > 0.45 {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func isUiHeavySentence(_ text: String) -> Bool {
+        if text.contains(".") || text.contains("?") || text.contains("!") {
+            return false
+        }
+        let words = text.split(separator: " ")
+        if words.count < 6 {
+            return false
+        }
+        if text.contains("|") || text.contains(">") || text.contains("/") {
+            return true
+        }
+        var shortWords = 0
+        for word in words where word.count <= 4 {
+            shortWords += 1
+        }
+        let shortRatio = Double(shortWords) / Double(words.count)
+        var letters = 0
+        var digits = 0
+        for scalar in text.unicodeScalars {
+            if CharacterSet.letters.contains(scalar) {
+                letters += 1
+            } else if CharacterSet.decimalDigits.contains(scalar) {
+                digits += 1
+            }
+        }
+        let total = letters + digits
+        let digitRatio = total > 0 ? Double(digits) / Double(total) : 0
+        if text.count < 140 && shortRatio >= 0.65 {
+            return true
+        }
+        if text.count < 140 && digitRatio > 0.45 {
+            return true
+        }
+        return false
+    }
+
+    private static func formatSnippet(_ snippet: String, title: String, maxChars: Int) -> String {
+        let expanded = SnippetFormatter.format(snippet, title: title, maxChars: maxChars * 2)
+        let cleaned = cleanSnippetSegments(expanded)
+        if cleaned.isEmpty {
+            return ""
+        }
+        return TextUtils.truncate(cleaned, maxChars: maxChars)
+    }
+
+    private static func cleanSnippetSegments(_ snippet: String) -> String {
+        let normalized = TextUtils.normalizeWhitespace(snippet)
+        if normalized.isEmpty {
+            return ""
+        }
+        let segments = normalized.split(separator: "|").map { segment in
+            segment.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty }
+        if segments.count <= 1 {
+            return normalized
+        }
+        var output: [String] = []
+        var seen: Set<String> = []
+        for segment in segments {
+            let cleaned = TextUtils.normalizeWhitespace(String(segment))
+            if cleaned.isEmpty {
+                continue
+            }
+            if isUiOnlySegment(cleaned) {
+                continue
+            }
+            if isLowSignalText(cleaned) && !containsDigit(cleaned) {
+                continue
+            }
+            let key = normalizeForMatch(cleaned)
+            if seen.contains(key) {
+                continue
+            }
+            seen.insert(key)
+            output.append(cleaned)
+        }
+        if output.isEmpty {
+            return normalized
+        }
+        return output.joined(separator: " | ")
+    }
+
+    private static func isUiOnlySegment(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let labels: Set<String> = [
+            "hide",
+            "reply",
+            "replies",
+            "share",
+            "save",
+            "bookmark",
+            "login",
+            "log in",
+            "sign in",
+            "sign up",
+            "signup",
+            "subscribe",
+            "view",
+            "more",
+            "next",
+            "prev",
+            "previous"
+        ]
+        if labels.contains(lower), !containsDigit(lower) {
+            return true
+        }
+        if lower.count <= 3 && !containsDigit(lower) {
+            return true
+        }
+        return false
+    }
+
+    private static func containsDigit(_ text: String) -> Bool {
+        return text.rangeOfCharacter(from: .decimalDigits) != nil
     }
 
     private static func collapseRepeatedTokens(_ text: String) -> String {
@@ -383,6 +578,38 @@ struct SummaryInputBuilder {
         return output.joined(separator: " ")
     }
 
+    private static func isUsefulSnippet(_ snippet: String) -> Bool {
+        let normalized = TextUtils.normalizeWhitespace(snippet)
+        if normalized.isEmpty {
+            return false
+        }
+        let words = normalized.split(separator: " ")
+        var letters = 0
+        var digits = 0
+        for scalar in normalized.unicodeScalars {
+            if CharacterSet.letters.contains(scalar) {
+                letters += 1
+            } else if CharacterSet.decimalDigits.contains(scalar) {
+                digits += 1
+            }
+        }
+        let total = letters + digits
+        if total == 0 {
+            return false
+        }
+        let digitRatio = Double(digits) / Double(total)
+        if digitRatio > 0.35 {
+            return false
+        }
+        if words.count >= 6 {
+            return !isLowSignalText(normalized)
+        }
+        if normalized.count >= 40 && digitRatio < 0.2 {
+            return true
+        }
+        return words.count >= 4 && digitRatio < 0.25
+    }
+
     private static func buildOutlineLines(context: ContextPack) -> [String] {
         var lines: [String] = []
         for item in context.observation.outline.prefix(12) {
@@ -393,9 +620,26 @@ struct SummaryInputBuilder {
             if text.isEmpty {
                 continue
             }
+            if !isUsefulOutlineText(text) {
+                continue
+            }
             lines.append(text)
         }
         return lines
+    }
+
+    private static func isUsefulOutlineText(_ text: String) -> Bool {
+        if isUiOnlySegment(text) {
+            return false
+        }
+        let words = text.split(separator: " ")
+        if words.count <= 2 && text.rangeOfCharacter(from: .decimalDigits) != nil {
+            return false
+        }
+        if words.count <= 2 && text.count < 16 {
+            return false
+        }
+        return true
     }
 
     private static func isRelevantOutline(item: ObservedOutlineItem) -> Bool {
@@ -447,6 +691,9 @@ struct SummaryInputBuilder {
         if block.linkDensity >= 0.4 && block.linkCount >= 10 {
             return false
         }
+        if block.linkCount >= 40 && block.linkDensity >= 0.15 {
+            return false
+        }
         if isLowSignalText(block.text) {
             return false
         }
@@ -468,10 +715,54 @@ struct SummaryInputBuilder {
         if primary.linkDensity >= 0.6 && primary.linkCount >= 6 {
             return false
         }
+        if primary.linkCount >= 40 && primary.linkDensity >= 0.15 {
+            return false
+        }
         if isLowSignalText(primary.text) {
             return false
         }
         return true
+    }
+
+    private static func isRelevantDetail(block: ObservedTextBlock) -> Bool {
+        if !isRelevant(block: block) {
+            return false
+        }
+        let textLength = block.text.count
+        if textLength < 60 {
+            return false
+        }
+        if block.linkDensity > 0.45 && block.linkCount >= 3 {
+            return false
+        }
+        return true
+    }
+
+    private static func isLowSignalSummaryInput(_ input: SummaryInput) -> Bool {
+        if input.accessLimited {
+            return true
+        }
+        if input.accessSignals.contains("low_signal_text") {
+            return true
+        }
+        if input.usedBlocks == 0 && !input.usedPrimary {
+            return true
+        }
+        let lines = input.text.split(separator: "\n").map { String($0) }
+        let body = lines.filter { !isMetadataLine($0) }.joined(separator: " ")
+        if body.isEmpty {
+            return true
+        }
+        return isLowSignalText(body)
+    }
+
+    private static func isMetadataLine(_ line: String) -> Bool {
+        return line.hasPrefix("Title:")
+            || line.hasPrefix("URL:")
+            || line.hasPrefix("Item count:")
+            || line.hasPrefix("Comment count:")
+            || line.hasPrefix("Authors")
+            || line.hasPrefix("Outline:")
     }
 
     private static func isLowSignalText(_ text: String) -> Bool {
@@ -520,6 +811,36 @@ struct SummaryInputBuilder {
             if upperRatio > 0.6 || digitRatio > 0.45 || shortRatio > 0.45 {
                 return true
             }
+        }
+        return false
+    }
+
+    private static func isPromotionalText(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let keywords = [
+            "buy",
+            "order",
+            "subscribe",
+            "sign up",
+            "signup",
+            "sign in",
+            "newsletter",
+            "trial",
+            "pricing",
+            "checkout",
+            "cart"
+        ]
+        var hits = 0
+        for keyword in keywords {
+            if lower.contains(keyword) {
+                hits += 1
+            }
+        }
+        if hits >= 2 {
+            return true
+        }
+        if hits >= 1 && lower.count < 220 {
+            return true
         }
         return false
     }

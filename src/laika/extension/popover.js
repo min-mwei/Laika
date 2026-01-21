@@ -22,6 +22,10 @@ var planValidator = window.LaikaPlanValidator || {
   }
 };
 
+var CHAT_HISTORY_KEY = "laika.chat.history.v1";
+var CHAT_HISTORY_LIMIT = 200;
+var chatHistory = [];
+
 var MAX_AGENT_STEPS = 6;
 var DEFAULT_OBSERVE_OPTIONS = {
   maxChars: 12000,
@@ -32,8 +36,21 @@ var DEFAULT_OBSERVE_OPTIONS = {
   maxOutlineChars: 180,
   maxItems: 30,
   maxItemChars: 240,
-  maxComments: 24,
+  maxComments: 28,
   maxCommentChars: 360
+};
+
+var DETAIL_OBSERVE_OPTIONS = {
+  maxChars: 18000,
+  maxElements: 180,
+  maxBlocks: 60,
+  maxPrimaryChars: 2400,
+  maxOutline: 120,
+  maxOutlineChars: 220,
+  maxItems: 36,
+  maxItemChars: 260,
+  maxComments: 32,
+  maxCommentChars: 420
 };
 
 function logDebug(text) {
@@ -115,10 +132,10 @@ async function loadMaxTokens() {
 
 function setStatus(text) {
   var output = text || "";
-  if (output.indexOf("Agent:") !== 0) {
-    output = output.replace(/^Status:/, "Agent:");
-    if (output.indexOf("Agent:") !== 0) {
-      output = "Agent: " + output;
+  if (output.indexOf("Status:") !== 0) {
+    output = output.replace(/^Agent:/, "Status:");
+    if (output.indexOf("Status:") !== 0) {
+      output = "Status: " + output;
     }
   }
   statusEl.textContent = output;
@@ -138,18 +155,106 @@ function labelForRole(role) {
   return role;
 }
 
-function appendMessage(role, text) {
+function generateHistoryId() {
+  return String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+}
+
+function saveChatHistory() {
+  try {
+    if (typeof sessionStorage === "undefined") {
+      return;
+    }
+    sessionStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(chatHistory));
+  } catch (error) {
+  }
+}
+
+function trimChatHistory() {
+  if (chatHistory.length <= CHAT_HISTORY_LIMIT) {
+    return;
+  }
+  chatHistory = chatHistory.slice(-CHAT_HISTORY_LIMIT);
+}
+
+function loadChatHistory() {
+  chatHistory = [];
+  try {
+    if (typeof sessionStorage === "undefined") {
+      return;
+    }
+    var raw = sessionStorage.getItem(CHAT_HISTORY_KEY);
+    if (!raw) {
+      return;
+    }
+    var parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return;
+    }
+    chatHistory = parsed.filter(function (entry) {
+      return entry && typeof entry.id === "string" && typeof entry.role === "string" && typeof entry.text === "string";
+    });
+    trimChatHistory();
+    for (var i = 0; i < chatHistory.length; i += 1) {
+      appendMessage(chatHistory[i].role, chatHistory[i].text, { save: false, historyId: chatHistory[i].id });
+    }
+  } catch (error) {
+    chatHistory = [];
+  }
+}
+
+function appendMessage(role, text, options) {
   var message = document.createElement("div");
   message.className = "message";
   var label = document.createElement("strong");
   label.textContent = labelForRole(role);
   var body = document.createElement("div");
-  body.textContent = text;
+  body.textContent = text || "";
   message.appendChild(label);
   message.appendChild(body);
+  var shouldSave = !(options && options.save === false);
+  if (shouldSave) {
+    var historyId = generateHistoryId();
+    message.setAttribute("data-history-id", historyId);
+    chatHistory.push({ id: historyId, role: role, text: body.textContent });
+    trimChatHistory();
+    saveChatHistory();
+  } else if (options && options.historyId) {
+    message.setAttribute("data-history-id", options.historyId);
+  }
   chatLog.appendChild(message);
   chatLog.scrollTop = chatLog.scrollHeight;
   return message;
+}
+
+function updateHistoryMessage(message, text) {
+  if (!message) {
+    return;
+  }
+  var historyId = message.getAttribute("data-history-id");
+  if (!historyId) {
+    return;
+  }
+  for (var i = chatHistory.length - 1; i >= 0; i -= 1) {
+    if (chatHistory[i].id === historyId) {
+      chatHistory[i].text = text || "";
+      saveChatHistory();
+      break;
+    }
+  }
+}
+
+function removeHistoryMessage(message) {
+  if (!message) {
+    return;
+  }
+  var historyId = message.getAttribute("data-history-id");
+  if (!historyId) {
+    return;
+  }
+  chatHistory = chatHistory.filter(function (entry) {
+    return entry.id !== historyId;
+  });
+  saveChatHistory();
 }
 
 function explainMissingContext() {
@@ -333,8 +438,13 @@ async function consumeSummaryStream(streamId) {
   }
   if (text.trim()) {
     lastAssistantSummary = text;
-  } else if (message && message.parentNode) {
-    message.parentNode.removeChild(message);
+    updateHistoryMessage(message, text);
+  } else if (message) {
+    var fallbackText = "No summary available.";
+    if (body) {
+      body.textContent = fallbackText;
+    }
+    updateHistoryMessage(message, fallbackText);
   }
   return text;
 }
@@ -539,6 +649,33 @@ function generateRunId() {
   return String(Date.now()) + "-" + Math.random().toString(16).slice(2);
 }
 
+function shouldUseDetailObservation(goal) {
+  var lower = String(goal || "").toLowerCase();
+  if (!lower) {
+    return false;
+  }
+  if (lower.length > 200) {
+    return true;
+  }
+  var hints = [
+    "detailed",
+    "detail",
+    "deep",
+    "comprehensive",
+    "full",
+    "everything",
+    "in depth",
+    "long summary",
+    "full summary"
+  ];
+  for (var i = 0; i < hints.length; i += 1) {
+    if (lower.indexOf(hints[i]) >= 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 sendButton.addEventListener("click", async function () {
   var goal = goalInput.value.trim();
   if (!goal) {
@@ -558,7 +695,7 @@ sendButton.addEventListener("click", async function () {
     var tabsContext = await listTabContext();
     var mode = "assist";
     var maxSteps = MAX_AGENT_STEPS;
-    var observeOptions = DEFAULT_OBSERVE_OPTIONS;
+    var observeOptions = shouldUseDetailObservation(goal) ? DETAIL_OBSERVE_OPTIONS : DEFAULT_OBSERVE_OPTIONS;
     var firstObservation = await observeWithRetries(observeOptions, null);
     lastObservation = firstObservation.observation;
     var tabIdForPlan = firstObservation.tabId;
@@ -713,6 +850,7 @@ sendButton.addEventListener("click", async function () {
   } catch (error) {
     isPanelWindow = false;
   }
+  loadChatHistory();
   loadMaxTokens();
   if (settingsButton) {
     settingsButton.addEventListener("click", openSettings);

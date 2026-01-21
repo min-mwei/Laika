@@ -54,6 +54,34 @@ Shortcut build script:
 3. Approve or reject any proposed actions inline in the chat.
 4. Use the Settings button in the header to choose left/right placement.
 
+## 5) Development + test process
+
+Follow this loop for any change:
+
+1. Update the relevant design doc (`src/laika/PLAN.md` or `docs/AIBrowser.md`).
+2. Implement and run local tests.
+3. Run the automation harness scenarios.
+4. Verify the build + logging, then ask for manual Safari testing.
+5. Review logs and incorporate user feedback.
+
+## 6) Automation harness
+
+Start the local plan server:
+
+```bash
+cd src/laika/app
+swift run LaikaServer --port 8765 --model-dir ../extension/lib/models/Qwen3-0.6B-MLX-4bit
+```
+
+Run scenarios (HN/BBC/WSJ):
+
+```bash
+cd src/laika/automation_harness
+node scripts/laika_harness.js --scenario scripts/scenarios/hn.json --output /tmp/laika-hn.json
+node scripts/laika_harness.js --scenario scripts/scenarios/bbc.json --output /tmp/laika-bbc.json
+node scripts/laika_harness.js --scenario scripts/scenarios/wsj.json --output /tmp/laika-wsj.json
+```
+
 ## Notes
 
 - Native messaging is used for JS -> Swift communication; no local HTTP server is required.

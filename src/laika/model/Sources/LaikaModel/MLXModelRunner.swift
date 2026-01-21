@@ -355,7 +355,7 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
 
     private func goalParseMaxTokens(goal: String) -> Int {
         let threshold = 140
-        let desired = goal.count > threshold ? 160 : 96
+        let desired = goal.count > threshold ? 128 : 72
         return min(maxTokens, desired)
     }
 
@@ -368,13 +368,13 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         let desired: Int
         switch goalPlan.intent {
         case .pageSummary:
-            desired = 320
+            desired = 256
         case .itemSummary, .commentSummary:
-            desired = 512
+            desired = 384
         case .action:
             desired = 256
         case .unknown:
-            desired = 384
+            desired = 320
         }
         return min(maxTokens, desired)
     }

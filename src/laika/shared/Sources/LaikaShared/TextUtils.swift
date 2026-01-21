@@ -73,23 +73,52 @@ public enum TextUtils {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
         let cleaned = lines.map { rawLine -> String in
             var line = String(rawLine)
+            line = line.replacingOccurrences(of: "```", with: "")
+            line = line.replacingOccurrences(of: "`", with: "")
             line = line.replacingOccurrences(of: "**", with: "")
             line = line.replacingOccurrences(of: "__", with: "")
-            line = line.replacingOccurrences(of: "`", with: "")
+            line = line.replacingOccurrences(of: "~~", with: "")
+            line = stripPairedDelimiter(line, delimiter: "*")
+            line = stripPairedDelimiter(line, delimiter: "_")
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let prefixes = ["- ", "* ", "• ", "– ", "# "]
+            if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+                return ""
+            }
+            if trimmed.hasPrefix("#") {
+                var idx = trimmed.startIndex
+                while idx < trimmed.endIndex && trimmed[idx] == "#" {
+                    idx = trimmed.index(after: idx)
+                }
+                line = trimmed[idx...].trimmingCharacters(in: .whitespaces)
+            }
+            var cleanedLine = line.trimmingCharacters(in: .whitespaces)
+            while cleanedLine.hasPrefix(">") {
+                cleanedLine = String(cleanedLine.dropFirst()).trimmingCharacters(in: .whitespaces)
+            }
+            line = cleanedLine
+            let prefixes = ["- ", "* ", "• ", "– ", "+ "]
             for prefix in prefixes {
-                if trimmed.hasPrefix(prefix) {
-                    line = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
-                    return line
+                if line.hasPrefix(prefix) {
+                    line = line.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+                    break
                 }
             }
-            if let stripped = stripNumericPrefix(trimmed) {
+            if let stripped = stripNumericPrefix(line) {
                 return stripped
             }
             return line
         }
         return cleaned.joined(separator: "\n")
+    }
+
+    private static func stripPairedDelimiter(_ text: String, delimiter: String) -> String {
+        let escaped = NSRegularExpression.escapedPattern(for: delimiter)
+        let pattern = escaped + "([^" + escaped + "\n]+)" + escaped
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return text
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1")
     }
 
     private static func stripNumericPrefix(_ line: String) -> String? {

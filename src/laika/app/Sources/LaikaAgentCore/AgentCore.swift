@@ -62,7 +62,7 @@ public final class AgentOrchestrator: @unchecked Sendable {
         if let planned = planSummaryTool(context: enrichedContext, goalPlan: goalPlan) {
             let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
             logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
-            logFinalSummary(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan, source: "planned_summary_tool")
+            logSummaryIntro(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan)
             return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan)
         }
 
@@ -141,13 +141,17 @@ public final class AgentOrchestrator: @unchecked Sendable {
         if let existing = context.goalPlan {
             return existing
         }
+        if let deterministic = deterministicGoalPlan(context: context, userGoal: userGoal) {
+            logGoalPlan(parsed: nil, resolved: deterministic, userGoal: userGoal, context: context, sourceOverride: "deterministic")
+            return deterministic
+        }
         do {
             let parsed = try await model.parseGoalPlan(context: context, userGoal: userGoal)
             let resolved = applyFallbackGoalPlan(parsed, context: context, userGoal: userGoal)
             logGoalPlan(parsed: parsed, resolved: resolved, userGoal: userGoal, context: context)
             return resolved
         } catch {
-            logGoalPlan(parsed: nil, resolved: GoalPlan.unknown, userGoal: userGoal, context: context)
+            logGoalPlan(parsed: nil, resolved: GoalPlan.unknown, userGoal: userGoal, context: context, sourceOverride: "parse_error")
             return GoalPlan.unknown
         }
     }
@@ -222,7 +226,13 @@ public final class AgentOrchestrator: @unchecked Sendable {
         return GoalPlan(intent: intent, itemIndex: itemIndex, itemQuery: itemQuery, wantsComments: wantsComments)
     }
 
-    private func logGoalPlan(parsed: GoalPlan?, resolved: GoalPlan, userGoal: String, context: ContextPack) {
+    private func logGoalPlan(
+        parsed: GoalPlan?,
+        resolved: GoalPlan,
+        userGoal: String,
+        context: ContextPack,
+        sourceOverride: String? = nil
+    ) {
         var payload: [String: JSONValue] = [
             "goal": .string(userGoal),
             "intent": .string(resolved.intent.rawValue),
@@ -239,7 +249,8 @@ public final class AgentOrchestrator: @unchecked Sendable {
             payload["itemQuery"] = .string(query)
         }
         let fallbackUsed = parsed.map { $0 != resolved } ?? true
-        payload["source"] = .string(fallbackUsed ? "fallback" : "model")
+        let source = sourceOverride ?? (fallbackUsed ? "fallback" : "model")
+        payload["source"] = .string(source)
         if let parsed, parsed != resolved {
             payload["parsedIntent"] = .string(parsed.intent.rawValue)
             if let parsedIndex = parsed.itemIndex {
@@ -259,6 +270,111 @@ public final class AgentOrchestrator: @unchecked Sendable {
             maxSteps: context.maxSteps,
             payload: payload
         )
+    }
+
+    private func deterministicGoalPlan(context: ContextPack, userGoal: String) -> GoalPlan? {
+        let normalized = normalizeForMatch(userGoal)
+        if normalized.isEmpty {
+            return nil
+        }
+        if looksLikeActionGoal(normalized) {
+            return nil
+        }
+        let wantsComments = extractWantsComments(from: userGoal)
+        let itemIndex = extractOrdinalIndex(from: userGoal)
+        let isPageSummary = isPageSummaryRequest(normalized)
+        if wantsComments {
+            if let index = itemIndex {
+                return GoalPlan(intent: .commentSummary, itemIndex: index, itemQuery: nil, wantsComments: true)
+            }
+            if isPageSummary {
+                return GoalPlan(intent: .commentSummary, itemIndex: nil, itemQuery: nil, wantsComments: true)
+            }
+            if normalized.count <= 90 {
+                return GoalPlan(intent: .commentSummary, itemIndex: nil, itemQuery: nil, wantsComments: true)
+            }
+        }
+        if let index = itemIndex {
+            let listLike = isListObservation(context) || !context.observation.items.isEmpty
+            if listLike && looksLikeItemSummaryGoal(normalized) {
+                return GoalPlan(intent: .itemSummary, itemIndex: index, itemQuery: nil, wantsComments: false)
+            }
+        }
+        if isPageSummary && itemIndex == nil {
+            return GoalPlan(intent: .pageSummary, itemIndex: nil, itemQuery: nil, wantsComments: false)
+        }
+        return nil
+    }
+
+    private func looksLikeActionGoal(_ normalized: String) -> Bool {
+        let hints = [
+            "open",
+            "click",
+            "go to",
+            "goto",
+            "visit",
+            "navigate",
+            "select",
+            "choose",
+            "scroll",
+            "reply",
+            "submit"
+        ]
+        for hint in hints where normalized.contains(hint) {
+            return true
+        }
+        return false
+    }
+
+    private func looksLikeItemSummaryGoal(_ normalized: String) -> Bool {
+        let hints = [
+            "about",
+            "tell me",
+            "describe",
+            "explain",
+            "summary",
+            "summarize",
+            "summarise",
+            "overview",
+            "topic",
+            "article",
+            "link",
+            "story",
+            "post",
+            "entry",
+            "subject",
+            "headline"
+        ]
+        for hint in hints where normalized.contains(hint) {
+            return true
+        }
+        return false
+    }
+
+    private func isPageSummaryRequest(_ normalized: String) -> Bool {
+        let summaryHints = [
+            "summarize",
+            "summarise",
+            "summary",
+            "overview",
+            "recap"
+        ]
+        for hint in summaryHints where normalized.contains(hint) {
+            return true
+        }
+        let pageHints = [
+            "this page",
+            "the page",
+            "page about",
+            "what is this page about",
+            "what is this site about",
+            "what is on this page",
+            "what's on this page"
+        ]
+        for hint in pageHints where normalized.contains(hint) {
+            return true
+        }
+        return false
     }
 
     private func logPlannedAction(planned: PlannedAction, actions: [AgentAction], context: ContextPack) {
@@ -296,6 +412,24 @@ public final class AgentOrchestrator: @unchecked Sendable {
         ]
         LaikaLogger.logAgentEvent(
             type: "agent.final_summary",
+            runId: context.runId,
+            step: context.step,
+            maxSteps: context.maxSteps,
+            payload: payload
+        )
+    }
+
+    private func logSummaryIntro(summary: String, context: ContextPack, goalPlan: GoalPlan) {
+        let preview = truncateForLog(summary, maxChars: 200)
+        let payload: [String: JSONValue] = [
+            "summaryPreview": .string(preview),
+            "intent": .string(goalPlan.intent.rawValue),
+            "wantsComments": .bool(goalPlan.wantsComments),
+            "mode": .string(context.mode.rawValue),
+            "source": .string("summary_tool_intro")
+        ]
+        LaikaLogger.logAgentEvent(
+            type: "agent.summary_tool_intro",
             runId: context.runId,
             step: context.step,
             maxSteps: context.maxSteps,

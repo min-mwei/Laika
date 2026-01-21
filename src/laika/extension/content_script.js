@@ -188,6 +188,135 @@
     return true;
   }
 
+  function hasContentAncestor(element) {
+    if (!element || !element.closest) {
+      return false;
+    }
+    return !!element.closest("article,main,[role=\"main\"],[itemprop=\"articleBody\"]");
+  }
+
+  function hasNoiseLabel(element) {
+    if (!element) {
+      return false;
+    }
+    var labels = [];
+    if (element.id) {
+      labels.push(element.id);
+    }
+    if (typeof element.className === "string" && element.className) {
+      labels.push(element.className);
+    }
+    if (element.getAttribute) {
+      var aria = element.getAttribute("aria-label");
+      if (aria) {
+        labels.push(aria);
+      }
+    }
+    if (labels.length === 0) {
+      return false;
+    }
+    var value = labels.join(" ").toLowerCase();
+    if (!value) {
+      return false;
+    }
+    var pattern = /(^|\b)(nav|menu|footer|header|sidebar|breadcrumb|cookie|consent|modal|overlay|popup|banner|subscribe|signup|signin|login|share|social|related|recommend|sponsor|sponsored|advert|promo|cta)(\b|$)/;
+    if (pattern.test(value)) {
+      return true;
+    }
+    if (/\bads?\b/.test(value) || value.indexOf("ad-") >= 0 || value.indexOf("ads-") >= 0) {
+      return true;
+    }
+    return false;
+  }
+
+  function hasNoiseAncestor(element) {
+    var current = element;
+    var depth = 0;
+    while (current && depth < 4) {
+      if (hasNoiseLabel(current)) {
+        return true;
+      }
+      current = current.parentElement;
+      depth += 1;
+    }
+    return false;
+  }
+
+  function isNoiseContainer(element) {
+    if (!element || !element.closest) {
+      return false;
+    }
+    if (element.closest("[aria-hidden=\"true\"],[aria-modal=\"true\"],[hidden]")) {
+      return true;
+    }
+    if (element.closest("dialog,[role=\"dialog\"],[role=\"alertdialog\"],[role=\"tooltip\"]")) {
+      return true;
+    }
+    if (element.closest("[role=\"navigation\"],[role=\"banner\"],[role=\"contentinfo\"],[role=\"menu\"],[role=\"search\"],[role=\"complementary\"],[role=\"tablist\"],[role=\"tab\"],[role=\"toolbar\"]")) {
+      return true;
+    }
+    if (element.closest("nav,menu,aside,form,address")) {
+      return true;
+    }
+    var headerFooter = element.closest("header,footer");
+    if (headerFooter && !hasContentAncestor(headerFooter)) {
+      return true;
+    }
+    if (hasNoiseAncestor(element)) {
+      return true;
+    }
+    return false;
+  }
+
+  function extractCleanText(element, maxChars) {
+    if (!element) {
+      return "";
+    }
+    var clone = element.cloneNode(true);
+    var removeSelectors = [
+      "nav",
+      "aside",
+      "menu",
+      "form",
+      "button",
+      "input",
+      "textarea",
+      "select",
+      "svg",
+      "img",
+      "script",
+      "style",
+      "noscript",
+      "dialog",
+      "[role=\"navigation\"]",
+      "[role=\"banner\"]",
+      "[role=\"contentinfo\"]",
+      "[role=\"menu\"]",
+      "[role=\"search\"]",
+      "[role=\"tablist\"]",
+      "[role=\"tab\"]",
+      "[role=\"toolbar\"]",
+      "[role=\"dialog\"]",
+      "[role=\"alertdialog\"]",
+      "[role=\"tooltip\"]",
+      "[aria-hidden=\"true\"]",
+      "[aria-modal=\"true\"]",
+      "[hidden]",
+      ".visually-hidden",
+      ".sr-only",
+      ".screen-reader-text"
+    ];
+    var removals = clone.querySelectorAll(removeSelectors.join(","));
+    for (var i = 0; i < removals.length; i += 1) {
+      removals[i].remove();
+    }
+    var text = utils.normalizeWhitespace(clone.innerText || "");
+    if (maxChars) {
+      text = utils.budgetText(text, maxChars);
+    }
+    return text;
+  }
+
   function applySidecarPlacement(container, side) {
     var placement = side === "left" ? "left" : "right";
     container.setAttribute("data-sidecar-side", placement);
@@ -267,6 +396,7 @@
       return "";
     }
     var visibilityCache = new WeakMap();
+    var noiseCache = new WeakMap();
     function isNodeVisible(node) {
       if (!node || !node.parentElement) {
         return false;
@@ -279,6 +409,18 @@
       visibilityCache.set(parent, visible);
       return visible;
     }
+    function shouldSkipNode(node) {
+      if (!node || !node.parentElement) {
+        return true;
+      }
+      var parent = node.parentElement;
+      if (noiseCache.has(parent)) {
+        return noiseCache.get(parent);
+      }
+      var skip = isNoiseContainer(parent);
+      noiseCache.set(parent, skip);
+      return skip;
+    }
 
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
     var chunks = [];
@@ -286,6 +428,9 @@
     var node;
     while ((node = walker.nextNode())) {
       if (!isNodeVisible(node)) {
+        continue;
+      }
+      if (shouldSkipNode(node)) {
         continue;
       }
       if (hasEditableAncestor(node.parentElement)) {
@@ -318,7 +463,7 @@
     if (!isTextContainerVisible(element)) {
       return false;
     }
-    if (element.closest && element.closest("nav,header,footer,aside,menu,address,form")) {
+    if (isNoiseContainer(element)) {
       return false;
     }
     var tagName = element.tagName ? element.tagName.toLowerCase() : "";
@@ -408,8 +553,15 @@
     var blocks = [];
     var seen = new Set();
     var order = 0;
+    var firstHeadingOrder = null;
     nodes.forEach(function (element) {
       order += 1;
+      var tagName = element.tagName ? element.tagName.toLowerCase() : "";
+      if (!firstHeadingOrder && (tagName === "h1" || tagName === "h2")) {
+        if (isTextContainerVisible(element) && !hasEditableAncestor(element)) {
+          firstHeadingOrder = order;
+        }
+      }
       if (!isBlockCandidate(element)) {
         return;
       }
@@ -417,8 +569,13 @@
       if (!rawText || rawText.length < 30) {
         return;
       }
+      if (rawText.length > 120) {
+        var cleanedText = extractCleanText(element, 1800);
+        if (cleanedText && cleanedText.length >= 30) {
+          rawText = cleanedText;
+        }
+      }
       if (rawText.length > 900) {
-        var tagName = element.tagName ? element.tagName.toLowerCase() : "";
         if (tagName === "div" || tagName === "section") {
           return;
         }
@@ -433,7 +590,7 @@
         return;
       }
       seen.add(key);
-      var tag = element.tagName ? element.tagName.toLowerCase() : "";
+      var tag = tagName;
       var role = element.getAttribute("role") || "";
       var handleId = ensureHandle(element) || "";
       var quality = textQualityScore(rawText);
@@ -460,6 +617,30 @@
       return b.score - a.score;
     });
     var primaryCandidate = blocks[0];
+    var orderedBlocks = blocks.slice().sort(function (a, b) {
+      return a.order - b.order;
+    });
+    var headingCandidate = null;
+    if (firstHeadingOrder) {
+      headingCandidate = orderedBlocks.find(function (block) {
+        return block.order > firstHeadingOrder && block.text.length >= 120 && block.linkDensity <= 0.4;
+      });
+    }
+    var mainCandidate = orderedBlocks.find(function (block) {
+      return block.tag === "article" || block.tag === "main";
+    });
+    if (headingCandidate) {
+      primaryCandidate = headingCandidate;
+    } else if (mainCandidate) {
+      primaryCandidate = mainCandidate;
+    } else {
+      var earlyCandidate = orderedBlocks.find(function (block) {
+        return block.text.length >= 120 && block.linkDensity <= 0.4;
+      });
+      if (earlyCandidate) {
+        primaryCandidate = earlyCandidate;
+      }
+    }
     var primary = {
       tag: primaryCandidate.tag,
       role: primaryCandidate.role,
@@ -590,8 +771,53 @@
       if (trimmed === "just now") {
         return true;
       }
-      var timePattern = /^\d+\s+(min|mins|minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s+ago$/;
-      return timePattern.test(trimmed);
+      if (/^\d{1,2}:\d{2}$/.test(trimmed)) {
+        return true;
+      }
+      var agoPattern = /^\d+\s+(min|mins|minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s+ago$/;
+      if (agoPattern.test(trimmed)) {
+        return true;
+      }
+      var shortPattern = /^\d+\s*(s|sec|secs|m|min|mins|h|hr|hrs|d|w|wk|wks|mo|yr)s?$/;
+      return shortPattern.test(trimmed);
+    }
+
+    function looksLikeMetaLabel(text) {
+      var trimmed = String(text || "").trim().toLowerCase();
+      if (!trimmed) {
+        return false;
+      }
+      if (trimmed.length <= 3) {
+        return true;
+      }
+      if (trimmed.length <= 5 && /\d/.test(trimmed)) {
+        return true;
+      }
+      var uiLabels = [
+        "more",
+        "next",
+        "prev",
+        "previous",
+        "reply",
+        "replies",
+        "share",
+        "hide",
+        "login",
+        "log in",
+        "sign in",
+        "sign up",
+        "signup",
+        "subscribe",
+        "save",
+        "bookmark",
+        "view"
+      ];
+      for (var i = 0; i < uiLabels.length; i += 1) {
+        if (trimmed === uiLabels[i]) {
+          return true;
+        }
+      }
+      return false;
     }
 
     function containsDigit(text) {
@@ -632,17 +858,36 @@
       if (!rawText || rawText.length < 20) {
         return;
       }
+      var cleanedText = rawText;
+      if (rawText.length > 120) {
+        var cleanedCandidate = extractCleanText(element, maxChars * 2);
+        if (cleanedCandidate && cleanedCandidate.length >= 20) {
+          cleanedText = cleanedCandidate;
+        }
+      }
+      var stats = linkStatsForElement(element, cleanedText.length);
+      if (stats.count > 120) {
+        return;
+      }
+      if (stats.count > 60 && stats.density > 0.4) {
+        return;
+      }
       var bestAnchor = null;
       var bestScore = -1;
       var bestTextLength = 0;
       var linkCandidates = [];
       var linkSeen = new Set();
+      var anchorLengths = [];
       var siblingMetaText = "";
       for (var i = 0; i < anchors.length; i += 1) {
         var anchorText = utils.normalizeWhitespace(anchors[i].innerText);
         var anchorUrl = getHref(anchors[i]);
         if (!anchorText || anchorText.length < 2 || !anchorUrl) {
           continue;
+        }
+        var isMetaAnchor = looksLikeTimeLabel(anchorText) || looksLikeMetaLabel(anchorText) || looksLikeDomainLabel(anchorText);
+        if (!isMetaAnchor && !isCommentLinkCandidate(anchorText, anchorUrl)) {
+          anchorLengths.push(anchorText.length);
         }
         var anchorHost = hostForURL(anchorUrl);
         var score = anchorText.length;
@@ -655,7 +900,17 @@
         if (looksLikeDomainLabel(anchorText)) {
           score -= 20;
         }
+        if (looksLikeTimeLabel(anchorText)) {
+          score -= 60;
+        }
+        if (looksLikeMetaLabel(anchorText)) {
+          score -= 50;
+        }
         var isCommentLink = isCommentLinkCandidate(anchorText, anchorUrl);
+        if (isCommentLink) {
+          score -= 40;
+        }
+        score += Math.round(textQualityScore(anchorText) * 15);
         if (linkCandidates.length < maxLinksPerItem || isCommentLink) {
           var linkKey = (anchorText + "|" + anchorUrl).toLowerCase();
           if (!linkSeen.has(linkKey)) {
@@ -724,11 +979,21 @@
       if (!bestAnchor) {
         return;
       }
+      var strongThreshold = Math.max(24, Math.round(bestTextLength * 0.55));
+      var strongAnchorCount = 0;
+      for (var m = 0; m < anchorLengths.length; m += 1) {
+        if (anchorLengths[m] >= strongThreshold) {
+          strongAnchorCount += 1;
+        }
+      }
       var title = utils.normalizeWhitespace(bestAnchor.innerText);
       if (!title || title.length < 4) {
         return;
       }
       if (looksLikeTimeLabel(title)) {
+        return;
+      }
+      if (looksLikeMetaLabel(title)) {
         return;
       }
       if (title.length <= 12 && digitRatio(title) > 0.4) {
@@ -741,7 +1006,7 @@
       if (!url) {
         return;
       }
-      var textLength = rawText.length;
+      var textLength = cleanedText.length;
       var bestHost = hostForURL(url);
       if (bestHost && originHost && bestHost === originHost) {
         if (bestTextLength <= 12 && textLength <= 80 && linkCandidates.length >= 2) {
@@ -758,11 +1023,13 @@
       if (bestTextLength <= 12 && textLength >= 60 && anchorShare < 0.2 && linkCandidates.length >= 3) {
         return;
       }
-      var stats = linkStatsForElement(element, rawText.length);
-      if (stats.density > 0.7 && rawText.length < 200 && anchorShare < 0.5) {
+      if (strongAnchorCount >= 2 && textLength < 500) {
         return;
       }
-      var snippetText = rawText;
+      if (stats.density > 0.7 && cleanedText.length < 200 && anchorShare < 0.5) {
+        return;
+      }
+      var snippetText = cleanedText;
       if (siblingMetaText) {
         var normalizedSnippet = snippetText.toLowerCase();
         var normalizedSibling = siblingMetaText.toLowerCase();
@@ -807,6 +1074,51 @@
         links: item.links
       };
     });
+  }
+
+  function pickContentRoot(root) {
+    if (!root || !root.querySelectorAll) {
+      return null;
+    }
+    var candidates = Array.from(root.querySelectorAll("main,article,[role=\"main\"],[itemprop=\"articleBody\"]"));
+    if (candidates.length === 0) {
+      return null;
+    }
+    var bodyText = utils.normalizeWhitespace(root.innerText || "");
+    var bodyLength = bodyText.length;
+    var best = null;
+    var bestScore = 0;
+    var bestLength = 0;
+    candidates.forEach(function (candidate) {
+      if (!candidate || !isTextContainerVisible(candidate) || hasEditableAncestor(candidate)) {
+        return;
+      }
+      if (isNoiseContainer(candidate)) {
+        return;
+      }
+      var text = utils.normalizeWhitespace(candidate.innerText || "");
+      if (!text || text.length < 400) {
+        return;
+      }
+      var stats = linkStatsForElement(candidate, text.length);
+      var quality = textQualityScore(text);
+      var score = text.length * (1 - stats.density) * quality;
+      if (score > bestScore) {
+        bestScore = score;
+        best = candidate;
+        bestLength = text.length;
+      }
+    });
+    if (!best) {
+      return null;
+    }
+    if (bodyLength > 0) {
+      var ratio = bestLength / bodyLength;
+      if (bestLength < 600 && ratio < 0.25) {
+        return null;
+      }
+    }
+    return best;
   }
 
   function hasCommentHint(element) {
@@ -1015,6 +1327,21 @@
     return text;
   }
 
+  function isLikelyAuthorLabel(text) {
+    var normalized = utils.normalizeWhitespace(text || "");
+    if (!normalized) {
+      return false;
+    }
+    if (normalized.length > 40) {
+      return false;
+    }
+    var words = normalized.split(" ");
+    if (words.length > 3) {
+      return false;
+    }
+    return true;
+  }
+
   function collectComments(root, maxComments, maxChars) {
     if (!root || maxComments <= 0) {
       return [];
@@ -1095,6 +1422,9 @@
         "a[href*=\"user\"]",
         "a[href*=\"profile\"]"
       ], 80);
+      if (!isLikelyAuthorLabel(author)) {
+        author = "";
+      }
       var age = findMetaText(container, [
         "time",
         "[datetime]",
@@ -1142,6 +1472,13 @@
         root = target;
       }
     }
+    var textRoot = root;
+    if (!options || !options.rootHandleId) {
+      var contentRoot = pickContentRoot(root);
+      if (contentRoot) {
+        textRoot = contentRoot;
+      }
+    }
     var elements = Array.from((root || document).querySelectorAll("a, button, input, textarea, select"));
     var projected = elements
       .map(function (element) {
@@ -1170,13 +1507,13 @@
     });
     var limited = projected.slice(0, maxElements);
 
-    var text = collectVisibleText(root, maxChars);
-    var blockResult = collectTextBlocks(root, maxBlocks, maxPrimaryChars);
+    var text = collectVisibleText(textRoot, maxChars);
+    var blockResult = collectTextBlocks(textRoot, maxBlocks, maxPrimaryChars);
     var blocks = blockResult.blocks;
     var primary = blockResult.primary;
-    var outline = collectOutline(root, maxOutline, maxOutlineChars);
-    var items = collectItems(root, maxItems, maxItemChars);
-    var comments = collectComments(root, maxComments, maxCommentChars);
+    var outline = collectOutline(textRoot, maxOutline, maxOutlineChars);
+    var items = collectItems(textRoot, maxItems, maxItemChars);
+    var comments = collectComments(textRoot, maxComments, maxCommentChars);
     return {
       url: window.location.href,
       title: document.title || "",

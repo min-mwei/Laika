@@ -150,5 +150,12 @@ actor SummaryStreamManager {
             maxSteps: metadata.maxSteps,
             payload: payload
         )
+        LaikaLogger.logAgentEvent(
+            type: "agent.final_summary",
+            runId: metadata.runId,
+            step: metadata.step,
+            maxSteps: metadata.maxSteps,
+            payload: payload
+        )
     }
 }

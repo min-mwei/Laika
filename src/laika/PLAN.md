@@ -37,6 +37,19 @@ Purpose: validate the design with a thin slice that combines a simple agent UI i
   - prompt contract: tool-only JSON; no free-form actions
   - output validation + retry on invalid JSON
 
+## Summary tool architecture (read-only)
+- Use `content.summarize` for page/topic/comment summaries; keep planning focused on navigation.
+- Build a structured `SummaryInput` from observations (items, primary, blocks, comments, outline).
+- Use a dedicated summary prompt with non-thinking mode and strict formatting rules.
+- Validate grounding against anchors (titles/snippets/comments); fall back to extractive summary when ungrounded.
+- Stream summary tokens to the UI and replace with a fallback when validation fails.
+- Log summary streams as the user-visible final summary (avoid logging tool intro text as the final output).
+- For low-signal or gated pages, return a limited-content response without speculation.
+
+## Goal parsing (fast path)
+- Use deterministic intent parsing for clear summary/comment requests (page summary, item ordinal + summary, comments).
+- Only call the goal-parse LLM for longer or ambiguous prompts to keep latency low.
+
 ## Implementation steps
 1. Repo scaffolding
    - Create `src/laika` with Swift and extension project structure.

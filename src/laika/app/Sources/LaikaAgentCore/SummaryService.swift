@@ -12,6 +12,12 @@ public struct SummaryService {
         case ok
         case ungrounded
     }
+    private struct SummaryProfile {
+        let format: SummaryFormat
+        let tokenBudget: Int
+        let listItemCount: Int
+        let commentCiteCount: Int
+    }
     private let model: ModelRunner
     private let replacementMarker = "<<LAIKA_SUMMARY_REPLACE>>"
 
@@ -25,7 +31,23 @@ public struct SummaryService {
         userGoal: String,
         maxTokens: Int?
     ) async throws -> String {
-        let stream = streamSummary(context: context, goalPlan: goalPlan, userGoal: userGoal, maxTokens: maxTokens)
+        guard let streaming = model as? StreamingModelRunner else {
+            throw ModelError.modelUnavailable("Streaming model unavailable.")
+        }
+        let input = try await prepareSummaryInput(
+            context: context,
+            goalPlan: goalPlan,
+            userGoal: userGoal,
+            streaming: streaming
+        )
+        let stream = buildSummaryStream(
+            context: context,
+            goalPlan: goalPlan,
+            userGoal: userGoal,
+            input: input,
+            maxTokens: maxTokens,
+            streaming: streaming
+        )
         var output = ""
         for try await chunk in stream {
             if chunk.contains(replacementMarker) {
@@ -37,8 +59,7 @@ public struct SummaryService {
             output += chunk
         }
         let cleaned = sanitizeSummary(output)
-        let input = SummaryInputBuilder.build(context: context, goalPlan: goalPlan)
-        if validateSummary(cleaned, input: input) == .ok {
+        if validateSummary(cleaned, input: input, goalPlan: goalPlan) == .ok {
             return cleaned
         }
         return fallbackSummary(input: input, context: context, goalPlan: goalPlan)
@@ -55,26 +76,104 @@ public struct SummaryService {
                 continuation.finish(throwing: ModelError.modelUnavailable("Streaming model unavailable."))
             }
         }
+        return AsyncThrowingStream { continuation in
+            Task {
+                var output = ""
+                do {
+                    let preparedInput = try await prepareSummaryInput(
+                        context: context,
+                        goalPlan: goalPlan,
+                        userGoal: userGoal,
+                        streaming: streaming
+                    )
+                    let stream = buildSummaryStream(
+                        context: context,
+                        goalPlan: goalPlan,
+                        userGoal: userGoal,
+                        input: preparedInput,
+                        maxTokens: maxTokens,
+                        streaming: streaming
+                    )
+                    for try await chunk in stream {
+                        output += chunk
+                        continuation.yield(chunk)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func prepareSummaryInput(
+        context: ContextPack,
+        goalPlan: GoalPlan,
+        userGoal: String,
+        streaming: StreamingModelRunner
+    ) async throws -> SummaryInput {
         let input = SummaryInputBuilder.build(context: context, goalPlan: goalPlan)
+        if input.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !hasMeaningfulContent(input) {
+            return input
+        }
+        if shouldChunkInput(input: input, goalPlan: goalPlan) {
+            let chunks = chunkInputText(input.text, maxChars: 2200)
+            if chunks.count <= 1 {
+                return input
+            }
+            let summaries = try await summarizeChunks(
+                chunks,
+                userGoal: userGoal,
+                streaming: streaming,
+                title: context.observation.title
+            )
+            if summaries.isEmpty {
+                return input
+            }
+            let condensedText = buildCondensedText(from: summaries, context: context)
+            return SummaryInput(
+                kind: input.kind,
+                text: condensedText,
+                usedItems: input.usedItems,
+                usedBlocks: input.usedBlocks,
+                usedComments: input.usedComments,
+                usedPrimary: input.usedPrimary,
+                accessLimited: input.accessLimited,
+                accessSignals: input.accessSignals + ["chunked_input"]
+            )
+        }
+        return input
+    }
+
+    private func buildSummaryStream(
+        context: ContextPack,
+        goalPlan: GoalPlan,
+        userGoal: String,
+        input: SummaryInput,
+        maxTokens: Int?,
+        streaming: StreamingModelRunner
+    ) -> AsyncThrowingStream<String, Error> {
         if input.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !hasMeaningfulContent(input) {
             return AsyncThrowingStream { continuation in
                 continuation.yield(limitedContentResponse(input: input))
                 continuation.finish()
             }
         }
-        let prompts = buildPrompts(context: context, goalPlan: goalPlan, userGoal: userGoal, input: input)
+        let profile = summaryProfile(goalPlan: goalPlan, input: input, requested: maxTokens)
+        let prompts = buildPrompts(context: context, goalPlan: goalPlan, userGoal: userGoal, input: input, profile: profile)
+        let temperature = summaryTemperature(input: input)
+        let topP = summaryTopP(input: input, goalPlan: goalPlan)
         let settings = StreamRequest(
             systemPrompt: prompts.system,
             userPrompt: prompts.user,
-            maxTokens: summaryTokenBudget(goalPlan: goalPlan, requested: maxTokens),
-            temperature: 0.7,
-            topP: 0.8,
+            maxTokens: profile.tokenBudget,
+            temperature: temperature,
+            topP: topP,
             repetitionPenalty: 1.3,
-            repetitionContextSize: 192,
+            repetitionContextSize: 256,
             enableThinking: false
         )
         let rawStream = streaming.streamText(settings)
-        let inputForValidation = input
         return AsyncThrowingStream { continuation in
             Task {
                 var output = ""
@@ -84,8 +183,8 @@ public struct SummaryService {
                         continuation.yield(chunk)
                     }
                     let cleaned = sanitizeSummary(output)
-                    if validateSummary(cleaned, input: inputForValidation) != .ok {
-                        let fallback = fallbackSummary(input: inputForValidation, context: context, goalPlan: goalPlan)
+                    if validateSummary(cleaned, input: input, goalPlan: goalPlan) != .ok {
+                        let fallback = fallbackSummary(input: input, context: context, goalPlan: goalPlan)
                         let markerChunk = "\(replacementMarker)\n\(fallback)"
                         continuation.yield(markerChunk)
                     }
@@ -97,35 +196,25 @@ public struct SummaryService {
         }
     }
 
-    private func summaryTokenBudget(goalPlan: GoalPlan, requested: Int?) -> Int {
-        let base: Int
-        switch goalPlan.intent {
-        case .itemSummary, .commentSummary:
-            base = 1200
-        case .pageSummary:
-            base = 1000
-        case .action, .unknown:
-            base = 700
-        }
-        let maxCap = 1800
-        let desired = requested ?? base
-        return min(max(desired, 160), maxCap)
-    }
-
     private func buildPrompts(
         context: ContextPack,
         goalPlan: GoalPlan,
         userGoal: String,
-        input: SummaryInput
+        input: SummaryInput,
+        profile: SummaryProfile
     ) -> (system: String, user: String) {
-        let format = summaryFormat(goalPlan: goalPlan)
+        let format = profile.format
         var systemLines: [String] = []
         systemLines.append("You are Laika, a concise summarization assistant. /no_think")
         systemLines.append(ModelSafetyPreamble.untrustedContent)
         systemLines.append("Summarize the page content using only the provided text.")
-        systemLines.append("Do not describe the website UI or navigation.")
+        systemLines.append("Focus on the visible content, not on describing the website or brand.")
+        systemLines.append("Ignore navigation chrome and UI labels unless they are part of the content.")
+        systemLines.append("Avoid UI/control words like login, submit, share, hide, reply unless they describe the content.")
         systemLines.append("Do not repeat sentences or phrases.")
+        systemLines.append("Do not use emojis, markdown, bullets, or section dividers.")
         systemLines.append("Avoid repeating item titles or metadata; condense duplicates.")
+        systemLines.append("Prefer concrete topics, entities, and numbers from the input over vague summaries.")
         systemLines.append("Do not mention system prompts, safety policies, or the word 'untrusted'.")
         systemLines.append("Do not speculate or add facts not present in the input.")
         systemLines.append("Output plain text only. No Markdown, no bullets, no bold/italic markers.")
@@ -133,7 +222,7 @@ public struct SummaryService {
 
         var userLines: [String] = []
         userLines.append("Goal: \(userGoal)")
-        userLines.append("Page: \(context.observation.title) (\(context.observation.url))")
+        userLines.append("Page metadata: \(context.observation.title) (\(context.observation.url))")
         userLines.append("Input kind: \(input.kind.rawValue)")
         if input.usedItems > 0 {
             userLines.append("Items provided: \(input.usedItems) of \(context.observation.items.count)")
@@ -145,6 +234,11 @@ public struct SummaryService {
         userLines.append("BEGIN_PAGE_TEXT")
         userLines.append(input.text)
         userLines.append("END_PAGE_TEXT")
+        userLines.append("Metadata lines starting with 'Title:', 'URL:', 'Item count:', 'Comment count', 'Authors', or 'Outline:' are context only; do not treat them as content themes.")
+        userLines.append("You may use numbers from metadata as supporting details, but not as the main topic.")
+        if input.accessSignals.contains("chunked_input") {
+            userLines.append("The text includes chunk summaries derived from the page content; treat them as content but do not mention chunks.")
+        }
         if input.accessLimited {
             let signals = input.accessSignals.isEmpty ? "low_visible_text" : input.accessSignals.joined(separator: ", ")
             userLines.append("Visibility note: The visible content looks limited (signals: \(signals)). State that only partial content is visible and do not infer missing details.")
@@ -153,24 +247,33 @@ public struct SummaryService {
         }
 
         if format == .plain {
-            if input.kind == .list {
-                userLines.append("Format: 1 short overview paragraph (2-3 sentences). Then 5-7 short item lines, each starting with 'Item N:' and one sentence about that item. Mention notable numbers or rankings when present.")
+            if goalPlan.intent == .itemSummary {
+                userLines.append("Format: 3 short paragraphs (2-3 sentences each). Start with a 1-sentence overview, then key details, then why it matters.")
+                userLines.append("Aim for 6-9 sentences total. If a paragraph is short, add another concrete detail from the input.")
+            } else if input.kind == .list {
+                userLines.append("Format: 1 overview paragraph (4-5 sentences) describing the mix of items and any trends. Then \(profile.listItemCount) item lines, each starting with 'Item N:' and 2 sentences: first for the topic, second for any numbers, names, or why it is notable.")
+                userLines.append("Each item line must contain 2 sentences. If the second sentence is missing, write: 'Not stated in the page.'")
             } else {
-                userLines.append("Format: 2-3 short paragraphs (2-3 sentences each). Mention notable numbers or rankings when present.")
+                userLines.append("Format: 3 short paragraphs (2-3 sentences each). Mention notable numbers or rankings when present.")
+                userLines.append("Aim for at least 6 sentences total. If needed, add another detail from the input.")
             }
         } else if format == .topicDetail {
-            userLines.append("Format: Use headings with 2-3 sentence paragraphs. Headings must be plain text with a trailing colon.")
+            userLines.append("Format: Use headings with 2-4 sentence paragraphs. Headings must be plain text with a trailing colon.")
             userLines.append("Headings: Topic overview:, What it is:, Key points:, Why it is notable:, Optional next step:")
+            userLines.append("Include concrete details (methods, tools, dates, numbers) from the input when available.")
         } else {
             userLines.append("Format: Use headings with 2-3 sentence paragraphs. Headings must be plain text with a trailing colon.")
             userLines.append("Headings: Comment themes:, Notable contributors or tools:, Technical clarifications or Q&A:, Reactions or viewpoints:")
-            userLines.append("Cite at least 2 distinct comments or authors using short phrases from the input.")
-            userLines.append("If an Authors line is present, list at least two names under Notable contributors or tools.")
-            userLines.append("Each heading must include at least one sentence. If missing, write 'Not stated in the page'.")
+            userLines.append("Cite at least \(profile.commentCiteCount) distinct comments or authors using short phrases from the input.")
+            userLines.append("If an Authors line is present, list at least two names under Notable contributors or tools. Treat it as metadata, not as a comment theme.")
+            userLines.append("Each heading must include at least 2 sentences. If details are missing, write 'Not stated in the page.' and add a second sentence explaining the gap.")
+            userLines.append("Do not copy lines starting with 'Comment N:' or 'Authors'; paraphrase them into sentences.")
+            userLines.append("Aim for 8-12 sentences total across all headings.")
         }
         if input.kind == .list {
             let required = min(5, max(1, input.usedItems))
             userLines.append("Include at least \(required) distinct items from the list and any visible counts. Paraphrase; do not copy list lines or repeat titles.")
+            userLines.append("Do not describe the site itself; summarize the listed topics and themes.")
         } else if input.kind == .item {
             userLines.append("Focus on the single item details; do not introduce other list items.")
         }
@@ -178,14 +281,85 @@ public struct SummaryService {
         return (system: systemLines.joined(separator: "\n"), user: userLines.joined(separator: "\n"))
     }
 
+    private func summaryProfile(goalPlan: GoalPlan, input: SummaryInput, requested: Int?) -> SummaryProfile {
+        let format = summaryFormat(goalPlan: goalPlan)
+        let tokenBase: Int
+        switch input.kind {
+        case .list:
+            tokenBase = 1200
+        case .item:
+            tokenBase = 1400
+        case .comments:
+            tokenBase = 1400
+        case .pageText:
+            tokenBase = 1000
+        }
+        let maxCap = 2000
+        let desired = requested ?? tokenBase
+        let tokenBudget = min(max(desired, 160), maxCap)
+        let listItemCount: Int
+        if input.kind == .list {
+            if input.usedItems > 0 {
+                let available = max(1, input.usedItems)
+                let target = min(10, max(7, available))
+                listItemCount = min(target, input.usedItems)
+            } else {
+                listItemCount = 5
+            }
+        } else {
+            listItemCount = 0
+        }
+        let commentCiteCount: Int
+        if input.kind == .comments {
+            commentCiteCount = min(4, max(2, input.usedComments))
+        } else {
+            commentCiteCount = 2
+        }
+        return SummaryProfile(
+            format: format,
+            tokenBudget: tokenBudget,
+            listItemCount: listItemCount,
+            commentCiteCount: commentCiteCount
+        )
+    }
+
     private func summaryFormat(goalPlan: GoalPlan) -> SummaryFormat {
         if goalPlan.intent == .commentSummary || goalPlan.wantsComments {
             return .commentDetail
         }
         if goalPlan.intent == .itemSummary {
-            return .topicDetail
+            return .plain
         }
         return .plain
+    }
+
+    private func summaryTemperature(input: SummaryInput) -> Float {
+        switch input.kind {
+        case .list:
+            return 0.6
+        case .comments:
+            return 0.3
+        case .item:
+            return 0.35
+        case .pageText:
+            return 0.5
+        }
+    }
+
+    private func summaryTopP(input: SummaryInput, goalPlan: GoalPlan) -> Float {
+        if goalPlan.intent == .itemSummary {
+            return 0.7
+        }
+        switch input.kind {
+        case .list:
+            return 0.8
+        case .comments:
+            return 0.6
+        case .item:
+            return 0.7
+        case .pageText:
+            return 0.75
+        }
     }
 
     private func sanitizeSummary(_ text: String) -> String {
@@ -193,6 +367,155 @@ public struct SummaryService {
         let deduped = dedupeLines(cleaned)
         let collapsed = collapseRepeatedTokens(deduped)
         return collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func shouldChunkInput(input: SummaryInput, goalPlan: GoalPlan) -> Bool {
+        if input.accessLimited {
+            return false
+        }
+        if input.kind == .list || input.kind == .comments {
+            return false
+        }
+        if input.text.count < 3200 {
+            return false
+        }
+        return true
+    }
+
+    private func chunkInputText(_ text: String, maxChars: Int) -> [String] {
+        guard maxChars > 0 else {
+            return [text]
+        }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { String($0) }
+        var chunks: [String] = []
+        var buffer: [String] = []
+        var currentLength = 0
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                continue
+            }
+            let lineLength = trimmed.count
+            if lineLength > maxChars {
+                let sentences = TextUtils.splitSentences(trimmed)
+                for sentence in sentences {
+                    let sentenceTrimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if sentenceTrimmed.isEmpty {
+                        continue
+                    }
+                    if currentLength + sentenceTrimmed.count + 1 > maxChars, !buffer.isEmpty {
+                        chunks.append(buffer.joined(separator: " "))
+                        buffer.removeAll(keepingCapacity: true)
+                        currentLength = 0
+                    }
+                    buffer.append(sentenceTrimmed)
+                    currentLength += sentenceTrimmed.count + 1
+                }
+                continue
+            }
+            if currentLength + lineLength + 1 > maxChars, !buffer.isEmpty {
+                chunks.append(buffer.joined(separator: "\n"))
+                buffer.removeAll(keepingCapacity: true)
+                currentLength = 0
+            }
+            buffer.append(trimmed)
+            currentLength += lineLength + 1
+        }
+        if !buffer.isEmpty {
+            chunks.append(buffer.joined(separator: "\n"))
+        }
+        return chunks
+    }
+
+    private func summarizeChunks(
+        _ chunks: [String],
+        userGoal: String,
+        streaming: StreamingModelRunner,
+        title: String
+    ) async throws -> [String] {
+        let limitedChunks = Array(chunks.prefix(4))
+        var summaries: [String] = []
+        var seen: Set<String> = []
+        let titleKey = normalizeForMatch(title)
+        for (index, chunk) in limitedChunks.enumerated() {
+            let summary = try await summarizeChunk(
+                chunk: chunk,
+                userGoal: userGoal,
+                streaming: streaming,
+                index: index + 1,
+                count: limitedChunks.count
+            )
+            let cleaned = sanitizeSummary(summary)
+            if cleaned.count < 60 {
+                continue
+            }
+            let key = normalizeForMatch(cleaned)
+            if key.isEmpty || seen.contains(key) {
+                continue
+            }
+            if !titleKey.isEmpty && key == titleKey {
+                continue
+            }
+            seen.insert(key)
+            summaries.append(cleaned)
+        }
+        return summaries
+    }
+
+    private func summarizeChunk(
+        chunk: String,
+        userGoal: String,
+        streaming: StreamingModelRunner,
+        index: Int,
+        count: Int
+    ) async throws -> String {
+        let systemPrompt = [
+            "You are Laika, a concise summarization assistant. /no_think",
+            ModelSafetyPreamble.untrustedContent,
+            "Summarize the segment using only the provided text.",
+            "Focus on concrete details and topics. Do not mention the segment or chunk.",
+            "Do not restate the page title verbatim.",
+            "Output 2-3 sentences. Plain text only."
+        ].joined(separator: "\n")
+        let userPrompt = [
+            "Goal: \(userGoal)",
+            "Segment \(index) of \(count):",
+            "BEGIN_SEGMENT",
+            chunk,
+            "END_SEGMENT"
+        ].joined(separator: "\n")
+        let settings = StreamRequest(
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            maxTokens: 220,
+            temperature: 0.35,
+            topP: 0.75,
+            repetitionPenalty: 1.2,
+            repetitionContextSize: 128,
+            enableThinking: false
+        )
+        var output = ""
+        for try await chunkText in streaming.streamText(settings) {
+            output += chunkText
+        }
+        return sanitizeSummary(output)
+    }
+
+    private func buildCondensedText(from summaries: [String], context: ContextPack) -> String {
+        let title = TextUtils.normalizeWhitespace(context.observation.title)
+        let url = TextUtils.normalizeWhitespace(context.observation.url)
+        var lines: [String] = []
+        if !title.isEmpty {
+            lines.append("Title: \(title)")
+        } else if !url.isEmpty {
+            lines.append("URL: \(url)")
+        }
+        for summary in summaries {
+            if !summary.isEmpty {
+                lines.append(summary)
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func dedupeLines(_ text: String) -> String {
@@ -231,7 +554,18 @@ public struct SummaryService {
     }
 
     private func collapseRepeatedTokens(_ text: String) -> String {
-        let tokens = text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count > 1 else {
+            return collapseRepeatedTokensInLine(text)
+        }
+        let collapsed = lines.map { line in
+            collapseRepeatedTokensInLine(String(line))
+        }
+        return collapsed.joined(separator: "\n")
+    }
+
+    private func collapseRepeatedTokensInLine(_ text: String) -> String {
+        let tokens = text.split(whereSeparator: { $0 == " " || $0 == "\t" })
         guard tokens.count >= 8 else {
             return text
         }
@@ -268,7 +602,7 @@ public struct SummaryService {
         return !body.isEmpty
     }
 
-    private func validateSummary(_ summary: String, input: SummaryInput) -> SummaryValidation {
+    private func validateSummary(_ summary: String, input: SummaryInput, goalPlan: GoalPlan) -> SummaryValidation {
         let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             return .ungrounded
@@ -278,16 +612,126 @@ public struct SummaryService {
         if banned.contains(where: { lower.contains($0) }) {
             return .ungrounded
         }
+        let placeholderSignals = ["item n", "item n-", "overview paragraph", "overview: item n"]
+        if placeholderSignals.contains(where: { lower.contains($0) }) {
+            return .ungrounded
+        }
+        if goalPlan.intent == .itemSummary, input.kind == .item {
+            if let title = extractItemTitle(from: input), !hasTitleOverlap(summary: trimmed, title: title) {
+                return .ungrounded
+            }
+        }
+        if input.kind == .comments {
+            if lower.contains("comment 1:") || lower.contains("comment 2:") {
+                return .ungrounded
+            }
+            if input.usedComments >= 3 {
+                let notStatedCount = lower.components(separatedBy: "not stated in the page").count - 1
+                if notStatedCount >= 2 {
+                    return .ungrounded
+                }
+            }
+        }
         if isHighlyRepetitive(trimmed) {
             return .ungrounded
         }
+        if shouldRequireTokenOverlap(input: input) {
+            if !hasSufficientTokenOverlap(summary: trimmed, input: input) {
+                return .ungrounded
+            }
+        }
         let anchors = extractAnchors(from: input)
         if anchors.isEmpty {
-            return .ok
+            if input.accessLimited || input.text.count < 200 {
+                return .ok
+            }
+            return .ungrounded
         }
         let matches = countAnchorMatches(summary: trimmed, anchors: anchors)
         let required = requiredAnchorCount(for: input)
         return matches >= required ? .ok : .ungrounded
+    }
+
+    private func shouldRequireTokenOverlap(input: SummaryInput) -> Bool {
+        if input.accessLimited {
+            return false
+        }
+        if input.accessSignals.contains("chunked_input") {
+            return false
+        }
+        if input.kind == .list {
+            return false
+        }
+        return input.text.count >= 260
+    }
+
+    private func hasSufficientTokenOverlap(summary: String, input: SummaryInput) -> Bool {
+        let summaryTokens = tokenSet(summary, minLength: 4, maxTokens: 240)
+        let inputTokens = tokenSet(input.text, minLength: 4, maxTokens: 900)
+        if summaryTokens.isEmpty || inputTokens.isEmpty {
+            return true
+        }
+        if summaryTokens.count < 12 {
+            return true
+        }
+        let overlap = summaryTokens.intersection(inputTokens).count
+        let ratio = Double(overlap) / Double(summaryTokens.count)
+        let threshold: Double
+        switch input.kind {
+        case .comments:
+            threshold = 0.3
+        case .item, .pageText:
+            threshold = 0.38
+        case .list:
+            threshold = 0.1
+        }
+        return ratio >= threshold
+    }
+
+    private func tokenSet(_ text: String, minLength: Int, maxTokens: Int) -> Set<String> {
+        let normalized = normalizeForMatch(text)
+        if normalized.isEmpty {
+            return []
+        }
+        let tokens = normalized.split(separator: " ")
+        var output: Set<String> = []
+        output.reserveCapacity(min(maxTokens, tokens.count))
+        for token in tokens {
+            if token.count < minLength {
+                continue
+            }
+            output.insert(String(token))
+            if output.count >= maxTokens {
+                break
+            }
+        }
+        return output
+    }
+
+    private func tokenList(_ text: String, minLength: Int, maxTokens: Int) -> [String] {
+        let normalized = normalizeForMatch(text)
+        if normalized.isEmpty {
+            return []
+        }
+        let tokens = normalized.split(separator: " ")
+        var output: [String] = []
+        var seen: Set<String> = []
+        output.reserveCapacity(min(maxTokens, tokens.count))
+        for token in tokens {
+            if token.count < minLength {
+                continue
+            }
+            let value = String(token)
+            if seen.contains(value) {
+                continue
+            }
+            seen.insert(value)
+            output.append(value)
+            if output.count >= maxTokens {
+                break
+            }
+        }
+        return output
     }
 
     private func requiredAnchorCount(for input: SummaryInput) -> Int {
@@ -295,10 +739,25 @@ public struct SummaryService {
         case .list:
             return max(2, min(5, input.usedItems))
         case .comments:
-            return input.usedComments > 0 ? min(2, input.usedComments) : 0
+            if input.usedComments >= 3 {
+                return 3
+            }
+            return input.usedComments
         case .item:
+            if input.text.count > 500 {
+                return 2
+            }
             return 1
         case .pageText:
+            if input.accessSignals.contains("chunked_input") {
+                return 1
+            }
+            if input.accessSignals.contains("low_signal_text") {
+                return 1
+            }
+            if input.text.count > 700 {
+                return 3
+            }
             return 1
         }
     }
@@ -334,12 +793,47 @@ public struct SummaryService {
                     return nil
                 }
                 let body = String(line[range.upperBound...]).trimmingCharacters(in: .whitespaces)
-                return shortAnchor(from: body)
+                let cleaned = stripLeadingCommentMetadata(body)
+                return shortAnchor(from: cleaned)
             }.prefix(6).map { $0 }
         case .pageText:
             let body = lines.filter { !isMetadataLine($0) }.joined(separator: " ")
-            return TextUtils.firstSentences(body, maxItems: 3, minLength: 32, maxLength: 180)
+            let sentences = TextUtils.firstSentences(body, maxItems: 3, minLength: 32, maxLength: 180)
+            if !sentences.isEmpty {
+                return sentences
+            }
+            let fallback = TextUtils.splitSentences(body)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { $0.count >= 16 }
+            return Array(fallback.prefix(2))
         }
+    }
+
+    private func extractItemTitle(from input: SummaryInput) -> String? {
+        let lines = input.text.split(separator: "\n").map { String($0) }
+        for line in lines {
+            if line.hasPrefix("Item:") {
+                let title = line.replacingOccurrences(of: "Item:", with: "").trimmingCharacters(in: .whitespaces)
+                if !title.isEmpty {
+                    return title
+                }
+            }
+        }
+        return nil
+    }
+
+    private func hasTitleOverlap(summary: String, title: String) -> Bool {
+        let titleTokens = tokenList(title, minLength: 4, maxTokens: 10)
+        if titleTokens.isEmpty {
+            return true
+        }
+        let summaryTokens = tokenSet(summary, minLength: 4, maxTokens: 240)
+        if summaryTokens.isEmpty {
+            return true
+        }
+        let matchCount = titleTokens.filter { summaryTokens.contains($0) }.count
+        let required = titleTokens.count >= 4 ? 2 : 1
+        return matchCount >= required
     }
 
     private func extractListTitle(from line: String) -> String? {
@@ -370,8 +864,22 @@ public struct SummaryService {
         return words.prefix(8).joined(separator: " ")
     }
 
+    private func stripLeadingCommentMetadata(_ text: String) -> String {
+        var output = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if output.hasPrefix("("),
+           let closeIndex = output.firstIndex(of: ")") {
+            let after = output.index(after: closeIndex)
+            output = String(output[after...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return output
+    }
+
     private func isMetadataLine(_ line: String) -> Bool {
-        return line.hasPrefix("Title:") || line.hasPrefix("URL:") || line.hasPrefix("Item count:") || line.hasPrefix("Comment count:")
+        return line.hasPrefix("Title:")
+            || line.hasPrefix("URL:")
+            || line.hasPrefix("Item count:")
+            || line.hasPrefix("Comment count:")
+            || line.hasPrefix("Outline:")
     }
 
     private func countAnchorMatches(summary: String, anchors: [String]) -> Int {
@@ -416,15 +924,33 @@ public struct SummaryService {
     private func fallbackSummary(input: SummaryInput, context: ContextPack, goalPlan: GoalPlan) -> String {
         let format = summaryFormat(goalPlan: goalPlan)
         let lines = input.text.split(separator: "\n").map { String($0) }
-        let bodyText = lines.filter { !isMetadataLine($0) }.joined(separator: " ")
+        var bodyText = lines.filter { !isMetadataLine($0) }.joined(separator: " ")
+        if bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let primaryText = TextUtils.normalizeWhitespace(context.observation.primary?.text ?? "")
+            bodyText = primaryText.isEmpty ? TextUtils.normalizeWhitespace(context.observation.text) : primaryText
+        }
         let sentences = meaningfulSentences(bodyText, maxItems: 5)
+        if goalPlan.intent == .itemSummary {
+            return fallbackItemSummary(bodyText: bodyText, context: context, input: input)
+        }
         switch format {
         case .plain:
             if input.kind == .list {
-                let titles = lines.compactMap { extractListTitle(from: $0) }
-                if !titles.isEmpty {
-                    let preview = titles.prefix(5).joined(separator: "; ")
-                    return "The page lists items such as \(preview)."
+                let items = extractListItems(from: lines, maxItems: 8)
+                if !items.isEmpty {
+                    let itemCount = context.observation.items.count
+                    let topicPreview = items.map { $0.title }.prefix(5).joined(separator: "; ")
+                    let countText = itemCount > 0 ? "\(itemCount) items" : "multiple items"
+                    var output: [String] = []
+                    output.append("The page lists \(countText), including topics like \(topicPreview).")
+                    for (index, item) in items.enumerated() {
+                        let number = index + 1
+                        let titleSentence = sentenceify(item.title)
+                        let detailText = item.snippet.isEmpty ? "Not stated in the page." : "Details: \(item.snippet)"
+                        let detailSentence = sentenceify(detailText)
+                        output.append("Item \(number): \(titleSentence) \(detailSentence)")
+                    }
+                    return output.joined(separator: "\n")
                 }
             }
             if !sentences.isEmpty {
@@ -446,15 +972,208 @@ public struct SummaryService {
                 "Optional next step: \(nextStep)"
             ].joined(separator: "\n")
         case .commentDetail:
-            let theme = sentences.first ?? limitedContentResponse(input: input)
-            let notable = sentences.dropFirst().first ?? limitedContentResponse(input: input)
+            let commentBodies = extractCommentBodies(from: lines, maxItems: 4)
+            let authors = extractCommentAuthors(from: lines, maxItems: 3)
+            let theme = commentBodies.first ?? sentences.first ?? limitedContentResponse(input: input)
+            let secondaryTheme = commentBodies.dropFirst().first ?? limitedContentResponse(input: input)
+            let notable = commentBodies.dropFirst(2).first ?? sentences.dropFirst().first ?? limitedContentResponse(input: input)
+            let reactions = commentBodies.dropFirst(3).first ?? sentences.dropFirst(2).first ?? limitedContentResponse(input: input)
+            let contributorLine = authors.isEmpty ? limitedContentResponse(input: input) : authors.joined(separator: ", ")
             return [
-                "Comment themes: \(theme)",
-                "Notable contributors or tools: \(limitedContentResponse(input: input))",
-                "Technical clarifications or Q&A: \(notable)",
-                "Reactions or viewpoints: \(limitedContentResponse(input: input))"
+                "Comment themes: \(sentenceify(theme)) \(sentenceify(secondaryTheme))",
+                "Notable contributors or tools: \(sentenceify(contributorLine)) \(sentenceify(limitedContentResponse(input: input)))",
+                "Technical clarifications or Q&A: \(sentenceify(notable)) \(sentenceify(limitedContentResponse(input: input)))",
+                "Reactions or viewpoints: \(sentenceify(reactions)) \(sentenceify(limitedContentResponse(input: input)))"
             ].joined(separator: "\n")
         }
+    }
+
+    private func fallbackItemSummary(bodyText: String, context: ContextPack, input: SummaryInput) -> String {
+        let earlySentences = TextUtils.firstSentences(bodyText, maxItems: 4, minLength: 32, maxLength: 240)
+        let title = context.observation.title.isEmpty ? context.observation.url : context.observation.title
+        let outline = outlineHeadings(from: context, maxItems: 4)
+        var paragraphs: [String] = []
+        var overviewParts: [String] = []
+        if !title.isEmpty {
+            overviewParts.append(title)
+        }
+        if let firstSentence = earlySentences.first {
+            overviewParts.append(firstSentence)
+        }
+        if !overviewParts.isEmpty {
+            paragraphs.append(overviewParts.joined(separator: " "))
+        }
+        var detailParts: [String] = []
+        if !outline.isEmpty {
+            detailParts.append("Key sections include: " + outline.joined(separator: "; ") + ".")
+        }
+        if earlySentences.count > 1 {
+            detailParts.append(earlySentences.dropFirst().prefix(1).joined(separator: " "))
+        }
+        if !detailParts.isEmpty {
+            paragraphs.append(detailParts.joined(separator: " "))
+        }
+        let notable = earlySentences.dropFirst(2).first ?? limitedContentResponse(input: input)
+        paragraphs.append("Notable detail: " + notable)
+        return paragraphs.filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
+    private func outlineHeadings(from context: ContextPack, maxItems: Int) -> [String] {
+        guard maxItems > 0 else {
+            return []
+        }
+        var output: [String] = []
+        for item in context.observation.outline {
+            if !isRelevantOutline(item: item) {
+                continue
+            }
+            let tag = item.tag.lowercased()
+            var text = TextUtils.normalizeWhitespace(item.text)
+            if text.isEmpty {
+                continue
+            }
+            if let bracketIndex = text.firstIndex(of: "[") {
+                text = String(text[..<bracketIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if text.isEmpty {
+                continue
+            }
+            let isHeading = tag.hasPrefix("h")
+            let words = text.split(separator: " ")
+            if !isHeading {
+                if words.count <= 2 && text.rangeOfCharacter(from: .decimalDigits) != nil {
+                    continue
+                }
+                if words.count <= 2 && text.count < 16 {
+                    continue
+                }
+            }
+            if !isHeading && text.count > 80 {
+                continue
+            }
+            output.append(text)
+            if output.count >= maxItems {
+                break
+            }
+        }
+        return output
+    }
+
+    private func isRelevantOutline(item: ObservedOutlineItem) -> Bool {
+        let tag = item.tag.lowercased()
+        if tag == "nav" || tag == "footer" || tag == "header" || tag == "aside" || tag == "menu" {
+            return false
+        }
+        let role = item.role.lowercased()
+        if role == "navigation" || role == "banner" || role == "contentinfo" || role == "menu" {
+            return false
+        }
+        if role == "dialog" || role == "alertdialog" {
+            return false
+        }
+        return true
+    }
+
+    private struct ListItemFallback {
+        let title: String
+        let snippet: String
+    }
+
+    private func extractListItems(from lines: [String], maxItems: Int) -> [ListItemFallback] {
+        var items: [ListItemFallback] = []
+        items.reserveCapacity(maxItems)
+        for line in lines {
+            guard let title = extractListTitle(from: line) else {
+                continue
+            }
+            let snippet = extractListSnippet(from: line)
+            items.append(ListItemFallback(title: title, snippet: snippet))
+            if items.count >= maxItems {
+                break
+            }
+        }
+        return items
+    }
+
+    private func extractListSnippet(from line: String) -> String {
+        guard let range = line.range(of: " — ") else {
+            return ""
+        }
+        let snippet = line[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return snippet
+    }
+
+    private func extractCommentBodies(from lines: [String], maxItems: Int) -> [String] {
+        var bodies: [String] = []
+        var seen: Set<String> = []
+        for line in lines {
+            guard line.hasPrefix("Comment") else {
+                continue
+            }
+            guard let range = line.range(of: ":") else {
+                continue
+            }
+            let rawText = line[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = stripLeadingCommentMetadata(String(rawText))
+            if text.isEmpty {
+                continue
+            }
+            let candidate = shortAnchor(from: text) ?? text
+            let key = normalizeForMatch(candidate)
+            if !key.isEmpty && seen.contains(key) {
+                continue
+            }
+            if !key.isEmpty {
+                seen.insert(key)
+            }
+            bodies.append(candidate)
+            if bodies.count >= maxItems {
+                break
+            }
+        }
+        return bodies
+    }
+
+    private func extractCommentAuthors(from lines: [String], maxItems: Int) -> [String] {
+        var authors: [String] = []
+        var seen: Set<String> = []
+        for line in lines {
+            if line.hasPrefix("Authors") {
+                if let range = line.range(of: ":") {
+                    let raw = line[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let parts = raw.split(separator: ";").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    for part in parts where !part.isEmpty {
+                        let key = part.lowercased()
+                        if !seen.contains(key) {
+                            seen.insert(key)
+                            authors.append(part)
+                            if authors.count >= maxItems {
+                                return authors
+                            }
+                        }
+                    }
+                }
+            }
+            if line.hasPrefix("Comment"), let startRange = line.range(of: ": (") {
+                let metaStart = startRange.upperBound
+                if let endIndex = line[metaStart...].firstIndex(of: ")") {
+                    let meta = line[metaStart..<endIndex]
+                    let trimmed = meta.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let author = trimmed.split(separator: "·").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if !author.isEmpty {
+                        let key = author.lowercased()
+                        if !seen.contains(key) {
+                            seen.insert(key)
+                            authors.append(author)
+                            if authors.count >= maxItems {
+                                return authors
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return authors
     }
 
     private func meaningfulSentences(_ text: String, maxItems: Int) -> [String] {
@@ -463,8 +1182,8 @@ public struct SummaryService {
             return []
         }
         let sentences = TextUtils.splitSentences(normalized)
-        var output: [String] = []
-        output.reserveCapacity(maxItems)
+        var candidates: [String] = []
+        candidates.reserveCapacity(min(maxItems * 2, sentences.count))
         for sentence in sentences {
             let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
@@ -473,12 +1192,38 @@ public struct SummaryService {
             if isLowSignalSentence(trimmed) {
                 continue
             }
-            output.append(trimmed.count > 240 ? String(trimmed.prefix(240)) + "..." : trimmed)
-            if output.count >= maxItems {
-                break
+            candidates.append(trimmed.count > 240 ? String(trimmed.prefix(240)) + "..." : trimmed)
+        }
+        guard !candidates.isEmpty else {
+            return []
+        }
+        if candidates.count <= maxItems {
+            return Array(candidates.prefix(maxItems))
+        }
+        var output: [String] = []
+        output.reserveCapacity(maxItems)
+        output.append(contentsOf: candidates.prefix(2))
+        if output.count < maxItems {
+            let midIndex = candidates.count / 2
+            if !output.contains(candidates[midIndex]) {
+                output.append(candidates[midIndex])
             }
         }
-        return output
+        if output.count < maxItems, let last = candidates.last, !output.contains(last) {
+            output.append(last)
+        }
+        if output.count < maxItems {
+            for candidate in candidates {
+                if output.count >= maxItems {
+                    break
+                }
+                if output.contains(candidate) {
+                    continue
+                }
+                output.append(candidate)
+            }
+        }
+        return Array(output.prefix(maxItems))
     }
 
     private func isLowSignalSentence(_ text: String) -> Bool {
@@ -542,6 +1287,17 @@ public struct SummaryService {
         let remainder = chunk[range.upperBound...]
         let cleaned = sanitizeSummary(String(remainder))
         return cleaned.isEmpty ? nil : cleaned
+    }
+
+    private func sentenceify(_ text: String) -> String {
+        let trimmed = TextUtils.normalizeWhitespace(text)
+        if trimmed.isEmpty {
+            return "Not stated in the page."
+        }
+        if trimmed.hasSuffix(".") || trimmed.hasSuffix("?") || trimmed.hasSuffix("!") {
+            return trimmed
+        }
+        return trimmed + "."
     }
 
     private func limitedContentResponse(input: SummaryInput) -> String {
