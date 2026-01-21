@@ -26,6 +26,32 @@ var CHAT_HISTORY_KEY = "laika.chat.history.v1";
 var CHAT_HISTORY_LIMIT = 200;
 var chatHistory = [];
 
+var MESSAGE_FORMAT_PLAIN = "plain";
+var MESSAGE_FORMAT_MARKDOWN = "markdown";
+var markdownRenderer = null;
+var sanitizerReady = false;
+var MARKDOWN_SANITIZE_CONFIG = {
+  ALLOWED_TAGS: [
+    "p",
+    "br",
+    "ul",
+    "ol",
+    "li",
+    "strong",
+    "em",
+    "code",
+    "pre",
+    "blockquote",
+    "h2",
+    "h3",
+    "h4",
+    "a"
+  ],
+  ALLOWED_ATTR: ["href", "title", "rel", "target"],
+  ALLOW_DATA_ATTR: false,
+  ALLOWED_URI_REGEXP: /^(https?:|mailto:)/i
+};
+
 var MAX_AGENT_STEPS = 6;
 var DEFAULT_OBSERVE_OPTIONS = {
   maxChars: 12000,
@@ -155,6 +181,67 @@ function labelForRole(role) {
   return role;
 }
 
+function normalizeMessageFormat(format) {
+  if (format === MESSAGE_FORMAT_MARKDOWN) {
+    return MESSAGE_FORMAT_MARKDOWN;
+  }
+  return MESSAGE_FORMAT_PLAIN;
+}
+
+function initMarkdownSupport() {
+  if (!markdownRenderer && typeof window !== "undefined" && window.markdownit) {
+    markdownRenderer = window.markdownit({
+      html: false,
+      linkify: true,
+      breaks: false
+    });
+    markdownRenderer.disable(["table", "strikethrough"]);
+  }
+  if (!sanitizerReady && typeof window !== "undefined" && window.DOMPurify) {
+    window.DOMPurify.addHook("afterSanitizeAttributes", function (node) {
+      if (!node || !node.tagName) {
+        return;
+      }
+      if (node.tagName.toLowerCase() !== "a") {
+        return;
+      }
+      var href = node.getAttribute("href");
+      if (!href) {
+        node.removeAttribute("target");
+        node.removeAttribute("rel");
+        return;
+      }
+      node.setAttribute("target", "_blank");
+      node.setAttribute("rel", "noopener noreferrer");
+    });
+    sanitizerReady = true;
+  }
+}
+
+function renderMessageBody(body, text, format) {
+  if (!body) {
+    return;
+  }
+  initMarkdownSupport();
+  var normalizedFormat = normalizeMessageFormat(format);
+  var output = typeof text === "string" ? text : String(text || "");
+  body.classList.toggle("markdown", normalizedFormat === MESSAGE_FORMAT_MARKDOWN);
+  if (normalizedFormat === MESSAGE_FORMAT_MARKDOWN && markdownRenderer && window.DOMPurify) {
+    var html = markdownRenderer.render(output);
+    var sanitized = window.DOMPurify.sanitize(html, MARKDOWN_SANITIZE_CONFIG);
+    body.innerHTML = sanitized;
+  } else {
+    body.textContent = output;
+  }
+}
+
+function getMessageBody(message) {
+  if (!message) {
+    return null;
+  }
+  return message.querySelector(".message-body");
+}
+
 function generateHistoryId() {
   return String(Date.now()) + "-" + Math.random().toString(16).slice(2);
 }
@@ -195,7 +282,11 @@ function loadChatHistory() {
     });
     trimChatHistory();
     for (var i = 0; i < chatHistory.length; i += 1) {
-      appendMessage(chatHistory[i].role, chatHistory[i].text, { save: false, historyId: chatHistory[i].id });
+      appendMessage(chatHistory[i].role, chatHistory[i].text, {
+        save: false,
+        historyId: chatHistory[i].id,
+        format: chatHistory[i].format
+      });
     }
   } catch (error) {
     chatHistory = [];
@@ -203,19 +294,23 @@ function loadChatHistory() {
 }
 
 function appendMessage(role, text, options) {
+  var contentText = typeof text === "string" ? text : String(text || "");
   var message = document.createElement("div");
   message.className = "message";
+  message.setAttribute("data-role", role);
   var label = document.createElement("strong");
   label.textContent = labelForRole(role);
   var body = document.createElement("div");
-  body.textContent = text || "";
+  body.className = "message-body";
+  var format = normalizeMessageFormat(options && options.format ? options.format : MESSAGE_FORMAT_PLAIN);
+  renderMessageBody(body, contentText, format);
   message.appendChild(label);
   message.appendChild(body);
   var shouldSave = !(options && options.save === false);
   if (shouldSave) {
     var historyId = generateHistoryId();
     message.setAttribute("data-history-id", historyId);
-    chatHistory.push({ id: historyId, role: role, text: body.textContent });
+    chatHistory.push({ id: historyId, role: role, text: contentText, format: format });
     trimChatHistory();
     saveChatHistory();
   } else if (options && options.historyId) {
@@ -226,7 +321,7 @@ function appendMessage(role, text, options) {
   return message;
 }
 
-function updateHistoryMessage(message, text) {
+function updateHistoryMessage(message, text, format) {
   if (!message) {
     return;
   }
@@ -234,9 +329,13 @@ function updateHistoryMessage(message, text) {
   if (!historyId) {
     return;
   }
+  var contentText = typeof text === "string" ? text : String(text || "");
   for (var i = chatHistory.length - 1; i >= 0; i -= 1) {
     if (chatHistory[i].id === historyId) {
-      chatHistory[i].text = text || "";
+      chatHistory[i].text = contentText;
+      if (format) {
+        chatHistory[i].format = normalizeMessageFormat(format);
+      }
       saveChatHistory();
       break;
     }
@@ -289,7 +388,8 @@ function appendActionPrompt(action, tabId, toolOptions) {
   var label = document.createElement("strong");
   label.textContent = "action";
   var body = document.createElement("div");
-  body.textContent = formatToolCall(action);
+  body.className = "message-body";
+  renderMessageBody(body, formatToolCall(action), MESSAGE_FORMAT_PLAIN);
   var buttons = document.createElement("div");
   buttons.className = "action-buttons";
   var approveButton = document.createElement("button");
@@ -383,6 +483,13 @@ function buildSummaryContext(params) {
   };
 }
 
+function formatFromPlan(plan) {
+  if (plan && plan.summaryFormat === MESSAGE_FORMAT_MARKDOWN) {
+    return MESSAGE_FORMAT_MARKDOWN;
+  }
+  return MESSAGE_FORMAT_PLAIN;
+}
+
 async function startSummaryStream(goal, context, goalPlan) {
   var payload = {
     type: "summary.start",
@@ -407,8 +514,8 @@ async function cancelSummaryStream(streamId) {
 }
 
 async function consumeSummaryStream(streamId) {
-  var message = appendMessage("assistant", "");
-  var body = message.lastChild;
+  var message = appendMessage("assistant", "", { format: MESSAGE_FORMAT_MARKDOWN });
+  var body = getMessageBody(message);
   var text = "";
   var delayMs = 140;
   for (;;) {
@@ -419,7 +526,7 @@ async function consumeSummaryStream(streamId) {
     }
     if (Array.isArray(result.chunks) && result.chunks.length > 0) {
       text += result.chunks.join("");
-      body.textContent = text;
+      renderMessageBody(body, text, MESSAGE_FORMAT_MARKDOWN);
       chatLog.scrollTop = chatLog.scrollHeight;
     }
     if (result.error) {
@@ -433,13 +540,11 @@ async function consumeSummaryStream(streamId) {
   }
   if (text.trim()) {
     lastAssistantSummary = text;
-    updateHistoryMessage(message, text);
+    updateHistoryMessage(message, text, MESSAGE_FORMAT_MARKDOWN);
   } else if (message) {
     var fallbackText = "No summary available.";
-    if (body) {
-      body.textContent = fallbackText;
-    }
-    updateHistoryMessage(message, fallbackText);
+    renderMessageBody(body, fallbackText, MESSAGE_FORMAT_MARKDOWN);
+    updateHistoryMessage(message, fallbackText, MESSAGE_FORMAT_MARKDOWN);
   }
   return text;
 }
@@ -754,7 +859,7 @@ sendButton.addEventListener("click", async function () {
         }
         if (!streamed && plan.summary && plan.summary !== lastAssistantSummary) {
           setStatus("Status: summarizing...");
-          appendMessage("assistant", plan.summary);
+          appendMessage("assistant", plan.summary, { format: formatFromPlan(plan) });
           lastAssistantSummary = plan.summary;
         }
         break;
@@ -763,7 +868,7 @@ sendButton.addEventListener("click", async function () {
         appendMessage("system", "Blocked: " + nextAction.policy.reasonCode);
         if (plan.summary && plan.summary !== lastAssistantSummary) {
           setStatus("Status: summarizing...");
-          appendMessage("assistant", plan.summary);
+          appendMessage("assistant", plan.summary, { format: formatFromPlan(plan) });
           lastAssistantSummary = plan.summary;
         }
         break;
@@ -772,7 +877,7 @@ sendButton.addEventListener("click", async function () {
         appendMessage("system", "Step limit reached.");
         if (plan.summary && plan.summary !== lastAssistantSummary) {
           setStatus("Status: summarizing...");
-          appendMessage("assistant", plan.summary);
+          appendMessage("assistant", plan.summary, { format: formatFromPlan(plan) });
           lastAssistantSummary = plan.summary;
         }
         break;
@@ -782,7 +887,7 @@ sendButton.addEventListener("click", async function () {
       if (nextAction.policy.decision === "ask") {
         if (plan.summary && plan.summary !== lastAssistantSummary) {
           setStatus("Status: summarizing...");
-          appendMessage("assistant", plan.summary);
+          appendMessage("assistant", plan.summary, { format: formatFromPlan(plan) });
           lastAssistantSummary = plan.summary;
         }
         setStatus("Status: awaiting approval...");
@@ -804,7 +909,7 @@ sendButton.addEventListener("click", async function () {
         if (toolResult && toolResult.status === "ok" && typeof toolResult.summary === "string") {
           lastAssistantSummary = toolResult.summary;
         } else if (plan.summary && plan.summary !== lastAssistantSummary) {
-          appendMessage("assistant", plan.summary);
+          appendMessage("assistant", plan.summary, { format: formatFromPlan(plan) });
           lastAssistantSummary = plan.summary;
         }
         break;
@@ -844,6 +949,7 @@ sendButton.addEventListener("click", async function () {
   } catch (error) {
     isPanelWindow = false;
   }
+  initMarkdownSupport();
   loadChatHistory();
   loadMaxTokens();
   if (settingsButton) {

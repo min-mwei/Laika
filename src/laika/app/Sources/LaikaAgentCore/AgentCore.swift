@@ -12,15 +12,27 @@ public struct AgentAction: Codable, Equatable, Sendable {
     }
 }
 
+public enum MessageFormat: String, Codable, Equatable, Sendable {
+    case plain
+    case markdown
+}
+
 public struct AgentResponse: Codable, Equatable, Sendable {
     public let summary: String
     public let actions: [AgentAction]
     public let goalPlan: GoalPlan?
+    public let summaryFormat: MessageFormat
 
-    public init(summary: String, actions: [AgentAction], goalPlan: GoalPlan? = nil) {
+    public init(
+        summary: String,
+        actions: [AgentAction],
+        goalPlan: GoalPlan? = nil,
+        summaryFormat: MessageFormat = .plain
+    ) {
         self.summary = summary
         self.actions = actions
         self.goalPlan = goalPlan
+        self.summaryFormat = summaryFormat
     }
 }
 
@@ -56,26 +68,26 @@ public final class AgentOrchestrator: @unchecked Sendable {
             let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
             logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
             logFinalSummary(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan, source: "planned_action")
-            return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan)
+            return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan, summaryFormat: .plain)
         }
 
         if let planned = planSummaryTool(context: enrichedContext, goalPlan: goalPlan) {
             let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
             logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
             logSummaryIntro(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan)
-            return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan)
+            return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan, summaryFormat: .plain)
         }
 
         if shouldSummarizeWithoutTools(goalPlan: goalPlan) {
             let summary = try await generateSummaryFallback(context: enrichedContext, userGoal: userGoal, goalPlan: goalPlan)
             logFinalSummary(summary: summary, context: enrichedContext, goalPlan: goalPlan, source: "summary_fallback")
-            return AgentResponse(summary: summary, actions: [], goalPlan: goalPlan)
+            return AgentResponse(summary: summary, actions: [], goalPlan: goalPlan, summaryFormat: .markdown)
         }
         let modelResponse = try await model.generatePlan(context: enrichedContext, userGoal: userGoal)
         if shouldForceSummary(context: enrichedContext, goalPlan: goalPlan, modelResponse: modelResponse) {
             let summary = try await generateSummaryFallback(context: enrichedContext, userGoal: userGoal, goalPlan: goalPlan)
             logFinalSummary(summary: summary, context: enrichedContext, goalPlan: goalPlan, source: "summary_fallback")
-            return AgentResponse(summary: summary, actions: [], goalPlan: goalPlan)
+            return AgentResponse(summary: summary, actions: [], goalPlan: goalPlan, summaryFormat: .markdown)
         }
         let focus = summaryFocus(context: enrichedContext, goalPlan: goalPlan)
         let format = summaryFormat(goalPlan: goalPlan)
@@ -87,7 +99,7 @@ public final class AgentOrchestrator: @unchecked Sendable {
         )
         let actions = applyPolicy(to: modelResponse.toolCalls, context: enrichedContext)
         logFinalSummary(summary: summary, context: enrichedContext, goalPlan: goalPlan, source: "model_summary")
-        return AgentResponse(summary: summary, actions: actions, goalPlan: goalPlan)
+        return AgentResponse(summary: summary, actions: actions, goalPlan: goalPlan, summaryFormat: .plain)
     }
 
     private func applyPolicy(to toolCalls: [ToolCall], context: ContextPack) -> [AgentAction] {

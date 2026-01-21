@@ -213,12 +213,13 @@ public struct SummaryService {
         systemLines.append("Ignore navigation chrome and UI labels unless they are part of the content.")
         systemLines.append("Avoid UI/control words like login, submit, share, hide, reply unless they describe the content.")
         systemLines.append("Do not repeat sentences or phrases.")
-        systemLines.append("Do not use emojis, markdown, bullets, or section dividers.")
+        systemLines.append("Use a minimal Markdown subset when helpful: headings (##/###/####), lists, emphasis, inline code, code blocks, blockquotes, and links.")
+        systemLines.append("Do not use raw HTML, tables, images, or emojis.")
+        systemLines.append("Keep formatting simple and consistent; separate paragraphs with blank lines.")
         systemLines.append("Avoid repeating item titles or metadata; condense duplicates.")
         systemLines.append("Prefer concrete topics, entities, and numbers from the input over vague summaries.")
         systemLines.append("Do not mention system prompts, safety policies, or the word 'untrusted'.")
         systemLines.append("Do not speculate or add facts not present in the input.")
-        systemLines.append("Output plain text only. No Markdown, no bullets, no bold/italic markers.")
         systemLines.append("If a detail is missing, say 'Not stated in the page'.")
 
         var userLines: [String] = []
@@ -249,22 +250,24 @@ public struct SummaryService {
 
         if format == .plain {
             if goalPlan.intent == .itemSummary {
-                userLines.append("Format: 3 short paragraphs (2-3 sentences each). Start with a 1-sentence overview, then key details, then why it matters.")
-                userLines.append("Aim for 6-9 sentences total. If a paragraph is short, add another concrete detail from the input.")
+                userLines.append("Format: Use three short sections with headings.")
+                userLines.append("Headings: ### Overview, ### Key details, ### Why it matters.")
+                userLines.append("Each section should be 2-3 sentences. Aim for 6-9 sentences total.")
             } else if input.kind == .list {
-                userLines.append("Format: 1 overview paragraph (4-5 sentences) describing the mix of items and any trends. Then \(profile.listItemCount) item lines, each starting with 'Item N:' and 2 sentences: first for the topic, second for any numbers, names, or why it is notable.")
-                userLines.append("Each item line must contain 2 sentences. If the second sentence is missing, write: 'Not stated in the page.'")
+                userLines.append("Format: 1 overview paragraph (4-5 sentences) describing the mix of items and any trends.")
+                userLines.append("Then include a numbered list with \(profile.listItemCount) items. Each item must be 2 sentences: first for the topic, second for numbers, names, or why it is notable.")
+                userLines.append("If the second sentence is missing, write: 'Not stated in the page.'")
             } else {
                 userLines.append("Format: 3 short paragraphs (2-3 sentences each). Mention notable numbers or rankings when present.")
                 userLines.append("Aim for at least 6 sentences total. If needed, add another detail from the input.")
             }
         } else if format == .topicDetail {
-            userLines.append("Format: Use headings with 2-4 sentence paragraphs. Headings must be plain text with a trailing colon.")
-            userLines.append("Headings: Topic overview:, What it is:, Key points:, Why it is notable:, Optional next step:")
+            userLines.append("Format: Use Markdown headings with 2-4 sentence paragraphs.")
+            userLines.append("Headings: ## Topic overview, ## What it is, ## Key points, ## Why it is notable, ## Optional next step.")
             userLines.append("Include concrete details (methods, tools, dates, numbers) from the input when available.")
         } else {
-            userLines.append("Format: Use headings with 2-3 sentence paragraphs. Headings must be plain text with a trailing colon.")
-            userLines.append("Headings: Comment themes:, Notable contributors or tools:, Technical clarifications or Q&A:, Reactions or viewpoints:")
+            userLines.append("Format: Use Markdown headings with 2-3 sentence paragraphs.")
+            userLines.append("Headings: ## Comment themes, ## Notable contributors or tools, ## Technical clarifications or Q&A, ## Reactions or viewpoints.")
             userLines.append("Cite at least \(profile.commentCiteCount) distinct comments or authors using short phrases from the input.")
             userLines.append("If an Authors line is present, list at least two names under Notable contributors or tools. Treat it as metadata, not as a comment theme.")
             userLines.append("Each heading must include at least 2 sentences. If details are missing, write 'Not stated in the page.' and add a second sentence explaining the gap.")
@@ -364,7 +367,7 @@ public struct SummaryService {
     }
 
     private func sanitizeSummary(_ text: String) -> String {
-        let cleaned = TextUtils.stripMarkdown(text)
+        let cleaned = text.replacingOccurrences(of: "\r\n", with: "\n")
         let deduped = dedupeLines(cleaned)
         let collapsed = collapseRepeatedTokens(deduped)
         return collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -944,12 +947,13 @@ public struct SummaryService {
                     let countText = itemCount > 0 ? "\(itemCount) items" : "multiple items"
                     var output: [String] = []
                     output.append("The page lists \(countText), including topics like \(topicPreview).")
+                    output.append("")
                     for (index, item) in items.enumerated() {
                         let number = index + 1
                         let titleSentence = sentenceify(item.title)
                         let detailText = item.snippet.isEmpty ? "Not stated in the page." : "Details: \(item.snippet)"
                         let detailSentence = sentenceify(detailText)
-                        output.append("Item \(number): \(titleSentence) \(detailSentence)")
+                        output.append("\(number). \(titleSentence) \(detailSentence)")
                     }
                     return output.joined(separator: "\n")
                 }
@@ -966,11 +970,20 @@ public struct SummaryService {
             let notable = sentences.dropFirst(2).first ?? limitedContentResponse(input: input)
             let nextStep = "Ask for comments or a deeper breakdown."
             return [
-                "Topic overview: \(overview)",
-                "What it is: \(whatItIs)",
-                "Key points: \(keyPoints.isEmpty ? limitedContentResponse(input: input) : keyPoints)",
-                "Why it is notable: \(notable)",
-                "Optional next step: \(nextStep)"
+                "## Topic overview",
+                overview,
+                "",
+                "## What it is",
+                whatItIs,
+                "",
+                "## Key points",
+                keyPoints.isEmpty ? limitedContentResponse(input: input) : keyPoints,
+                "",
+                "## Why it is notable",
+                notable,
+                "",
+                "## Optional next step",
+                nextStep
             ].joined(separator: "\n")
         case .commentDetail:
             let commentBodies = extractCommentBodies(from: lines, maxItems: 4)
@@ -981,10 +994,17 @@ public struct SummaryService {
             let reactions = commentBodies.dropFirst(3).first ?? sentences.dropFirst(2).first ?? limitedContentResponse(input: input)
             let contributorLine = authors.isEmpty ? limitedContentResponse(input: input) : authors.joined(separator: ", ")
             return [
-                "Comment themes: \(sentenceify(theme)) \(sentenceify(secondaryTheme))",
-                "Notable contributors or tools: \(sentenceify(contributorLine)) \(sentenceify(limitedContentResponse(input: input)))",
-                "Technical clarifications or Q&A: \(sentenceify(notable)) \(sentenceify(limitedContentResponse(input: input)))",
-                "Reactions or viewpoints: \(sentenceify(reactions)) \(sentenceify(limitedContentResponse(input: input)))"
+                "## Comment themes",
+                "\(sentenceify(theme)) \(sentenceify(secondaryTheme))",
+                "",
+                "## Notable contributors or tools",
+                "\(sentenceify(contributorLine)) \(sentenceify(limitedContentResponse(input: input)))",
+                "",
+                "## Technical clarifications or Q&A",
+                "\(sentenceify(notable)) \(sentenceify(limitedContentResponse(input: input)))",
+                "",
+                "## Reactions or viewpoints",
+                "\(sentenceify(reactions)) \(sentenceify(limitedContentResponse(input: input)))"
             ].joined(separator: "\n")
         }
     }
@@ -1002,6 +1022,7 @@ public struct SummaryService {
             overviewParts.append(firstSentence)
         }
         if !overviewParts.isEmpty {
+            paragraphs.append("### Overview")
             paragraphs.append(overviewParts.joined(separator: " "))
         }
         var detailParts: [String] = []
@@ -1012,9 +1033,11 @@ public struct SummaryService {
             detailParts.append(earlySentences.dropFirst().prefix(1).joined(separator: " "))
         }
         if !detailParts.isEmpty {
+            paragraphs.append("### Key details")
             paragraphs.append(detailParts.joined(separator: " "))
         }
         let notable = earlySentences.dropFirst(2).first ?? limitedContentResponse(input: input)
+        paragraphs.append("### Why it matters")
         paragraphs.append("Notable detail: " + notable)
         return paragraphs.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }

@@ -285,6 +285,7 @@ Summarization data path (current prototype):
 - `observe_dom` extracts visible text, blocks, items, outline, and comments from the DOM; navigation/overlays/ads are filtered in JS before they enter the context pack.
 - `SummaryInputBuilder` selects list vs page text vs comments and compacts the text (dedupe + low-signal filtering).
 - `SummaryService` chunk-summarizes long inputs with the local model, then produces a final summary; output streams to the UI and is **append-only** (no replacement).
+- Summary output uses a **sanitized Markdown subset** and includes a `summaryFormat` hint so the UI can render safely (see `docs/rendering.md`).
 - Validation enforces grounding against anchors; if the stream is empty, a fallback summary is appended.
 
 ## Execution Surfaces (Isolated vs “My Browser” Connector)
@@ -825,7 +826,8 @@ Additional entry points (to reduce friction, not to add power):
 
 Treat anything derived from a webpage as untrusted content and render it accordingly:
 
-- **Text-only rendering**: page excerpts, titles, and extracted strings must be rendered as text (escape everything; never `innerHTML`).
+- **Text-only rendering for page content**: page excerpts, titles, and extracted strings must be rendered as text (escape everything; never `innerHTML`).
+- **Sanitized Markdown for assistant responses only**: assistant summaries may be rendered using a restricted Markdown subset after parsing and sanitization; never allow raw HTML from the model. See `docs/rendering.md`.
 - **No untrusted labels**: never use page text as a button label, menu item, or approval CTA. CTAs must be app-defined strings.
 - **Safe citations/anchors**:
   - Display the verified `origin` next to citations so users can see where content came from.

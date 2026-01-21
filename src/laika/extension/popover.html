@@ -64,15 +64,78 @@
         overflow: auto;
         background: #ffffff;
         font-size: 12px;
+        line-height: 1.6;
         border-radius: 8px;
       }
       .message {
-        margin-bottom: 10px;
+        margin-bottom: 12px;
       }
       .message strong {
         display: block;
         font-weight: 600;
         color: #2c3a4b;
+      }
+      .message-body {
+        margin-top: 2px;
+        white-space: pre-wrap;
+        color: #1f2a3a;
+      }
+      .message-body.markdown {
+        white-space: normal;
+      }
+      .message-body p {
+        margin: 0 0 8px;
+      }
+      .message-body p:last-child {
+        margin-bottom: 0;
+      }
+      .message-body h2,
+      .message-body h3,
+      .message-body h4 {
+        margin: 10px 0 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: #1b2a3d;
+      }
+      .message-body ul,
+      .message-body ol {
+        margin: 6px 0 8px 18px;
+        padding: 0;
+      }
+      .message-body li {
+        margin: 4px 0;
+      }
+      .message-body blockquote {
+        margin: 6px 0;
+        padding-left: 10px;
+        border-left: 2px solid #d6e2f1;
+        color: #4a5b70;
+      }
+      .message-body code {
+        font-family: "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 11px;
+        background: #f2f6fb;
+        padding: 1px 4px;
+        border-radius: 4px;
+      }
+      .message-body pre {
+        margin: 6px 0 10px;
+        padding: 8px;
+        background: #f2f6fb;
+        border-radius: 6px;
+        overflow-x: auto;
+      }
+      .message-body pre code {
+        display: block;
+        padding: 0;
+        background: transparent;
+      }
+      .message-body a {
+        color: #1b78ff;
+        text-decoration: none;
+      }
+      .message-body a:hover {
+        text-decoration: underline;
       }
       .composer {
         padding: 10px 12px 12px;
@@ -135,6 +198,8 @@
       <textarea id="goal" placeholder="Ask about this page..."></textarea>
       <button id="send">Send</button>
     </div>
+    <script src="lib/vendor/markdown-it.min.js"></script>
+    <script src="lib/vendor/purify.min.js"></script>
     <script src="lib/plan_validator.js"></script>
     <script src="popover.js"></script>
   </body>

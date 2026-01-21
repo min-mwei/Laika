@@ -8,5 +8,6 @@ Quick index for design and research notes.
 - `docs/llm_tools.md`: tool-calling contract and tool catalog for Laika models.
 - `docs/local_llm.md`: local model runtime and safety/perf guidance.
 - `docs/QWen3.md`: Qwen3 thinking/streaming/decoding one-pager.
+- `docs/rendering.md`: Markdown subset rendering rules and UI sanitization pipeline.
 
 If you add a new doc, list it here. Keep entries short and focused on intent. 

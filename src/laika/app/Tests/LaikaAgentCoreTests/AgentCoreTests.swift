@@ -28,6 +28,7 @@ final class AgentCoreTests: XCTestCase {
 
         XCTAssertTrue(response.summary.isEmpty == false)
         XCTAssertEqual(response.actions.count, 0)
+        XCTAssertEqual(response.summaryFormat, .markdown)
     }
 
     func testAssistSummaryFallbackIncludesItems() async throws {
@@ -64,5 +65,6 @@ final class AgentCoreTests: XCTestCase {
 
         XCTAssertTrue(response.summary.contains("Alpha Beta Gamma"))
         XCTAssertEqual(response.actions.count, 0)
+        XCTAssertEqual(response.summaryFormat, .markdown)
     }
 }

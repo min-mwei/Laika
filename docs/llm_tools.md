@@ -50,6 +50,7 @@ Summary path (read-only):
 - The planner emits `content.summarize`.
 - The UI calls `summary.start`, then polls `summary.poll` until `done`.
 - The summary stream is **append-only** in the UI; it is not replaced.
+- Summary output uses a sanitized Markdown subset; plan responses include an optional `summaryFormat` field (`plain` or `markdown`) so the UI can render safely.
 
 ## Tool-calling contract (current)
 
@@ -58,6 +59,7 @@ The model must return exactly one JSON object:
 ```json
 {
   "summary": "short user-facing summary",
+  "summaryFormat": "plain",
   "tool_calls": [
     {"name": "browser.click", "arguments": {"handleId": "laika-12"}},
     {"name": "browser.type", "arguments": {"handleId": "laika-7", "text": "example"}}
@@ -71,6 +73,7 @@ Rules:
 - Use only `handleId` values from the latest observation.
 - Tool names must match the allowed list.
 - Arguments must be valid JSON values (strings, numbers, booleans, objects).
+- `summaryFormat` is optional; when present it must be `plain` or `markdown`.
 
 ### Parsing behavior
 
@@ -186,7 +189,7 @@ Long-context guidance (from `docs/local_llm.md`):
 1. `browser.observe_dom` extracts structured context: `text`, `blocks`, `primary`, `items`, `outline`, and `comments`.
 2. `SummaryInputBuilder` chooses a representation (list vs page text vs comments) and compacts text (dedupe + low-signal filtering).
 3. `SummaryService` chunk-summarizes long inputs, then produces a final summary using the local model.
-4. The UI streams summary output via `summary.start/poll` and appends tokens to the chat log.
+4. The UI streams summary output via `summary.start/poll` and appends tokens to the chat log, rendering the Markdown subset through a parser + sanitizer.
 
 ## Tool categories
 
