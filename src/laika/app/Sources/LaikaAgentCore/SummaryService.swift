@@ -211,6 +211,8 @@ public struct SummaryService {
         systemLines.append("Summarize the page content using only the provided text.")
         systemLines.append("Focus on the visible content, not on describing the website or brand.")
         systemLines.append("Ignore navigation chrome and UI labels unless they are part of the content.")
+        systemLines.append("Input lines may include prefixes like H1:/H2:, '-', '>', 'Code:', 'Summary:', 'Caption:', 'Term:', 'Definition:'. Treat them as structure hints, convert to Markdown headings/bullets/quotes, and do not repeat the prefixes.")
+        systemLines.append("Leading spaces before '-' indicate nested list depth; preserve nesting when useful.")
         systemLines.append("Avoid UI/control words like login, submit, share, hide, reply unless they describe the content.")
         systemLines.append("Do not repeat sentences or phrases.")
         systemLines.append("Use a minimal Markdown subset when helpful: headings (##/###/####), lists, emphasis, inline code, code blocks, blockquotes, and links.")
@@ -227,7 +229,7 @@ public struct SummaryService {
         userLines.append("Page metadata: \(context.observation.title) (\(context.observation.url))")
         userLines.append("Input kind: \(input.kind.rawValue)")
         if input.usedItems > 0 {
-            userLines.append("Items provided: \(input.usedItems) of \(context.observation.items.count)")
+            userLines.append("Items provided (observed): \(input.usedItems) of \(context.observation.items.count)")
         }
         if input.usedComments > 0 {
             userLines.append("Comments provided: \(input.usedComments) of \(context.observation.comments.count)")
@@ -236,8 +238,9 @@ public struct SummaryService {
         userLines.append("BEGIN_PAGE_TEXT")
         userLines.append(input.text)
         userLines.append("END_PAGE_TEXT")
-        userLines.append("Metadata lines starting with 'Title:', 'URL:', 'Item count:', 'Comment count', 'Authors', or 'Outline:' are context only; do not treat them as content themes.")
-        userLines.append("You may use numbers from metadata as supporting details, but not as the main topic.")
+        userLines.append("Metadata lines starting with 'Title:', 'URL:', 'Observed items:', 'Items provided', 'Comment count', or 'Authors' are context only; do not treat them as content themes.")
+        userLines.append("Lines starting with 'Outline:' are structure hints; use them for section names but do not treat them as content facts.")
+        userLines.append("You may use numbers from metadata as observed context, but do not claim totals or rankings unless explicitly stated in the page text.")
         if input.accessSignals.contains("chunked_input") {
             userLines.append("The text includes chunk summaries derived from the page content; treat them as content but do not mention chunks.")
         }
@@ -257,6 +260,7 @@ public struct SummaryService {
                 userLines.append("Format: 1 overview paragraph (4-5 sentences) describing the mix of items and any trends.")
                 userLines.append("Then include a numbered list with \(profile.listItemCount) items. Each item must be 2 sentences: first for the topic, second for numbers, names, or why it is notable.")
                 userLines.append("If the second sentence is missing, write: 'Not stated in the page.'")
+                userLines.append("Numbering is for readability only; do not refer to items as 'item #N' or imply rank unless the text explicitly states a rank.")
             } else {
                 userLines.append("Format: 3 short paragraphs (2-3 sentences each). Mention notable numbers or rankings when present.")
                 userLines.append("Aim for at least 6 sentences total. If needed, add another detail from the input.")
@@ -276,7 +280,8 @@ public struct SummaryService {
         }
         if input.kind == .list {
             let required = min(5, max(1, input.usedItems))
-            userLines.append("Include at least \(required) distinct items from the list and any visible counts. Paraphrase; do not copy list lines or repeat titles.")
+            userLines.append("Include at least \(required) distinct items from the list. If item snippets include visible counts (points, comments, dates), you may mention them, but avoid claiming total item counts.")
+            userLines.append("If you mention counts, qualify them as observed in this snapshot.")
             userLines.append("Do not describe the site itself; summarize the listed topics and themes.")
         } else if input.kind == .item {
             userLines.append("Focus on the single item details; do not introduce other list items.")
@@ -882,7 +887,10 @@ public struct SummaryService {
         return line.hasPrefix("Title:")
             || line.hasPrefix("URL:")
             || line.hasPrefix("Item count:")
+            || line.hasPrefix("Observed items:")
+            || line.hasPrefix("Items provided")
             || line.hasPrefix("Comment count:")
+            || line.hasPrefix("Authors")
             || line.hasPrefix("Outline:")
     }
 
@@ -1254,6 +1262,9 @@ public struct SummaryService {
         let words = text.split(separator: " ")
         let wordCount = words.count
         if wordCount < 6 && text.count < 120 {
+            if text.rangeOfCharacter(from: .decimalDigits) != nil || hasCapitalizedWord(text) || text.contains(":") {
+                return false
+            }
             return true
         }
         let lowerWords = words.map { $0.lowercased() }
@@ -1288,6 +1299,19 @@ public struct SummaryService {
         let shortRatio = wordCount > 0 ? Double(shortWords) / Double(wordCount) : 0
         if wordCount < 60 {
             if upperRatio > 0.6 || digitRatio > 0.45 || shortRatio > 0.45 {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func hasCapitalizedWord(_ text: String) -> Bool {
+        let words = text.split(separator: " ")
+        for word in words {
+            guard let first = word.unicodeScalars.first else {
+                continue
+            }
+            if CharacterSet.uppercaseLetters.contains(first) {
                 return true
             }
         }

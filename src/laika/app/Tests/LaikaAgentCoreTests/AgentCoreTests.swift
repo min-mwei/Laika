@@ -22,7 +22,7 @@ final class AgentCoreTests: XCTestCase {
         let observation = Observation(url: "https://example.com", title: "Example", text: "", elements: [element])
         let context = ContextPack(origin: "https://example.com", mode: .assist, observation: observation, recentToolCalls: [])
 
-        let model = StaticModelRunner()
+        let model = MockModelRunner(summary: "No tool calls proposed.")
         let orchestrator = AgentOrchestrator(model: model)
         let response = try await orchestrator.runOnce(context: context, userGoal: "What is this page about?")
 

@@ -186,9 +186,9 @@ Long-context guidance (from `docs/local_llm.md`):
 
 ## Summary pipeline (current)
 
-1. `browser.observe_dom` extracts structured context: `text`, `blocks`, `primary`, `items`, `outline`, and `comments`.
-2. `SummaryInputBuilder` chooses a representation (list vs page text vs comments) and compacts text (dedupe + low-signal filtering).
-3. `SummaryService` chunk-summarizes long inputs, then produces a final summary using the local model.
+1. `browser.observe_dom` extracts structured context: `text` (line-preserved with heading/list prefixes and nested list indentation), ordered `blocks` (selected in DOM order with a primary-centered window plus tail coverage), `primary`, `items`, `outline`, and `comments`. Deep traversal reuses a cached root set per observation to reduce repeated scans.
+2. `SummaryInputBuilder` chooses a representation (list vs page text vs comments) and compacts text while preserving line boundaries for headings/lists and nested list indentation.
+3. `SummaryService` chunk-summarizes long inputs, then produces a final summary using the local model and prompts it to interpret structural prefixes (H2:, `-`, `>`, Code:, etc.) while treating list counts as observed context rather than page totals.
 4. The UI streams summary output via `summary.start/poll` and appends tokens to the chat log, rendering the Markdown subset through a parser + sanitizer.
 
 ## Tool categories

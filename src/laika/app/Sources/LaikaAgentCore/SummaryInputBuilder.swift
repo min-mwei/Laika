@@ -47,7 +47,11 @@ struct SummaryInputBuilder {
         if isListObservation(context), !context.observation.items.isEmpty {
             return buildFromItems(context: context)
         }
-        return buildFromBlocks(context: context, goalPlan: goalPlan)
+        let blockInput = buildFromBlocks(context: context, goalPlan: goalPlan)
+        if isLowSignalSummaryInput(blockInput), !context.observation.items.isEmpty {
+            return buildFromItems(context: context)
+        }
+        return blockInput
     }
 
     private static func wantsComments(goalPlan: GoalPlan) -> Bool {
@@ -89,7 +93,7 @@ struct SummaryInputBuilder {
             used += 1
         }
         let titleLine = buildTitleLine(context: context)
-        let countLine = "Item count: \(items.count)"
+        let countLine = "Observed items: \(items.count)"
         let body = lines.joined(separator: "\n")
         let text = [titleLine, countLine, body].filter { !$0.isEmpty }.joined(separator: "\n")
         let signals = accessSignals(context: context, kind: .list)
@@ -216,7 +220,7 @@ struct SummaryInputBuilder {
 
         let maxSentences = isDetail ? 8 : 12
         if let primary = context.observation.primary, isRelevant(primary: primary) {
-            let normalized = TextUtils.normalizeWhitespace(primary.text)
+            let normalized = TextUtils.normalizePreservingNewlines(primary.text)
             if !normalized.isEmpty {
                 if !isPromotionalText(normalized) {
                     let compacted = compactText(normalized, maxSentences: maxSentences)
@@ -238,7 +242,7 @@ struct SummaryInputBuilder {
             } else if !isRelevant(block: block) {
                 continue
             }
-            let normalized = TextUtils.normalizeWhitespace(block.text)
+            let normalized = TextUtils.normalizePreservingNewlines(block.text)
             if normalized.isEmpty {
                 continue
             }
@@ -256,7 +260,7 @@ struct SummaryInputBuilder {
         }
 
         if segments.isEmpty {
-            let normalized = TextUtils.normalizeWhitespace(context.observation.text)
+            let normalized = TextUtils.normalizePreservingNewlines(context.observation.text)
             if !normalized.isEmpty && !isLowSignalText(normalized) {
                 segments.append(compactText(normalized))
             }
@@ -354,9 +358,21 @@ struct SummaryInputBuilder {
     }
 
     private static func compactText(_ text: String, maxSentences: Int = 12) -> String {
-        let sentences = TextUtils.splitSentences(text)
-        guard !sentences.isEmpty else {
+        let normalized = TextUtils.normalizePreservingNewlines(text)
+        if normalized.isEmpty {
             return text
+        }
+        let lines = normalized.split(separator: "\n").map { String($0) }
+        if lines.count > 1 {
+            let compacted = compactLines(lines, maxLines: maxSentences)
+            if compacted.isEmpty {
+                return normalized
+            }
+            return collapseRepeatedTokens(compacted)
+        }
+        let sentences = TextUtils.splitSentences(normalized)
+        guard !sentences.isEmpty else {
+            return normalized
         }
         var seen: Set<String> = []
         var output: [String] = []
@@ -386,10 +402,101 @@ struct SummaryInputBuilder {
         return collapseRepeatedTokens(joined)
     }
 
+    private static func compactLines(_ lines: [String], maxLines: Int) -> String {
+        guard maxLines > 0 else {
+            return ""
+        }
+        var seen: Set<String> = []
+        var output: [String] = []
+        output.reserveCapacity(min(lines.count, maxLines))
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                continue
+            }
+            if isLowSignalLine(trimmed) {
+                continue
+            }
+            let key = normalizeForMatch(trimmed)
+            if key.isEmpty || seen.contains(key) {
+                continue
+            }
+            seen.insert(key)
+            output.append(line)
+            if output.count >= maxLines {
+                break
+            }
+        }
+        return output.joined(separator: "\n")
+    }
+
+    private static func isLowSignalLine(_ text: String) -> Bool {
+        let stripped = stripStructuredPrefix(text)
+        if stripped.isEmpty {
+            return true
+        }
+        if isUiOnlySegment(stripped) {
+            return true
+        }
+        if isStructuredLine(text) {
+            let words = stripped.split(separator: " ")
+            if words.count <= 1 && stripped.count < 12 && !containsDigit(stripped) {
+                return true
+            }
+            return false
+        }
+        return isLowSignalSentence(stripped)
+    }
+
+    private static func isStructuredLine(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("> ") {
+            return true
+        }
+        if trimmed.count >= 3 {
+            let scalars = Array(trimmed.unicodeScalars.prefix(3))
+            if scalars.count == 3,
+               scalars[0].value == 72,
+               CharacterSet.decimalDigits.contains(scalars[1]),
+               scalars[2].value == 58 {
+                return true
+            }
+        }
+        let prefixes = ["Code:", "Summary:", "Caption:", "Term:", "Definition:"]
+        for prefix in prefixes where trimmed.hasPrefix(prefix) {
+            return true
+        }
+        return false
+    }
+
+    private static func stripStructuredPrefix(_ text: String) -> String {
+        var output = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if output.hasPrefix("- ") || output.hasPrefix("> ") {
+            output = String(output.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if output.count >= 3 {
+            let scalars = Array(output.unicodeScalars.prefix(3))
+            if scalars.count == 3,
+               scalars[0].value == 72,
+               CharacterSet.decimalDigits.contains(scalars[1]),
+               scalars[2].value == 58 {
+                output = String(output.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        let prefixes = ["Code:", "Summary:", "Caption:", "Term:", "Definition:"]
+        for prefix in prefixes where output.hasPrefix(prefix) {
+            output = String(output.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return output
+    }
+
     private static func isLowSignalSentence(_ text: String) -> Bool {
         let words = text.split(separator: " ")
         let wordCount = words.count
         if wordCount < 6 && text.count < 120 {
+            if containsDigit(text) || hasCapitalizedWord(text) || text.contains(":") {
+                return false
+            }
             return true
         }
         let lowerWords = words.map { $0.lowercased() }
@@ -431,6 +538,9 @@ struct SummaryInputBuilder {
     }
 
     private static func isUiHeavySentence(_ text: String) -> Bool {
+        if isStructuredLine(text) {
+            return false
+        }
         if text.contains(".") || text.contains("?") || text.contains("!") {
             return false
         }
@@ -544,6 +654,19 @@ struct SummaryInputBuilder {
 
     private static func containsDigit(_ text: String) -> Bool {
         return text.rangeOfCharacter(from: .decimalDigits) != nil
+    }
+
+    private static func hasCapitalizedWord(_ text: String) -> Bool {
+        let words = text.split(separator: " ")
+        for word in words {
+            guard let first = word.unicodeScalars.first else {
+                continue
+            }
+            if CharacterSet.uppercaseLetters.contains(first) {
+                return true
+            }
+        }
+        return false
     }
 
     private static func collapseRepeatedTokens(_ text: String) -> String {
@@ -728,9 +851,12 @@ struct SummaryInputBuilder {
         if !isRelevant(block: block) {
             return false
         }
-        let textLength = block.text.count
+        let normalized = TextUtils.normalizePreservingNewlines(block.text)
+        let textLength = normalized.count
         if textLength < 60 {
-            return false
+            if !(containsDigit(normalized) || hasCapitalizedWord(normalized) || normalized.contains(":")) {
+                return false
+            }
         }
         if block.linkDensity > 0.45 && block.linkCount >= 3 {
             return false
@@ -773,6 +899,9 @@ struct SummaryInputBuilder {
         let words = normalized.split(separator: " ")
         let wordCount = words.count
         if wordCount < 6 && normalized.count < 120 {
+            if containsDigit(normalized) || hasCapitalizedWord(normalized) || normalized.contains(":") {
+                return false
+            }
             return true
         }
         var letters = 0

@@ -282,9 +282,9 @@ Content Script (extract/act) ──► Background Script ──► Native Messag
 
 Summarization data path (current prototype):
 
-- `observe_dom` extracts visible text, blocks, items, outline, and comments from the DOM; navigation/overlays/ads are filtered in JS before they enter the context pack.
-- `SummaryInputBuilder` selects list vs page text vs comments and compacts the text (dedupe + low-signal filtering).
-- `SummaryService` chunk-summarizes long inputs with the local model, then produces a final summary; output streams to the UI and is **append-only** (no replacement).
+- `observe_dom` extracts visible text, ordered blocks (primary-centered window plus tail coverage), items, outline, and comments from the DOM; text preserves heading/list boundaries and nested list indentation with lightweight prefixes, and navigation/overlays/ads are filtered in JS before they enter the context pack. Deep traversal caches a root set per observation to reduce repeated scans.
+- `SummaryInputBuilder` selects list vs page text vs comments and compacts the text while preserving line structure for headings/lists and nested indentation (dedupe + low-signal filtering).
+- `SummaryService` chunk-summarizes long inputs with the local model, then produces a final summary; its prompt interprets structural prefixes and treats list counts as observed context. Output streams to the UI and is **append-only** (no replacement).
 - Summary output uses a **sanitized Markdown subset** and includes a `summaryFormat` hint so the UI can render safely (see `docs/rendering.md`).
 - Validation enforces grounding against anchors; if the stream is empty, a fallback summary is appended.
 

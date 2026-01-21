@@ -13,7 +13,7 @@ This repo includes a lightweight automation harness that drives the real Laika p
 ## How it works
 
 1) Launches Playwright, sets `window.__LAIKA_HARNESS__ = true`, and injects `src/laika/extension/content_script.js`.
-2) Calls `window.LaikaHarness.observeDom()` to produce an Observation using the same extraction logic as the extension (handles, blocks, items, outline, comments).
+2) Waits a short post-load delay (configurable) and calls `window.LaikaHarness.observeDom()` to produce an Observation using the same extraction logic as the extension (handles, blocks, items, outline, comments).
 3) Builds a `PlanRequest` with `context` (origin, mode, observation, recent tool calls/results, tabs, runId, step/maxSteps) and POSTs to `/plan`.
 4) Picks the first action whose policy is `allow` or `ask`. With `--no-auto-approve`, it stops on `ask` instead of executing.
 5) Executes the tool, then re-observes:
@@ -94,6 +94,7 @@ Scenario files are JSON with a URL and one or more goals:
 - `--browser webkit|chromium|firefox` (default: webkit).
 - `--detail` for larger `observe_dom` budgets.
 - `--headed` to watch the run in a visible browser.
+- `--observe-wait 300` to delay before observing after loads/actions (useful for dynamic pages).
 - `--output /tmp/results.json` to save JSON output.
 - `--no-auto-approve` to stop on policy prompts instead of auto-approving.
 - `--max-steps 6` to cap tool-call steps per goal.

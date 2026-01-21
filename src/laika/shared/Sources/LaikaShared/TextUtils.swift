@@ -7,6 +7,47 @@ public enum TextUtils {
             .joined(separator: " ")
     }
 
+    public static func normalizePreservingNewlines(_ text: String) -> String {
+        let lines = text.components(separatedBy: .newlines)
+        var output: [String] = []
+        output.reserveCapacity(lines.count)
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                continue
+            }
+            let collapsed = trimmed
+                .split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\r" })
+                .joined(separator: " ")
+            if collapsed.isEmpty {
+                continue
+            }
+            var indent = ""
+            if collapsed.hasPrefix("- ") {
+                var indentCount = 0
+                for scalar in line.unicodeScalars {
+                    if scalar.value == 32 {
+                        indentCount += 1
+                        continue
+                    }
+                    if scalar.value == 9 {
+                        indentCount += 2
+                        continue
+                    }
+                    if scalar.value == 13 {
+                        continue
+                    }
+                    break
+                }
+                if indentCount > 0 {
+                    indent = String(repeating: " ", count: min(indentCount, 8))
+                }
+            }
+            output.append(indent + collapsed)
+        }
+        return output.joined(separator: "\n")
+    }
+
     public static func splitSentences(_ text: String) -> [String] {
         var sentences: [String] = []
         var buffer = ""

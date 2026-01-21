@@ -14,6 +14,8 @@ try {
 
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8765";
 const DEFAULT_MAX_STEPS = 6;
+const DEFAULT_OBSERVE_DELAY_MS = 300;
+const DETAIL_OBSERVE_DELAY_MS = 500;
 const DEFAULT_OBSERVE_OPTIONS = {
   maxChars: 12000,
   maxElements: 160,
@@ -52,6 +54,7 @@ function usage() {
       "  --max-steps <n>        Max tool-call steps per goal (default 6)",
       "  --detail              Use larger observe_dom budgets",
       "  --headed              Show browser window",
+      "  --observe-wait <ms>    Delay before observing after load/actions",
       "  --output <path>        Write run results to JSON",
       "  --no-auto-approve      Stop on policy 'ask' instead of auto-approving"
     ].join("\n")
@@ -70,6 +73,7 @@ function parseArgs() {
   let detail = false;
   let outputPath = null;
   let autoApprove = true;
+  let observeDelayMs = null;
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -101,6 +105,9 @@ function parseArgs() {
       case "--output":
         outputPath = args[++i] || null;
         break;
+      case "--observe-wait":
+        observeDelayMs = parseInt(args[++i] || "0", 10);
+        break;
       case "--no-auto-approve":
         autoApprove = false;
         break;
@@ -110,12 +117,12 @@ function parseArgs() {
   }
 
   if (scenarioPath) {
-    return { scenarioPath, server, browserName, maxSteps, headless, detail, outputPath, autoApprove };
+    return { scenarioPath, server, browserName, maxSteps, headless, detail, outputPath, autoApprove, observeDelayMs };
   }
   if (!url || goals.length === 0) {
     return null;
   }
-  return { url, goals, server, browserName, maxSteps, headless, detail, outputPath, autoApprove };
+  return { url, goals, server, browserName, maxSteps, headless, detail, outputPath, autoApprove, observeDelayMs };
 }
 
 function loadScenario(scenarioPath) {
@@ -287,6 +294,20 @@ async function observeDom(page, options) {
   return observation;
 }
 
+async function waitForObserveDelay(page, delayMs) {
+  if (typeof delayMs !== "number" || !isFinite(delayMs) || delayMs <= 0) {
+    return;
+  }
+  await page.waitForTimeout(delayMs);
+}
+
+function resolveObserveDelayMs(detail, override) {
+  if (typeof override === "number" && isFinite(override) && override >= 0) {
+    return override;
+  }
+  return detail ? DETAIL_OBSERVE_DELAY_MS : DEFAULT_OBSERVE_DELAY_MS;
+}
+
 async function applyTool(page, toolName, args) {
   return await page.evaluate(
     (name, payload) => {
@@ -300,12 +321,13 @@ async function applyTool(page, toolName, args) {
   );
 }
 
-async function executeTool(page, toolCall, observeOptions, navTimeoutMs) {
+async function executeTool(page, toolCall, observeOptions, navTimeoutMs, observeDelayMs) {
   const name = toolCall.name;
   const args = toolCall.arguments || {};
   let result = { status: "ok" };
   let observation = null;
   if (name === "browser.observe_dom") {
+    await waitForObserveDelay(page, observeDelayMs);
     observation = await observeDom(page, Object.keys(args).length ? args : observeOptions);
   } else if (name === "browser.open_tab" || name === "browser.navigate") {
     const url = args.url;
@@ -313,23 +335,28 @@ async function executeTool(page, toolCall, observeOptions, navTimeoutMs) {
       result = { status: "error", error: "missing_url" };
     } else {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: navTimeoutMs });
+      await waitForObserveDelay(page, observeDelayMs);
       observation = await observeDom(page, observeOptions);
     }
   } else if (name === "browser.back") {
     await page.goBack({ waitUntil: "domcontentloaded", timeout: navTimeoutMs }).catch(() => {});
+    await waitForObserveDelay(page, observeDelayMs);
     observation = await observeDom(page, observeOptions);
   } else if (name === "browser.forward") {
     await page.goForward({ waitUntil: "domcontentloaded", timeout: navTimeoutMs }).catch(() => {});
+    await waitForObserveDelay(page, observeDelayMs);
     observation = await observeDom(page, observeOptions);
   } else if (name === "browser.refresh") {
     await page.reload({ waitUntil: "domcontentloaded", timeout: navTimeoutMs }).catch(() => {});
+    await waitForObserveDelay(page, observeDelayMs);
     observation = await observeDom(page, observeOptions);
   } else {
     const urlBefore = page.url();
     result = await applyTool(page, name, args);
-    await page.waitForTimeout(200);
+    await waitForObserveDelay(page, observeDelayMs);
     if (page.url() !== urlBefore) {
       await page.waitForLoadState("domcontentloaded", { timeout: navTimeoutMs }).catch(() => {});
+      await waitForObserveDelay(page, observeDelayMs);
     }
     observation = await observeDom(page, observeOptions);
   }
@@ -407,7 +434,13 @@ async function runGoals(state, goals, options) {
       if (action.policy && action.policy.decision === "ask" && !options.autoApprove) {
         break;
       }
-      const executed = await executeTool(state.page, action.toolCall, options.observeOptions, options.navTimeoutMs);
+      const executed = await executeTool(
+        state.page,
+        action.toolCall,
+        options.observeOptions,
+        options.navTimeoutMs,
+        options.observeDelayMs
+      );
       recentToolCalls.push(action.toolCall);
       const payload = action.toolCall.name === "browser.observe_dom"
         ? buildObservePayload(executed.observation)
@@ -439,6 +472,7 @@ async function main() {
   const goals = scenario ? scenario.goals : args.goals;
   const server = args.server;
   const observeOptions = args.detail ? DETAIL_OBSERVE_OPTIONS : DEFAULT_OBSERVE_OPTIONS;
+  const observeDelayMs = resolveObserveDelayMs(args.detail, args.observeDelayMs);
 
   const browserType = playwright[args.browserName] || playwright.webkit;
   const browser = await browserType.launch({ headless: args.headless });
@@ -453,6 +487,7 @@ async function main() {
 
   const page = await context.newPage();
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+  await waitForObserveDelay(page, observeDelayMs);
   const observation = await observeDom(page, observeOptions);
 
   const state = {
@@ -466,7 +501,8 @@ async function main() {
     observeOptions: observeOptions,
     navTimeoutMs: 15000,
     maxSteps: args.maxSteps,
-    autoApprove: args.autoApprove
+    autoApprove: args.autoApprove,
+    observeDelayMs: observeDelayMs
   });
 
   for (const result of results) {

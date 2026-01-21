@@ -1358,6 +1358,9 @@ public final class AgentOrchestrator: @unchecked Sendable {
                     return preview
                 }
             }
+            if sentences.isEmpty {
+                return buildOverview(title: title, url: url, fallback: "Not stated in the page.")
+            }
             return sentences.joined(separator: " ")
         }
     }
