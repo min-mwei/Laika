@@ -235,6 +235,7 @@ public struct Observation: Codable, Equatable, Sendable {
     public let outline: [ObservedOutlineItem]
     public let primary: ObservedPrimaryContent?
     public let comments: [ObservedComment]
+    public let signals: [String]
 
     public init(
         url: String,
@@ -245,7 +246,8 @@ public struct Observation: Codable, Equatable, Sendable {
         items: [ObservedItem] = [],
         outline: [ObservedOutlineItem] = [],
         primary: ObservedPrimaryContent? = nil,
-        comments: [ObservedComment] = []
+        comments: [ObservedComment] = [],
+        signals: [String] = []
     ) {
         self.url = url
         self.title = title
@@ -256,6 +258,7 @@ public struct Observation: Codable, Equatable, Sendable {
         self.outline = outline
         self.primary = primary
         self.comments = comments
+        self.signals = signals
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -268,6 +271,7 @@ public struct Observation: Codable, Equatable, Sendable {
         case outline
         case primary
         case comments
+        case signals
     }
 
     public init(from decoder: Decoder) throws {
@@ -281,6 +285,7 @@ public struct Observation: Codable, Equatable, Sendable {
         outline = try container.decodeIfPresent([ObservedOutlineItem].self, forKey: .outline) ?? []
         primary = try container.decodeIfPresent(ObservedPrimaryContent.self, forKey: .primary)
         comments = try container.decodeIfPresent([ObservedComment].self, forKey: .comments) ?? []
+        signals = try container.decodeIfPresent([String].self, forKey: .signals) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -294,6 +299,7 @@ public struct Observation: Codable, Equatable, Sendable {
         try container.encode(outline, forKey: .outline)
         try container.encodeIfPresent(primary, forKey: .primary)
         try container.encode(comments, forKey: .comments)
+        try container.encode(signals, forKey: .signals)
     }
 }
 

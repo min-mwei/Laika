@@ -40,7 +40,18 @@ public final class AgentOrchestrator: @unchecked Sendable {
     private let model: ModelRunner
     private let policyGate: PolicyGate
     private var cachedListItemsByRun: [String: [ObservedItem]] = [:]
+    private var lastListItems: [ObservedItem] = []
+    private var lastListOrigin: String = ""
     private let cacheLock = NSLock()
+    private static let debugEnabled: Bool = {
+        guard let raw = ProcessInfo.processInfo.environment["LAIKA_DEBUG"]?.lowercased() else {
+            return false
+        }
+        if raw == "1" || raw == "true" || raw == "yes" {
+            return true
+        }
+        return false
+    }()
 
     private enum SummaryFocus {
         case mainLinks
@@ -52,6 +63,11 @@ public final class AgentOrchestrator: @unchecked Sendable {
         case plain
         case topicDetail
         case commentDetail
+    }
+
+    private struct ResolvedItems {
+        let items: [ObservedItem]
+        let source: String
     }
 
     public init(model: ModelRunner, policyGate: PolicyGate = PolicyGate()) {
@@ -277,6 +293,19 @@ public final class AgentOrchestrator: @unchecked Sendable {
         }
         LaikaLogger.logAgentEvent(
             type: "agent.goal_plan",
+            runId: context.runId,
+            step: context.step,
+            maxSteps: context.maxSteps,
+            payload: payload
+        )
+    }
+
+    private func logDebugEvent(_ type: String, context: ContextPack, payload: [String: JSONValue]) {
+        guard Self.debugEnabled else {
+            return
+        }
+        LaikaLogger.logAgentEvent(
+            type: "agent.debug.\(type)",
             runId: context.runId,
             step: context.step,
             maxSteps: context.maxSteps,
@@ -516,6 +545,20 @@ public final class AgentOrchestrator: @unchecked Sendable {
             return nil
         }
         if intent == .commentSummary || goalPlan.wantsComments {
+            let stats = commentStats(for: context.observation.comments)
+            if stats.substantial {
+                if Self.debugEnabled {
+                    let payload: [String: JSONValue] = [
+                        "reason": .string("comments_substantial"),
+                        "commentCount": .number(Double(stats.count)),
+                        "commentChars": .number(Double(stats.totalChars)),
+                        "commentLongCount": .number(Double(stats.longCount)),
+                        "commentMetaCount": .number(Double(stats.metaCount))
+                    ]
+                    logDebugEvent("comment_link_skipped", context: context, payload: payload)
+                }
+                return nil
+            }
             if let commentLink = selectCommentLink(from: target, context: context) {
                 if !isSameURL(context.observation.url, commentLink.url) {
                     let summary = "Opening discussion for item \(target.index): \(target.title)."
@@ -534,39 +577,120 @@ public final class AgentOrchestrator: @unchecked Sendable {
     }
 
     private func selectTargetItem(context: ContextPack, goalPlan: GoalPlan) -> TargetItem? {
-        let items = resolvedItemCandidates(context: context)
+        let resolved = resolvedItemCandidates(context: context, goalPlan: goalPlan)
+        let items = resolved.items
+        if Self.debugEnabled {
+            var payload: [String: JSONValue] = [
+                "source": .string(resolved.source),
+                "count": .number(Double(items.count)),
+                "origin": .string(context.origin),
+                "intent": .string(goalPlan.intent.rawValue),
+                "wantsComments": .bool(goalPlan.wantsComments),
+                "listLike": .bool(isListObservation(context))
+            ]
+            if let index = goalPlan.itemIndex {
+                payload["requestedIndex"] = .number(Double(index))
+            } else {
+                payload["requestedIndex"] = .null
+            }
+            if let query = goalPlan.itemQuery, !query.isEmpty {
+                payload["requestedQuery"] = .string(truncateForLog(query, maxChars: 120))
+            }
+            var commentLinkCount = 0
+            for item in items where itemHasCommentLink(item) {
+                commentLinkCount += 1
+            }
+            payload["commentLinkItemCount"] = .number(Double(commentLinkCount))
+            logDebugEvent("items_resolved", context: context, payload: payload)
+        }
         if let index = goalPlan.itemIndex, index > 0 {
             if items.count >= index {
                 let item = items[index - 1]
+                if Self.debugEnabled {
+                    logDebugEvent(
+                        "item_selected",
+                        context: context,
+                        payload: debugItemPayload(item: item, selection: "index", index: index)
+                    )
+                }
                 return TargetItem(index: index, title: item.title, url: item.url, handleId: item.handleId, links: item.links)
             }
             if shouldUseMainLinkFallback(context: context) {
                 let fallbackLinks = MainLinkHeuristics.candidates(from: context.observation.elements)
                 if fallbackLinks.count >= index {
                     let link = fallbackLinks[index - 1]
+                    if Self.debugEnabled {
+                        let payload: [String: JSONValue] = [
+                            "selection": .string("main_link_fallback"),
+                            "index": .number(Double(index)),
+                            "title": .string(truncateForLog(link.label, maxChars: 120)),
+                            "url": .string(link.href ?? ""),
+                            "candidateCount": .number(Double(fallbackLinks.count))
+                        ]
+                        logDebugEvent("item_selected", context: context, payload: payload)
+                    }
                     return TargetItem(index: index, title: link.label, url: link.href ?? "", handleId: link.handleId, links: [])
                 }
             }
         }
         if let query = goalPlan.itemQuery, !query.isEmpty {
             if let match = matchItem(query: query, items: items) {
+                if Self.debugEnabled {
+                    logDebugEvent(
+                        "item_selected",
+                        context: context,
+                        payload: debugTargetPayload(target: match, selection: "query")
+                    )
+                }
                 return match
             }
+        }
+        if Self.debugEnabled {
+            let payload: [String: JSONValue] = [
+                "reason": .string("no_item_match"),
+                "count": .number(Double(items.count))
+            ]
+            logDebugEvent("item_not_found", context: context, payload: payload)
         }
         return nil
     }
 
-    private func resolvedItemCandidates(context: ContextPack) -> [ObservedItem] {
+    private func resolvedItemCandidates(context: ContextPack, goalPlan: GoalPlan) -> ResolvedItems {
+        if goalPlan.intent == .commentSummary || goalPlan.wantsComments {
+            let fallback = cachedLastListItems()
+            if !fallback.isEmpty {
+                return ResolvedItems(items: fallback, source: "cached_last_list")
+            }
+        }
         if isListObservation(context) {
-            return context.observation.items
+            if goalPlan.intent == .commentSummary || goalPlan.wantsComments {
+                if let runId = context.runId, !runId.isEmpty,
+                   let cached = cachedListItems(for: runId),
+                   itemsContainCommentLinks(cached) {
+                    return ResolvedItems(items: cached, source: "cached_run")
+                }
+                let fallback = cachedLastListItems()
+                let fallbackOrigin = cachedLastListOrigin()
+                if itemsContainCommentLinks(fallback), !fallbackOrigin.isEmpty, fallbackOrigin != context.origin {
+                    return ResolvedItems(items: fallback, source: "cached_last_list_other_origin")
+                }
+                if itemsContainCommentLinks(context.observation.items) {
+                    return ResolvedItems(items: context.observation.items, source: "current_observation")
+                }
+            }
+            return ResolvedItems(items: context.observation.items, source: "current_observation")
         }
         guard let runId = context.runId, !runId.isEmpty else {
-            return context.observation.items
+            return ResolvedItems(items: context.observation.items, source: "current_observation")
         }
         if let cached = cachedListItems(for: runId), !cached.isEmpty {
-            return cached
+            return ResolvedItems(items: cached, source: "cached_run")
         }
-        return context.observation.items
+        let fallback = cachedLastListItems()
+        if !fallback.isEmpty {
+            return ResolvedItems(items: fallback, source: "cached_last_list")
+        }
+        return ResolvedItems(items: context.observation.items, source: "current_observation")
     }
 
     private func hasCachedListItems(context: ContextPack) -> Bool {
@@ -595,14 +719,20 @@ public final class AgentOrchestrator: @unchecked Sendable {
     }
 
     private func cacheListItemsIfNeeded(context: ContextPack) {
-        guard let runId = context.runId, !runId.isEmpty else {
-            return
-        }
         guard isListObservation(context) else {
             return
         }
         cacheLock.lock()
-        cachedListItemsByRun[runId] = context.observation.items
+        if let runId = context.runId, !runId.isEmpty {
+            if cachedListItemsByRun[runId] == nil || cachedListItemsByRun[runId]?.isEmpty == true {
+                cachedListItemsByRun[runId] = context.observation.items
+            }
+        }
+        if itemsContainCommentLinks(context.observation.items),
+           itemsMostlyExternal(context.observation.items, origin: context.origin) {
+            lastListItems = context.observation.items
+            lastListOrigin = context.origin
+        }
         cacheLock.unlock()
     }
 
@@ -611,6 +741,69 @@ public final class AgentOrchestrator: @unchecked Sendable {
         let items = cachedListItemsByRun[runId]
         cacheLock.unlock()
         return items
+    }
+
+    private func cachedLastListItems() -> [ObservedItem] {
+        cacheLock.lock()
+        let items = lastListItems
+        cacheLock.unlock()
+        return items
+    }
+
+    private func cachedLastListOrigin() -> String {
+        cacheLock.lock()
+        let origin = lastListOrigin
+        cacheLock.unlock()
+        return origin
+    }
+
+    private struct CommentStats {
+        let count: Int
+        let totalChars: Int
+        let longCount: Int
+        let metaCount: Int
+        let substantial: Bool
+    }
+
+    private func commentStats(for comments: [ObservedComment]) -> CommentStats {
+        guard !comments.isEmpty else {
+            return CommentStats(count: 0, totalChars: 0, longCount: 0, metaCount: 0, substantial: false)
+        }
+        var totalChars = 0
+        var longCount = 0
+        var metaCount = 0
+        for comment in comments {
+            let trimmed = comment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            totalChars += trimmed.count
+            if trimmed.count >= 120 {
+                longCount += 1
+            }
+            if let author = comment.author?.trimmingCharacters(in: .whitespacesAndNewlines), !author.isEmpty {
+                metaCount += 1
+            }
+            if let age = comment.age?.trimmingCharacters(in: .whitespacesAndNewlines), !age.isEmpty {
+                metaCount += 1
+            }
+            if let score = comment.score?.trimmingCharacters(in: .whitespacesAndNewlines), !score.isEmpty {
+                metaCount += 1
+            }
+        }
+        let count = comments.count
+        var substantial = false
+        if count >= 6 {
+            substantial = true
+        } else if count >= 3 && (longCount >= 2 || totalChars >= 600 || metaCount >= 2) {
+            substantial = true
+        } else if totalChars >= 900 {
+            substantial = true
+        }
+        return CommentStats(
+            count: count,
+            totalChars: totalChars,
+            longCount: longCount,
+            metaCount: metaCount,
+            substantial: substantial
+        )
     }
 
     private func shouldUseMainLinkFallback(context: ContextPack) -> Bool {
@@ -685,13 +878,47 @@ public final class AgentOrchestrator: @unchecked Sendable {
             }
             return (link, score)
         }
+        if Self.debugEnabled {
+            var payloads: [JSONValue] = []
+            for (link, score) in scored.prefix(6) {
+                let entry: [String: JSONValue] = [
+                    "title": .string(truncateForLog(link.title, maxChars: 120)),
+                    "url": .string(link.url),
+                    "score": .number(Double(score)),
+                    "commentScore": .number(Double(commentSignalScore(text: link.title, url: link.url))),
+                    "host": .string(hostForURL(link.url))
+                ]
+                payloads.append(.object(entry))
+            }
+            let payload: [String: JSONValue] = [
+                "targetTitle": .string(truncateForLog(target.title, maxChars: 160)),
+                "targetUrl": .string(target.url),
+                "candidateCount": .number(Double(scored.count)),
+                "originHost": .string(originHost),
+                "targetHost": .string(targetHost),
+                "candidates": .array(payloads)
+            ]
+            logDebugEvent("comment_link_candidates", context: context, payload: payload)
+        }
         let sorted = scored.sorted { lhs, rhs in
             if lhs.1 == rhs.1 {
                 return lhs.0.title.count < rhs.0.title.count
             }
             return lhs.1 > rhs.1
         }
-        return sorted.first?.0 ?? candidates.first
+        guard let selected = sorted.first?.0 ?? candidates.first else {
+            return nil
+        }
+        if Self.debugEnabled {
+            let payload: [String: JSONValue] = [
+                "targetTitle": .string(truncateForLog(target.title, maxChars: 160)),
+                "selectedTitle": .string(truncateForLog(selected.title, maxChars: 120)),
+                "selectedUrl": .string(selected.url),
+                "selectedScore": .number(Double(commentSignalScore(text: selected.title, url: selected.url)))
+            ]
+            logDebugEvent("comment_link_selected", context: context, payload: payload)
+        }
+        return selected
     }
 
     private func commentSignalScore(text: String, url: String) -> Int {
@@ -705,6 +932,45 @@ public final class AgentOrchestrator: @unchecked Sendable {
             return 4
         }
         return 0
+    }
+
+    private func itemsContainCommentLinks(_ items: [ObservedItem]) -> Bool {
+        for item in items where itemHasCommentLink(item) {
+            return true
+        }
+        return false
+    }
+
+    private func itemHasCommentLink(_ item: ObservedItem) -> Bool {
+        for link in item.links {
+            if commentSignalScore(text: link.title, url: link.url) > 0 {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func itemsMostlyExternal(_ items: [ObservedItem], origin: String) -> Bool {
+        let originHost = hostForURL(origin)
+        guard !originHost.isEmpty else {
+            return false
+        }
+        var externalCount = 0
+        var total = 0
+        for item in items {
+            let itemHost = hostForURL(item.url)
+            if itemHost.isEmpty {
+                continue
+            }
+            total += 1
+            if itemHost != originHost {
+                externalCount += 1
+            }
+        }
+        guard total > 0 else {
+            return false
+        }
+        return Double(externalCount) / Double(total) >= 0.4
     }
 
     private func hostForURL(_ raw: String) -> String {
@@ -1310,6 +1576,43 @@ public final class AgentOrchestrator: @unchecked Sendable {
     private func truncateForLog(_ text: String, maxChars: Int) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return truncateText(trimmed, maxChars: maxChars)
+    }
+
+    private func debugItemPayload(item: ObservedItem, selection: String, index: Int) -> [String: JSONValue] {
+        return [
+            "selection": .string(selection),
+            "index": .number(Double(index)),
+            "title": .string(truncateForLog(item.title, maxChars: 160)),
+            "url": .string(item.url),
+            "linkCount": .number(Double(item.linkCount)),
+            "linkDensity": .number(item.linkDensity),
+            "links": .array(debugLinksPayload(item.links))
+        ]
+    }
+
+    private func debugTargetPayload(target: TargetItem, selection: String) -> [String: JSONValue] {
+        return [
+            "selection": .string(selection),
+            "index": .number(Double(target.index)),
+            "title": .string(truncateForLog(target.title, maxChars: 160)),
+            "url": .string(target.url),
+            "links": .array(debugLinksPayload(target.links))
+        ]
+    }
+
+    private func debugLinksPayload(_ links: [ObservedItemLink], limit: Int = 6) -> [JSONValue] {
+        var payloads: [JSONValue] = []
+        payloads.reserveCapacity(min(limit, links.count))
+        for link in links.prefix(limit) {
+            let entry: [String: JSONValue] = [
+                "title": .string(truncateForLog(link.title, maxChars: 120)),
+                "url": .string(link.url),
+                "commentScore": .number(Double(commentSignalScore(text: link.title, url: link.url))),
+                "host": .string(hostForURL(link.url))
+            ]
+            payloads.append(.object(entry))
+        }
+        return payloads
     }
 
     private func buildStructuredFallback(format: SummaryFormat, context: ContextPack) -> String {

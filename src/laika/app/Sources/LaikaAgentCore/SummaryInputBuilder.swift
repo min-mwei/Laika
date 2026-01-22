@@ -93,9 +93,8 @@ struct SummaryInputBuilder {
             used += 1
         }
         let titleLine = buildTitleLine(context: context)
-        let countLine = "Observed items: \(items.count)"
         let body = lines.joined(separator: "\n")
-        let text = [titleLine, countLine, body].filter { !$0.isEmpty }.joined(separator: "\n")
+        let text = [titleLine, body].filter { !$0.isEmpty }.joined(separator: "\n")
         let signals = accessSignals(context: context, kind: .list)
         return SummaryInput(
             kind: .list,
@@ -116,7 +115,7 @@ struct SummaryInputBuilder {
         var seenAuthors: Set<String> = []
         var seenTexts: Set<String> = []
         for (index, comment) in context.observation.comments.prefix(28).enumerated() {
-            let text = TextUtils.normalizeWhitespace(comment.text)
+            let text = TextUtils.normalizePreservingNewlines(comment.text)
             if text.isEmpty {
                 continue
             }
@@ -142,9 +141,23 @@ struct SummaryInputBuilder {
             if let score = comment.score?.trimmingCharacters(in: .whitespacesAndNewlines), !score.isEmpty {
                 prefix.append(score)
             }
+            if comment.depth > 0 {
+                prefix.append("depth \(comment.depth)")
+            }
             let header = prefix.isEmpty ? "" : " (" + prefix.joined(separator: " · ") + ") "
-            let line = "Comment \(index + 1):" + header + TextUtils.truncate(text, maxChars: 360)
-            lines.append(line)
+            let commentLines = text.split(separator: "\n").map { String($0) }
+            if let first = commentLines.first {
+                let line = "Comment \(index + 1):" + header + TextUtils.truncate(first, maxChars: 360)
+                lines.append(line)
+                if commentLines.count > 1 {
+                    for extra in commentLines.dropFirst() {
+                        let trimmed = TextUtils.truncate(extra, maxChars: 240)
+                        if !trimmed.isEmpty {
+                            lines.append("  " + trimmed)
+                        }
+                    }
+                }
+            }
             used += 1
         }
         let titleLine = buildTitleLine(context: context)
@@ -980,12 +993,39 @@ struct SummaryInputBuilder {
     }
 
     private static func accessSignals(context: ContextPack, kind: SummaryInput.Kind) -> AccessSignals {
-        if kind == .list || kind == .comments {
+        if kind == .list {
             return AccessSignals(limited: false, reasons: [])
         }
-        if isListObservation(context) {
+        if kind == .comments, !context.observation.comments.isEmpty {
             return AccessSignals(limited: false, reasons: [])
         }
+        if kind != .comments, isListObservation(context) {
+            return AccessSignals(limited: false, reasons: [])
+        }
+        if kind == .comments, isListObservation(context) {
+            return AccessSignals(limited: false, reasons: [])
+        }
+        let observedSignals = context.observation.signals
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        let gateSignals: Set<String> = [
+            "paywall",
+            "auth_gate",
+            "age_gate",
+            "geo_block",
+            "script_required"
+        ]
+        let overlaySignals: Set<String> = [
+            "overlay_or_dialog",
+            "consent_overlay"
+        ]
+        let authSignals: Set<String> = [
+            "auth_fields",
+            "auth_gate"
+        ]
+        let hasGateSignal = observedSignals.contains { gateSignals.contains($0) }
+        let hasOverlaySignal = observedSignals.contains { overlaySignals.contains($0) }
+        let hasAuthSignal = observedSignals.contains { authSignals.contains($0) }
         let primaryChars: Int
         if let primary = context.observation.primary, isRelevant(primary: primary) {
             primaryChars = primary.text.count
@@ -1007,12 +1047,18 @@ struct SummaryInputBuilder {
             return inputType == "password" || inputType == "email"
         }
         let lowContent = primaryChars < 220 && blockChars < 900 && textChars < 1800
-        if lowContent && (hasDialog || hasAuthField || textChars < 120) {
+        let shouldLimit = lowContent && (hasDialog || hasAuthField || hasGateSignal || hasOverlaySignal || hasAuthSignal || textChars < 120)
+        if shouldLimit {
             var reasons: [String] = []
-            if hasDialog {
+            for signal in observedSignals {
+                if !reasons.contains(signal) {
+                    reasons.append(signal)
+                }
+            }
+            if hasDialog && !reasons.contains("overlay_or_dialog") {
                 reasons.append("overlay_or_dialog")
             }
-            if hasAuthField {
+            if hasAuthField && !reasons.contains("auth_fields") {
                 reasons.append("auth_fields")
             }
             if reasons.isEmpty {

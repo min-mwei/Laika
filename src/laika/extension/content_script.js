@@ -60,6 +60,103 @@
     "dt",
     "dd"
   ]);
+  var COMMENT_SELECTORS = [
+    "[role=\"comment\"]",
+    "[itemprop=\"comment\"]",
+    "[itemtype*=\"Comment\"]",
+    "[data-comment-id]",
+    "[data-comment]",
+    "[data-thread-id]",
+    "[data-reply-id]",
+    ".comment",
+    "[class*=\"comment\"]",
+    "[class*=\"commtext\"]",
+    "[class*=\"reply\"]",
+    ".comment-body",
+    ".comment_body",
+    ".comment-content"
+  ].join(",");
+  var INLINE_COMMENT_TAGS = new Set(["span", "a", "em", "strong", "b", "i", "small", "time", "code"]);
+  var ACCESS_OVERLAY_SELECTORS = [
+    "dialog",
+    "[role=\"dialog\"]",
+    "[role=\"alertdialog\"]",
+    "[aria-modal=\"true\"]",
+    "[class*=\"modal\"]",
+    "[class*=\"overlay\"]",
+    "[class*=\"paywall\"]",
+    "[class*=\"subscribe\"]",
+    "[class*=\"consent\"]",
+    "[id*=\"modal\"]",
+    "[id*=\"overlay\"]",
+    "[id*=\"paywall\"]",
+    "[id*=\"subscribe\"]",
+    "[id*=\"consent\"]",
+    "[data-testid*=\"modal\"]",
+    "[data-testid*=\"overlay\"]",
+    "[data-testid*=\"paywall\"]"
+  ].join(",");
+  var PAYWALL_KEYWORDS_STRONG = [
+    "subscribe to continue",
+    "continue reading",
+    "subscription",
+    "subscribe now",
+    "start your free trial",
+    "start free trial",
+    "members only",
+    "member-only",
+    "already a subscriber",
+    "sign in to continue",
+    "log in to continue",
+    "paywall"
+  ];
+  var PAYWALL_KEYWORDS_WEAK = ["subscribe", "subscriber", "membership", "member", "premium", "free trial"];
+  var AUTH_GATE_KEYWORDS_STRONG = [
+    "sign in to",
+    "log in to",
+    "login to",
+    "create an account",
+    "create account",
+    "register to",
+    "account required",
+    "sign in required",
+    "login required"
+  ];
+  var AUTH_GATE_KEYWORDS_WEAK = ["sign in", "log in", "login", "sign up", "signup", "register", "create account"];
+  var CONSENT_KEYWORDS = [
+    "cookie",
+    "consent",
+    "privacy choices",
+    "privacy settings",
+    "cookie preferences",
+    "manage cookies",
+    "gdpr"
+  ];
+  var AGE_GATE_KEYWORDS = [
+    "age verification",
+    "verify your age",
+    "confirm your age",
+    "enter your date of birth",
+    "enter your birthday",
+    "you must be 18",
+    "age gate"
+  ];
+  var GEO_BLOCK_KEYWORDS = [
+    "not available in your country",
+    "not available in your region",
+    "not available in your location",
+    "unavailable in your region",
+    "not available in your area",
+    "outside your region"
+  ];
+  var SCRIPT_BLOCK_KEYWORDS = [
+    "enable javascript",
+    "javascript is disabled",
+    "please enable javascript",
+    "turn off ad blocker",
+    "disable adblock",
+    "ad blocker"
+  ];
   var BLOCK_CHILD_SELECTORS = [
     "p",
     "li",
@@ -106,6 +203,37 @@
       return normalized;
     }
     return normalized.slice(0, Math.max(0, maxChars));
+  }
+
+  function nowMs() {
+    if (typeof performance !== "undefined" && performance.now) {
+      return performance.now();
+    }
+    return Date.now();
+  }
+
+  function trimDebugValue(value, maxChars) {
+    var normalized = utils.normalizeWhitespace(value || "");
+    if (maxChars && normalized.length > maxChars) {
+      return normalized.slice(0, maxChars) + "...";
+    }
+    return normalized;
+  }
+
+  function debugElementInfo(element) {
+    if (!element || !element.tagName) {
+      return null;
+    }
+    var className = "";
+    if (typeof element.className === "string") {
+      className = element.className;
+    }
+    return {
+      tag: element.tagName.toLowerCase(),
+      id: trimDebugValue(element.id || "", 60),
+      className: trimDebugValue(className, 120),
+      role: trimDebugValue(element.getAttribute ? element.getAttribute("role") || "" : "", 40)
+    };
   }
 
   function isHeadingTag(tagName) {
@@ -648,6 +776,187 @@
     return text;
   }
 
+  function extractSignalText(element, maxChars) {
+    if (!element) {
+      return "";
+    }
+    var raw = element.innerText || element.textContent || "";
+    var text = utils.normalizeWhitespace(raw);
+    if (maxChars) {
+      text = utils.budgetText(text, maxChars);
+    }
+    return text;
+  }
+
+  function containsAnyKeyword(text, keywords) {
+    if (!text) {
+      return false;
+    }
+    for (var i = 0; i < keywords.length; i += 1) {
+      if (text.indexOf(keywords[i]) >= 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isDialogLike(element) {
+    if (!element) {
+      return false;
+    }
+    var tag = element.tagName ? element.tagName.toLowerCase() : "";
+    if (tag === "dialog") {
+      return true;
+    }
+    if (element.getAttribute) {
+      var role = (element.getAttribute("role") || "").toLowerCase();
+      if (role === "dialog" || role === "alertdialog") {
+        return true;
+      }
+      if (element.getAttribute("aria-modal") === "true") {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isLargeOverlay(element, viewportWidth, viewportHeight) {
+    if (!element || !element.getBoundingClientRect) {
+      return false;
+    }
+    var rect = element.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return false;
+    }
+    var viewportArea = viewportWidth * viewportHeight;
+    if (viewportArea <= 0) {
+      return false;
+    }
+    var area = rect.width * rect.height;
+    var coverRatio = area / viewportArea;
+    if (coverRatio < 0.2) {
+      return false;
+    }
+    var style = window.getComputedStyle(element);
+    var position = style ? style.position : "";
+    if (position !== "fixed" && position !== "sticky" && position !== "absolute") {
+      return false;
+    }
+    return true;
+  }
+
+  function findOverlayCandidate(root, rootRoots) {
+    var candidates = querySelectorAllDeep(root || document, ACCESS_OVERLAY_SELECTORS, rootRoots);
+    if (!candidates.length) {
+      return null;
+    }
+    var viewportWidth = Math.max(
+      document.documentElement ? document.documentElement.clientWidth : 0,
+      window.innerWidth || 0
+    );
+    var viewportHeight = Math.max(
+      document.documentElement ? document.documentElement.clientHeight : 0,
+      window.innerHeight || 0
+    );
+    var best = null;
+    var bestArea = 0;
+    var limit = Math.min(candidates.length, 40);
+    for (var i = 0; i < limit; i += 1) {
+      var candidate = candidates[i];
+      if (!candidate || candidate === document.body || candidate === document.documentElement) {
+        continue;
+      }
+      if (!isTextContainerVisible(candidate)) {
+        continue;
+      }
+      if (isDialogLike(candidate)) {
+        return candidate;
+      }
+      if (!candidate.getBoundingClientRect) {
+        continue;
+      }
+      var rect = candidate.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) {
+        continue;
+      }
+      if (!isLargeOverlay(candidate, viewportWidth, viewportHeight)) {
+        continue;
+      }
+      var area = rect.width * rect.height;
+      if (area > bestArea) {
+        best = candidate;
+        bestArea = area;
+      }
+    }
+    return best;
+  }
+
+  function collectAccessSignals(root, rootRoots) {
+    var signals = [];
+    var seen = new Set();
+    function addSignal(signal) {
+      if (!signal || seen.has(signal)) {
+        return;
+      }
+      seen.add(signal);
+      signals.push(signal);
+    }
+    var baseRoot = root || document.body || document.documentElement;
+    if (!baseRoot) {
+      return signals;
+    }
+    var authField = baseRoot.querySelector("input[type=\"password\"],input[type=\"email\"]");
+    if (authField) {
+      addSignal("auth_fields");
+    }
+    var overlay = findOverlayCandidate(baseRoot, rootRoots);
+    if (overlay) {
+      addSignal("overlay_or_dialog");
+    }
+    var overlayText = overlay ? extractSignalText(overlay, 900) : "";
+    var searchText = overlayText;
+    if (!searchText) {
+      searchText = extractCleanText(baseRoot, 900);
+    }
+    if (!searchText && document.body && document.body.textContent) {
+      searchText = utils.budgetText(utils.normalizeWhitespace(document.body.textContent), 900);
+    }
+    var gateElement = baseRoot.querySelector("[data-paywall],[class*=\"paywall\"],[id*=\"paywall\"],[class*=\"gateway\"],[id*=\"gateway\"]");
+    if (gateElement) {
+      addSignal("paywall");
+    }
+    var lower = searchText.toLowerCase();
+    if (!lower) {
+      return signals;
+    }
+    var paywallHit =
+      containsAnyKeyword(lower, PAYWALL_KEYWORDS_STRONG) ||
+      (!!overlay && containsAnyKeyword(lower, PAYWALL_KEYWORDS_WEAK));
+    if (paywallHit) {
+      addSignal("paywall");
+    }
+    var authHit =
+      containsAnyKeyword(lower, AUTH_GATE_KEYWORDS_STRONG) ||
+      (!!overlay && containsAnyKeyword(lower, AUTH_GATE_KEYWORDS_WEAK));
+    if (authHit) {
+      addSignal("auth_gate");
+    }
+    var consentHit = containsAnyKeyword(lower, CONSENT_KEYWORDS);
+    if (consentHit && overlay) {
+      addSignal("consent_overlay");
+    }
+    if (containsAnyKeyword(lower, AGE_GATE_KEYWORDS)) {
+      addSignal("age_gate");
+    }
+    if (containsAnyKeyword(lower, GEO_BLOCK_KEYWORDS)) {
+      addSignal("geo_block");
+    }
+    if (containsAnyKeyword(lower, SCRIPT_BLOCK_KEYWORDS)) {
+      addSignal("script_required");
+    }
+    return signals;
+  }
+
   function applySidecarPlacement(container, side) {
     var placement = side === "left" ? "left" : "right";
     container.setAttribute("data-sidecar-side", placement);
@@ -1021,6 +1330,67 @@
     });
   }
 
+  function selectListRoot(root, roots, debugInfo) {
+    if (!root || !root.querySelectorAll) {
+      return null;
+    }
+    var candidates = querySelectorAllDeep(root, "table, ul, ol", roots);
+    var candidateCount = candidates.length;
+    if (candidates.length > 240) {
+      candidates = candidates.slice(0, 240);
+    }
+    var best = null;
+    var bestScore = 0;
+    var bestItemCount = 0;
+    candidates.forEach(function (candidate) {
+      if (!candidate || !candidate.tagName) {
+        return;
+      }
+      if (!isTextContainerVisible(candidate) || hasEditableAncestor(candidate)) {
+        return;
+      }
+      if (isNoiseContainer(candidate)) {
+        return;
+      }
+      var tag = candidate.tagName.toLowerCase();
+      var itemSelector = tag === "table" ? "tr" : "li";
+      var items = candidate.querySelectorAll(itemSelector);
+      if (!items || items.length < 6) {
+        return;
+      }
+      var withAnchors = 0;
+      for (var i = 0; i < items.length && i < 80; i += 1) {
+        if (items[i].querySelector && items[i].querySelector("a")) {
+          withAnchors += 1;
+        }
+      }
+      if (withAnchors < 6) {
+        return;
+      }
+      var anchorCount = candidate.querySelectorAll("a").length;
+      var textLength = (candidate.textContent || "").length;
+      var score = withAnchors * 6 + Math.min(anchorCount, 200) + Math.min(Math.floor(textLength / 30), 200);
+      if (score > bestScore) {
+        bestScore = score;
+        best = candidate;
+        bestItemCount = items.length;
+      }
+    });
+    if (debugInfo) {
+      debugInfo.listRoot = {
+        candidateCount: candidateCount,
+        sampledCount: candidates.length,
+        selected: debugElementInfo(best),
+        bestScore: Math.round(bestScore),
+        itemCount: bestItemCount
+      };
+    }
+    if (!best || bestScore <= 0) {
+      return null;
+    }
+    return best;
+  }
+
   function collectTextBlocks(root, maxBlocks, maxPrimaryChars, roots) {
     if (!root) {
       return { blocks: [], primary: null };
@@ -1304,6 +1674,62 @@
       return /\p{N}/u.test(String(text || ""));
     }
 
+    function isUserProfileUrl(url) {
+      var href = String(url || "").toLowerCase();
+      if (!href) {
+        return false;
+      }
+      if (href.indexOf("user?id=") >= 0) {
+        return true;
+      }
+      if (href.indexOf("/user/") >= 0 || href.indexOf("/users/") >= 0) {
+        return true;
+      }
+      if (href.indexOf("profile") >= 0 && href.indexOf("user") >= 0) {
+        return true;
+      }
+      return false;
+    }
+
+    function isMetaHeavyText(text) {
+      var lower = String(text || "").toLowerCase();
+      if (!lower) {
+        return false;
+      }
+      var hints = [
+        "point",
+        "comment",
+        "reply",
+        "replie",
+        "ago",
+        "hour",
+        "day",
+        "min",
+        "by ",
+        "hide",
+        "favorite",
+        "past",
+        "flag",
+        "save"
+      ];
+      var hits = 0;
+      for (var i = 0; i < hints.length; i += 1) {
+        if (lower.indexOf(hints[i]) >= 0) {
+          hits += 1;
+        }
+      }
+      return hits >= 2 || (hits >= 1 && lower.length < 120);
+    }
+
+    function hasLongAnchor(anchorLengths, minLength) {
+      for (var i = 0; i < anchorLengths.length; i += 1) {
+        if (anchorLengths[i] >= minLength) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     function isCommentLinkCandidate(text, url) {
       var label = String(text || "").toLowerCase();
       var href = String(url || "").toLowerCase();
@@ -1329,6 +1755,13 @@
       order += 1;
       if (!isBlockCandidate(element)) {
         return;
+      }
+      var tagName = element.tagName ? element.tagName.toLowerCase() : "";
+      if ((tagName === "td" || tagName === "th") && element.closest) {
+        var row = element.closest("tr");
+        if (row && row !== element && isBlockCandidate(row)) {
+          return;
+        }
       }
       var anchors = element.querySelectorAll("a");
       if (!anchors || anchors.length === 0) {
@@ -1410,24 +1843,28 @@
       }
       if (linkCandidates.length < maxLinksPerItem) {
         var sibling = element.nextElementSibling;
-        if (sibling && isBlockCandidate(sibling)) {
+        if (sibling) {
           var siblingText = utils.normalizeWhitespace(sibling.innerText);
-          if (siblingText && siblingText.length <= 240) {
-            var siblingAnchors = sibling.querySelectorAll("a");
-            var hasStrongSibling = false;
-            if (siblingAnchors && siblingAnchors.length > 0) {
-              for (var j = 0; j < siblingAnchors.length; j += 1) {
-                var siblingTextLabel = utils.normalizeWhitespace(siblingAnchors[j].innerText);
-                if (!siblingTextLabel) {
-                  continue;
-                }
-                if (siblingTextLabel.length >= 18 || siblingTextLabel.length >= bestTextLength + 6) {
-                  hasStrongSibling = true;
-                  break;
-                }
+          var siblingAnchors = sibling.querySelectorAll ? sibling.querySelectorAll("a") : null;
+          var siblingHasComment = false;
+          var hasStrongSibling = false;
+          if (siblingAnchors && siblingAnchors.length > 0) {
+            for (var j = 0; j < siblingAnchors.length; j += 1) {
+              var siblingTextLabel = utils.normalizeWhitespace(siblingAnchors[j].innerText);
+              if (!siblingTextLabel) {
+                continue;
+              }
+              var siblingUrl = getHref(siblingAnchors[j]);
+              if (isCommentLinkCandidate(siblingTextLabel, siblingUrl)) {
+                siblingHasComment = true;
+              }
+              if (siblingTextLabel.length >= 18 || siblingTextLabel.length >= bestTextLength + 6) {
+                hasStrongSibling = true;
               }
             }
-            if (!hasStrongSibling) {
+          }
+          if (siblingText && siblingText.length <= 240 && (isBlockCandidate(sibling) || siblingHasComment)) {
+            if (!hasStrongSibling || siblingHasComment) {
               siblingMetaText = siblingText;
               if (siblingAnchors && siblingAnchors.length > 0) {
                 for (var k = 0; k < siblingAnchors.length; k += 1) {
@@ -1466,6 +1903,7 @@
           strongAnchorCount += 1;
         }
       }
+      var hasLongTitleAnchor = hasLongAnchor(anchorLengths, 18);
       var title = utils.normalizeWhitespace(bestAnchor.innerText);
       if (!title || title.length < 4) {
         return;
@@ -1487,6 +1925,11 @@
         return;
       }
       var textLength = cleanedText.length;
+      if (!hasLongTitleAnchor && isMetaHeavyText(cleanedText)) {
+        if (isUserProfileUrl(url) || isCommentLinkCandidate(title, url) || looksLikeTimeLabel(title)) {
+          return;
+        }
+      }
       var bestHost = hostForURL(url);
       if (bestHost && originHost && bestHost === originHost) {
         if (bestTextLength <= 12 && textLength <= 80 && linkCandidates.length >= 2) {
@@ -1556,7 +1999,7 @@
     });
   }
 
-  function pickContentRoot(root, roots) {
+  function pickContentRoot(root, roots, debugInfo) {
     if (!root || !root.querySelectorAll) {
       return null;
     }
@@ -1565,9 +2008,14 @@
       candidates = querySelectorAllDeep(root, "article,main,section,div", roots);
     }
     if (candidates.length === 0) {
+      if (debugInfo) {
+        debugInfo.contentRoot = { candidateCount: 0, prunedCount: 0, selected: null };
+      }
       return null;
     }
+    var candidateCount = candidates.length;
     candidates = pruneContentRootCandidates(candidates, 320);
+    var prunedCount = candidates.length;
     var bodyText = normalizeStructuredText(root.innerText || "");
     var bodyLength = bodyText.length;
     var best = null;
@@ -1598,18 +2046,44 @@
       }
     });
     if (!best) {
+      if (debugInfo) {
+        debugInfo.contentRoot = {
+          candidateCount: candidateCount,
+          prunedCount: prunedCount,
+          selected: null,
+          bodyLength: bodyLength
+        };
+      }
       return null;
     }
     if (bodyLength > 0) {
       var ratio = bestLength / bodyLength;
       if (bestLength < 400 && ratio < 0.18) {
+        if (debugInfo) {
+          debugInfo.contentRoot = {
+            candidateCount: candidateCount,
+            prunedCount: prunedCount,
+            selected: null,
+            bodyLength: bodyLength
+          };
+        }
         return null;
       }
+    }
+    if (debugInfo) {
+      debugInfo.contentRoot = {
+        candidateCount: candidateCount,
+        prunedCount: prunedCount,
+        selected: debugElementInfo(best),
+        bestScore: Math.round(bestScore),
+        bestLength: bestLength,
+        bodyLength: bodyLength
+      };
     }
     return best;
   }
 
-  function hasCommentHint(element) {
+  function hasCommentLabel(element) {
     if (!element) {
       return false;
     }
@@ -1628,6 +2102,16 @@
       return true;
     }
     if (id.indexOf("discussion") >= 0 || className.indexOf("discussion") >= 0) {
+      return true;
+    }
+    return false;
+  }
+
+  function hasCommentHint(element) {
+    if (!element) {
+      return false;
+    }
+    if (hasCommentLabel(element)) {
       return true;
     }
     if (hasCommentMetadata(element)) {
@@ -1852,27 +2336,214 @@
     return true;
   }
 
+  function resolveCommentContainer(node) {
+    if (!node) {
+      return null;
+    }
+    if (!node.closest) {
+      return node;
+    }
+    var labeled = node.closest(COMMENT_SELECTORS);
+    if (labeled) {
+      var labeledTag = labeled.tagName ? labeled.tagName.toLowerCase() : "";
+      if (INLINE_COMMENT_TAGS.has(labeledTag)) {
+        var labeledParent = labeled.closest("article,li,section,td,tr,div");
+        if (labeledParent && isBlockCandidate(labeledParent)) {
+          return labeledParent;
+        }
+      } else if (isBlockCandidate(labeled)) {
+        return labeled;
+      }
+    }
+    var structural = node.closest("article,li,section,td,tr");
+    if (structural && isBlockCandidate(structural)) {
+      return structural;
+    }
+    var fallback = node.closest("div");
+    if (fallback && isBlockCandidate(fallback)) {
+      if (hasCommentLabel(fallback) || hasCommentMetadata(fallback) || hasCommentTextHint(fallback)) {
+        return fallback;
+      }
+      var parent = fallback.parentElement;
+      if (parent && isBlockCandidate(parent)) {
+        return parent;
+      }
+      return fallback;
+    }
+    if (isBlockCandidate(node)) {
+      return node;
+    }
+    return null;
+  }
+
+  function collectCommentCandidates(root, roots, maxCandidates) {
+    if (!root || !root.querySelectorAll) {
+      return [];
+    }
+    var nodes = querySelectorAllDeep(root, COMMENT_SELECTORS, roots);
+    var candidates = [];
+    var seen = new Set();
+    if (maxCandidates && nodes.length > maxCandidates) {
+      nodes = nodes.slice(0, maxCandidates);
+    }
+    nodes.forEach(function (node) {
+      if (!node) {
+        return;
+      }
+      var container = resolveCommentContainer(node);
+      if (!container) {
+        return;
+      }
+      if (seen.has(container)) {
+        return;
+      }
+      seen.add(container);
+      candidates.push(container);
+    });
+    if (candidates.length >= 3) {
+      return candidates;
+    }
+    var fallbackNodes = querySelectorAllDeep(root, "article,li,div,section,tr", roots);
+    for (var i = 0; i < fallbackNodes.length; i += 1) {
+      if (maxCandidates && candidates.length >= maxCandidates) {
+        break;
+      }
+      var fallback = fallbackNodes[i];
+      if (!hasCommentHint(fallback)) {
+        continue;
+      }
+      var fallbackContainer = resolveCommentContainer(fallback);
+      if (!fallbackContainer) {
+        continue;
+      }
+      if (seen.has(fallbackContainer)) {
+        continue;
+      }
+      seen.add(fallbackContainer);
+      candidates.push(fallbackContainer);
+    }
+    return candidates;
+  }
+
+  function pickCommentRoot(root, roots, debugInfo) {
+    if (!root || !root.querySelectorAll) {
+      return null;
+    }
+    var candidates = collectCommentCandidates(root, roots, 240);
+    var candidateCount = candidates.length;
+    if (candidateCount < 3) {
+      if (debugInfo) {
+        debugInfo.commentRoot = { candidateCount: candidateCount, sampledCount: 0, selected: null };
+      }
+      return null;
+    }
+    var sampleLimit = 80;
+    var sample = candidates.length > sampleLimit ? candidates.slice(0, sampleLimit) : candidates;
+    var scale = candidates.length > sample.length ? candidates.length / sample.length : 1;
+    var stats = new Map();
+    var textCache = new Map();
+
+    function cachedTextLength(element) {
+      if (!element) {
+        return 0;
+      }
+      var cached = textCache.get(element);
+      if (typeof cached === "number") {
+        return cached;
+      }
+      var length = (element.textContent || "").length;
+      if (length > 120000) {
+        length = 120000;
+      }
+      textCache.set(element, length);
+      return length;
+    }
+
+    sample.forEach(function (container) {
+      var commentLength = cachedTextLength(container);
+      if (commentLength < 20) {
+        return;
+      }
+      var current = container;
+      var depth = 0;
+      while (current && current !== root && depth < 10) {
+        if (!isBlockCandidate(current)) {
+          current = current.parentElement;
+          depth += 1;
+          continue;
+        }
+        var entry = stats.get(current);
+        if (!entry) {
+          entry = { element: current, commentCount: 0, commentChars: 0, minDepth: depth };
+          stats.set(current, entry);
+        }
+        entry.commentCount += 1;
+        entry.commentChars += commentLength;
+        if (depth < entry.minDepth) {
+          entry.minDepth = depth;
+        }
+        current = current.parentElement;
+        depth += 1;
+      }
+    });
+
+    var minCount = Math.max(3, Math.min(6, Math.round(candidateCount * 0.25)));
+    var best = null;
+    var bestScore = 0;
+    var bestCount = 0;
+    var bestDensity = 0;
+    stats.forEach(function (entry) {
+      var estimatedCount = Math.round(entry.commentCount * scale);
+      if (estimatedCount < minCount) {
+        return;
+      }
+      var textLength = cachedTextLength(entry.element);
+      if (textLength < 200) {
+        return;
+      }
+      var density = (estimatedCount * 160) / Math.max(textLength, 160);
+      if (density < 0.18) {
+        return;
+      }
+      var score = estimatedCount * 18;
+      score += Math.min((entry.commentChars * scale) / 120, 200);
+      score += density * 120;
+      score -= Math.min(entry.minDepth * 2, 12);
+      if (entry.element === document.body || entry.element === document.documentElement) {
+        score -= 40;
+      }
+      if (isNoiseContainer(entry.element)) {
+        score -= 30;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = entry.element;
+        bestCount = estimatedCount;
+        bestDensity = density;
+      }
+    });
+    if (debugInfo) {
+      debugInfo.commentRoot = {
+        candidateCount: candidateCount,
+        sampledCount: sample.length,
+        minCount: minCount,
+        selected: debugElementInfo(best),
+        bestScore: Math.round(bestScore),
+        estimatedCount: bestCount,
+        density: roundDensity(bestDensity)
+      };
+    }
+    if (!best || bestScore <= 0) {
+      return null;
+    }
+    return best;
+  }
+
   function collectComments(root, maxComments, maxChars, roots) {
     if (!root || maxComments <= 0) {
       return [];
     }
-    var selectors = [
-      "[role=\"comment\"]",
-      "[itemprop=\"comment\"]",
-      "[itemtype*=\"Comment\"]",
-      "[data-comment-id]",
-      "[data-comment]",
-      "[data-thread-id]",
-      "[data-reply-id]",
-      ".comment",
-      "[class*=\"comment\"]",
-      "[class*=\"commtext\"]",
-      "[class*=\"reply\"]",
-      ".comment-body",
-      ".comment_body",
-      ".comment-content"
-    ];
-    var nodes = querySelectorAllDeep(root, selectors.join(","), roots);
+    var nodes = querySelectorAllDeep(root, COMMENT_SELECTORS, roots);
     if (nodes.length < 3) {
       var fallbackNodes = querySelectorAllDeep(root, "article,li,div,section,tr", roots);
       for (var i = 0; i < fallbackNodes.length; i += 1) {
@@ -1904,11 +2575,8 @@
       if (!node) {
         continue;
       }
-      var container = node.closest ? node.closest("article,li,div,section,td,tr") : node;
+      var container = resolveCommentContainer(node);
       if (!container) {
-        container = node;
-      }
-      if (!isBlockCandidate(container)) {
         continue;
       }
       var text = extractCommentText(container, maxChars);
@@ -1935,6 +2603,23 @@
       if (!isLikelyAuthorLabel(author)) {
         author = "";
       }
+      if (!author && container.parentElement) {
+        var parentAuthor = findMetaText(container.parentElement, [
+          "[rel=\"author\"]",
+          "[itemprop=\"author\"]",
+          "[data-author]",
+          ".author",
+          ".user",
+          ".username",
+          ".byline",
+          ".comment-author",
+          "a[href*=\"user\"]",
+          "a[href*=\"profile\"]"
+        ], 80);
+        if (isLikelyAuthorLabel(parentAuthor)) {
+          author = parentAuthor;
+        }
+      }
       var age = findMetaText(container, [
         "time",
         "[datetime]",
@@ -1943,8 +2628,21 @@
         ".time",
         ".timestamp"
       ], 80);
+      if (!age && container.parentElement) {
+        age = findMetaText(container.parentElement, [
+          "time",
+          "[datetime]",
+          "[data-time]",
+          ".age",
+          ".time",
+          ".timestamp"
+        ], 80);
+      }
       var score = "";
       var scoreElement = container.querySelector("[data-score],[data-vote-count],.score,.points,.likes,.upvotes");
+      if (!scoreElement && container.parentElement) {
+        scoreElement = container.parentElement.querySelector("[data-score],[data-vote-count],.score,.points,.likes,.upvotes");
+      }
       if (scoreElement) {
         var scoreText = utils.normalizeWhitespace(scoreElement.innerText || scoreElement.getAttribute("data-score") || "");
         if (!scoreText) {
@@ -1975,6 +2673,11 @@
     var maxItemChars = (options && options.maxItemChars) || 240;
     var maxComments = (options && options.maxComments) || 24;
     var maxCommentChars = (options && options.maxCommentChars) || 360;
+    var debugEnabled = !!(options && options.debug);
+    var debugInfo = debugEnabled
+      ? { timings: {}, counts: {}, root: null, textRoot: null, contentRoot: null, listRoot: null, commentRoot: null, signals: [] }
+      : null;
+    var totalStart = debugEnabled ? nowMs() : 0;
     var root = document.body;
     if (options && options.rootHandleId) {
       var target = findElement(options.rootHandleId);
@@ -1982,15 +2685,76 @@
         root = target;
       }
     }
+    if (debugInfo) {
+      debugInfo.root = debugElementInfo(root);
+      debugInfo.pageState = {
+        readyState: document.readyState || "",
+        visibility: document.visibilityState || "",
+        bodyChildCount: document.body ? document.body.childElementCount : 0,
+        bodyTextLength: document.body && document.body.textContent ? document.body.textContent.length : 0
+      };
+    }
+    var rootsStart = debugEnabled ? nowMs() : 0;
     var rootRoots = collectRoots(root || document);
+    if (debugInfo) {
+      debugInfo.timings.collectRootsMs = Math.round(nowMs() - rootsStart);
+      debugInfo.counts.rootCount = rootRoots.length;
+    }
+    var signalsStart = debugEnabled ? nowMs() : 0;
+    var signals = collectAccessSignals(root, rootRoots);
+    if (debugInfo) {
+      debugInfo.timings.collectSignalsMs = Math.round(nowMs() - signalsStart);
+      debugInfo.signals = signals;
+    }
     var textRoot = root;
     if (!options || !options.rootHandleId) {
-      var contentRoot = pickContentRoot(root, rootRoots);
+      var contentStart = debugEnabled ? nowMs() : 0;
+      var contentRoot = pickContentRoot(root, rootRoots, debugInfo);
+      if (debugInfo) {
+        debugInfo.timings.pickContentRootMs = Math.round(nowMs() - contentStart);
+      }
+      var listRoot = null;
+      if (!contentRoot) {
+        listRoot = selectListRoot(root, rootRoots, debugInfo);
+        if (listRoot) {
+          contentRoot = listRoot;
+        }
+      }
+      var shouldCheckCommentRoot = !contentRoot || hasCommentLabel(contentRoot);
+      if (!shouldCheckCommentRoot && contentRoot) {
+        var contentLength = (contentRoot.textContent || "").length;
+        if (contentLength > 0 && contentLength < 4000) {
+          var rootLength = (root.textContent || "").length;
+          var share = rootLength > 0 ? contentLength / rootLength : 1;
+          if (share < 0.2) {
+            shouldCheckCommentRoot = true;
+          }
+        }
+      }
+      if (shouldCheckCommentRoot && !listRoot) {
+        var commentStart = debugEnabled ? nowMs() : 0;
+        var commentRoot = pickCommentRoot(root, rootRoots, debugInfo);
+        if (debugInfo) {
+          debugInfo.timings.pickCommentRootMs = Math.round(nowMs() - commentStart);
+        }
+        if (commentRoot) {
+          contentRoot = commentRoot;
+        }
+      }
       if (contentRoot) {
         textRoot = contentRoot;
       }
     }
+    if (debugInfo) {
+      debugInfo.textRoot = debugElementInfo(textRoot);
+    }
+    var textRootStart = debugEnabled ? nowMs() : 0;
     var textRoots = textRoot === root ? rootRoots : collectRoots(textRoot);
+    if (debugInfo) {
+      debugInfo.timings.collectTextRootsMs = Math.round(nowMs() - textRootStart);
+      debugInfo.counts.textRootCount = textRoots.length;
+    }
+    var elementsStart = debugEnabled ? nowMs() : 0;
     var elements = querySelectorAllDeep(root || document, "a, button, input, textarea, select", rootRoots);
     var projected = elements
       .map(function (element) {
@@ -2018,14 +2782,45 @@
       return a.boundingBox.y - b.boundingBox.y;
     });
     var limited = projected.slice(0, maxElements);
+    if (debugInfo) {
+      debugInfo.timings.collectElementsMs = Math.round(nowMs() - elementsStart);
+      debugInfo.counts.elementCount = limited.length;
+    }
 
+    var textStart = debugEnabled ? nowMs() : 0;
     var text = collectVisibleText(textRoot, maxChars, textRoots);
+    if (debugInfo) {
+      debugInfo.timings.collectTextMs = Math.round(nowMs() - textStart);
+      debugInfo.counts.textChars = text.length;
+    }
+    var blocksStart = debugEnabled ? nowMs() : 0;
     var blockResult = collectTextBlocks(textRoot, maxBlocks, maxPrimaryChars, textRoots);
     var blocks = blockResult.blocks;
     var primary = blockResult.primary;
+    if (debugInfo) {
+      debugInfo.timings.collectBlocksMs = Math.round(nowMs() - blocksStart);
+      debugInfo.counts.blockCount = blocks.length;
+      debugInfo.counts.primaryChars = primary && primary.text ? primary.text.length : 0;
+    }
+    var outlineStart = debugEnabled ? nowMs() : 0;
     var outline = collectOutline(textRoot, maxOutline, maxOutlineChars, textRoots);
+    if (debugInfo) {
+      debugInfo.timings.collectOutlineMs = Math.round(nowMs() - outlineStart);
+      debugInfo.counts.outlineCount = outline.length;
+    }
+    var itemsStart = debugEnabled ? nowMs() : 0;
     var items = collectItems(textRoot, maxItems, maxItemChars, textRoots);
-    var comments = collectComments(textRoot, maxComments, maxCommentChars, textRoots);
+    if (debugInfo) {
+      debugInfo.timings.collectItemsMs = Math.round(nowMs() - itemsStart);
+      debugInfo.counts.itemCount = items.length;
+    }
+    var commentsStart = debugEnabled ? nowMs() : 0;
+    var comments = collectComments(root, maxComments, maxCommentChars, rootRoots);
+    if (debugInfo) {
+      debugInfo.timings.collectCommentsMs = Math.round(nowMs() - commentsStart);
+      debugInfo.counts.commentCount = comments.length;
+      debugInfo.timings.totalMs = Math.round(nowMs() - totalStart);
+    }
     return {
       url: window.location.href,
       title: document.title || "",
@@ -2035,7 +2830,9 @@
       items: items,
       outline: outline,
       primary: primary,
-      comments: comments
+      comments: comments,
+      signals: signals,
+      debug: debugInfo
     };
   }
 

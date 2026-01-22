@@ -16,6 +16,8 @@ const DEFAULT_SERVER_URL = "http://127.0.0.1:8765";
 const DEFAULT_MAX_STEPS = 6;
 const DEFAULT_OBSERVE_DELAY_MS = 300;
 const DETAIL_OBSERVE_DELAY_MS = 500;
+const EMPTY_OBSERVE_RETRY_DELAY_MS = 900;
+const EMPTY_OBSERVE_MAX_RETRIES = 1;
 const DEFAULT_OBSERVE_OPTIONS = {
   maxChars: 12000,
   maxElements: 160,
@@ -55,6 +57,7 @@ function usage() {
       "  --detail              Use larger observe_dom budgets",
       "  --headed              Show browser window",
       "  --observe-wait <ms>    Delay before observing after load/actions",
+      "  --debug-observe        Include observe_dom debug payloads in output",
       "  --output <path>        Write run results to JSON",
       "  --no-auto-approve      Stop on policy 'ask' instead of auto-approving"
     ].join("\n")
@@ -74,6 +77,7 @@ function parseArgs() {
   let outputPath = null;
   let autoApprove = true;
   let observeDelayMs = null;
+  let debugObserve = false;
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -108,6 +112,9 @@ function parseArgs() {
       case "--observe-wait":
         observeDelayMs = parseInt(args[++i] || "0", 10);
         break;
+      case "--debug-observe":
+        debugObserve = true;
+        break;
       case "--no-auto-approve":
         autoApprove = false;
         break;
@@ -117,12 +124,35 @@ function parseArgs() {
   }
 
   if (scenarioPath) {
-    return { scenarioPath, server, browserName, maxSteps, headless, detail, outputPath, autoApprove, observeDelayMs };
+    return {
+      scenarioPath,
+      server,
+      browserName,
+      maxSteps,
+      headless,
+      detail,
+      outputPath,
+      autoApprove,
+      observeDelayMs,
+      debugObserve
+    };
   }
   if (!url || goals.length === 0) {
     return null;
   }
-  return { url, goals, server, browserName, maxSteps, headless, detail, outputPath, autoApprove, observeDelayMs };
+  return {
+    url,
+    goals,
+    server,
+    browserName,
+    maxSteps,
+    headless,
+    detail,
+    outputPath,
+    autoApprove,
+    observeDelayMs,
+    debugObserve
+  };
 }
 
 function loadScenario(scenarioPath) {
@@ -231,15 +261,57 @@ function summarizeObservation(observation) {
   if (!observation) {
     return null;
   }
+  const isCommentLink = (link) => {
+    if (!link) {
+      return false;
+    }
+    const text = String(link.title || "").toLowerCase();
+    const url = String(link.url || "").toLowerCase();
+    return (
+      text.includes("comment") ||
+      text.includes("discuss") ||
+      text.includes("reply") ||
+      url.includes("comment") ||
+      url.includes("discussion") ||
+      url.includes("thread") ||
+      url.includes("#comments")
+    );
+  };
   const items = Array.isArray(observation.items) ? observation.items : [];
   const comments = Array.isArray(observation.comments) ? observation.comments : [];
   const summaryItems = items.slice(0, 5).map((item) => {
     const links = Array.isArray(item.links) ? item.links : [];
+    const summaryLinks = [];
+    for (const link of links) {
+      if (!link || !link.title || !link.url) {
+        continue;
+      }
+      if (summaryLinks.length < 2) {
+        summaryLinks.push(link);
+      }
+    }
+    if (summaryLinks.length < 3) {
+      const commentLink = links.find((link) => isCommentLink(link));
+      if (commentLink && !summaryLinks.some((entry) => entry.url === commentLink.url)) {
+        summaryLinks.push(commentLink);
+      }
+    }
+    for (const link of links) {
+      if (summaryLinks.length >= 3) {
+        break;
+      }
+      if (!link || !link.title || !link.url) {
+        continue;
+      }
+      if (!summaryLinks.some((entry) => entry.url === link.url && entry.title === link.title)) {
+        summaryLinks.push(link);
+      }
+    }
     return {
       title: item.title || "",
       url: item.url || "",
       linkCount: links.length,
-      links: links.slice(0, 3).map((link) => ({
+      links: summaryLinks.map((link) => ({
         title: link.title || "",
         url: link.url || ""
       }))
@@ -250,7 +322,7 @@ function summarizeObservation(observation) {
     age: comment.age || "",
     text: (comment.text || "").slice(0, 140)
   }));
-  return {
+  const summary = {
     url: observation.url || "",
     title: observation.title || "",
     textChars: (observation.text || "").length,
@@ -263,6 +335,10 @@ function summarizeObservation(observation) {
     items: summaryItems,
     comments: summaryComments
   };
+  if (observation.debug && typeof observation.debug === "object") {
+    summary.debug = observation.debug;
+  }
+  return summary;
 }
 
 function buildObservePayload(observation) {
@@ -294,6 +370,27 @@ async function observeDom(page, options) {
   return observation;
 }
 
+function isEmptyObservation(observation) {
+  if (!observation) {
+    return true;
+  }
+  const textLength = String(observation.text || "").trim().length;
+  if (textLength > 0) {
+    return false;
+  }
+  const arrays = ["elements", "blocks", "items", "outline", "comments"];
+  for (const key of arrays) {
+    if (Array.isArray(observation[key]) && observation[key].length > 0) {
+      return false;
+    }
+  }
+  const primaryText = observation.primary && observation.primary.text ? String(observation.primary.text) : "";
+  if (primaryText.trim().length > 0) {
+    return false;
+  }
+  return true;
+}
+
 async function waitForObserveDelay(page, delayMs) {
   if (typeof delayMs !== "number" || !isFinite(delayMs) || delayMs <= 0) {
     return;
@@ -306,6 +403,18 @@ function resolveObserveDelayMs(detail, override) {
     return override;
   }
   return detail ? DETAIL_OBSERVE_DELAY_MS : DEFAULT_OBSERVE_DELAY_MS;
+}
+
+async function observeWithRetry(page, options, observeDelayMs) {
+  let observation = await observeDom(page, options);
+  let retries = 0;
+  const retryDelay = Math.max(EMPTY_OBSERVE_RETRY_DELAY_MS, observeDelayMs || 0);
+  while (retries < EMPTY_OBSERVE_MAX_RETRIES && isEmptyObservation(observation)) {
+    retries += 1;
+    await waitForObserveDelay(page, retryDelay);
+    observation = await observeDom(page, options);
+  }
+  return { observation, retryCount: retries };
 }
 
 async function applyTool(page, toolName, args) {
@@ -326,9 +435,12 @@ async function executeTool(page, toolCall, observeOptions, navTimeoutMs, observe
   const args = toolCall.arguments || {};
   let result = { status: "ok" };
   let observation = null;
+  let retryCount = 0;
   if (name === "browser.observe_dom") {
     await waitForObserveDelay(page, observeDelayMs);
-    observation = await observeDom(page, Object.keys(args).length ? args : observeOptions);
+    const observed = await observeWithRetry(page, Object.keys(args).length ? args : observeOptions, observeDelayMs);
+    observation = observed.observation;
+    retryCount = observed.retryCount;
   } else if (name === "browser.open_tab" || name === "browser.navigate") {
     const url = args.url;
     if (typeof url !== "string" || !url) {
@@ -336,20 +448,28 @@ async function executeTool(page, toolCall, observeOptions, navTimeoutMs, observe
     } else {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: navTimeoutMs });
       await waitForObserveDelay(page, observeDelayMs);
-      observation = await observeDom(page, observeOptions);
+      const observed = await observeWithRetry(page, observeOptions, observeDelayMs);
+      observation = observed.observation;
+      retryCount = observed.retryCount;
     }
   } else if (name === "browser.back") {
     await page.goBack({ waitUntil: "domcontentloaded", timeout: navTimeoutMs }).catch(() => {});
     await waitForObserveDelay(page, observeDelayMs);
-    observation = await observeDom(page, observeOptions);
+    const observed = await observeWithRetry(page, observeOptions, observeDelayMs);
+    observation = observed.observation;
+    retryCount = observed.retryCount;
   } else if (name === "browser.forward") {
     await page.goForward({ waitUntil: "domcontentloaded", timeout: navTimeoutMs }).catch(() => {});
     await waitForObserveDelay(page, observeDelayMs);
-    observation = await observeDom(page, observeOptions);
+    const observed = await observeWithRetry(page, observeOptions, observeDelayMs);
+    observation = observed.observation;
+    retryCount = observed.retryCount;
   } else if (name === "browser.refresh") {
     await page.reload({ waitUntil: "domcontentloaded", timeout: navTimeoutMs }).catch(() => {});
     await waitForObserveDelay(page, observeDelayMs);
-    observation = await observeDom(page, observeOptions);
+    const observed = await observeWithRetry(page, observeOptions, observeDelayMs);
+    observation = observed.observation;
+    retryCount = observed.retryCount;
   } else {
     const urlBefore = page.url();
     result = await applyTool(page, name, args);
@@ -358,9 +478,11 @@ async function executeTool(page, toolCall, observeOptions, navTimeoutMs, observe
       await page.waitForLoadState("domcontentloaded", { timeout: navTimeoutMs }).catch(() => {});
       await waitForObserveDelay(page, observeDelayMs);
     }
-    observation = await observeDom(page, observeOptions);
+    const observed = await observeWithRetry(page, observeOptions, observeDelayMs);
+    observation = observed.observation;
+    retryCount = observed.retryCount;
   }
-  return { result, observation };
+  return { result, observation, retryCount };
 }
 
 async function runGoals(state, goals, options) {
@@ -448,6 +570,9 @@ async function runGoals(state, goals, options) {
       recentToolResults.push(buildToolResult(action.toolCall, executed.result.status || "ok", payload));
       stepInfo.toolResult = executed.result;
       stepInfo.nextObservation = summarizeObservation(executed.observation);
+      if (executed.retryCount) {
+        stepInfo.nextObservationRetryCount = executed.retryCount;
+      }
       if (executed.observation) {
         state.observation = executed.observation;
       }
@@ -472,6 +597,9 @@ async function main() {
   const goals = scenario ? scenario.goals : args.goals;
   const server = args.server;
   const observeOptions = args.detail ? DETAIL_OBSERVE_OPTIONS : DEFAULT_OBSERVE_OPTIONS;
+  if (args.debugObserve) {
+    observeOptions.debug = true;
+  }
   const observeDelayMs = resolveObserveDelayMs(args.detail, args.observeDelayMs);
 
   const browserType = playwright[args.browserName] || playwright.webkit;
@@ -488,7 +616,8 @@ async function main() {
   const page = await context.newPage();
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
   await waitForObserveDelay(page, observeDelayMs);
-  const observation = await observeDom(page, observeOptions);
+  const initial = await observeWithRetry(page, observeOptions, observeDelayMs);
+  const observation = initial.observation;
 
   const state = {
     page: page,

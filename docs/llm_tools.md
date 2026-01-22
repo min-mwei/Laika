@@ -61,8 +61,7 @@ The model must return exactly one JSON object:
   "summary": "short user-facing summary",
   "summaryFormat": "plain",
   "tool_calls": [
-    {"name": "browser.click", "arguments": {"handleId": "laika-12"}},
-    {"name": "browser.type", "arguments": {"handleId": "laika-7", "text": "example"}}
+    {"name": "search", "arguments": {"query": "example query"}}
   ]
 }
 ```
@@ -186,31 +185,27 @@ Long-context guidance (from `docs/local_llm.md`):
 
 ## Summary pipeline (current)
 
-1. `browser.observe_dom` extracts structured context: `text` (line-preserved with heading/list prefixes and nested list indentation), ordered `blocks` (selected in DOM order with a primary-centered window plus tail coverage), `primary`, `items`, `outline`, and `comments`. Deep traversal reuses a cached root set per observation to reduce repeated scans.
+1. `browser.observe_dom` extracts structured context: `text` (line-preserved with heading/list prefixes and nested list indentation), ordered `blocks` (selected in DOM order with a primary-centered window plus tail coverage), `primary`, `items`, `outline`, `comments`, and access `signals` (paywall/auth/overlay hints like `overlay_or_dialog`, `paywall`, `auth_gate`, `auth_fields`, `consent_overlay`, `age_gate`, `geo_block`, `script_required`). Deep traversal reuses a cached root set per observation to reduce repeated scans.
 2. `SummaryInputBuilder` chooses a representation (list vs page text vs comments) and compacts text while preserving line boundaries for headings/lists and nested list indentation.
-3. `SummaryService` chunk-summarizes long inputs, then produces a final summary using the local model and prompts it to interpret structural prefixes (H2:, `-`, `>`, Code:, etc.) while treating list counts as observed context rather than page totals.
+3. `SummaryService` chunk-summarizes long inputs, then produces a final summary using the local model and prompts it to interpret structural prefixes (H2:, `-`, `>`, Code:, etc.) while avoiding total-count claims or rank inferences.
 4. The UI streams summary output via `summary.start/poll` and appends tokens to the chat log, rendering the Markdown subset through a parser + sanitizer.
 
 ## Tool categories
 
 - Core navigation: tab- or page-level movement.
-- Interaction: click/type/scroll on specific elements.
 - Content actions: summarize, find, and extract information.
 
 ## Tool catalog (current prototype)
 
 | Category | Tool name | Description | Tool params | Implementation | Runs in |
 | --- | --- | --- | --- | --- | --- |
-| Observation | `browser.observe_dom` | Capture/refresh page text + element handles. The agent may call this when it needs more context. | `{ "maxChars": number, "maxElements": number, "maxBlocks": number, "maxPrimaryChars": number, "maxOutline": number, "maxOutlineChars": number, "maxItems": number, "maxItemChars": number, "maxComments": number, "maxCommentChars": number, "rootHandleId": string }` | `src/laika/extension/content_script.js` (`observeDom`) | Content script (Safari tab) |
+| Observation | `browser.observe_dom` | Capture/refresh page text + element handles. The agent may call this when it needs more context. | `{ "maxChars": number, "maxElements": number, "maxBlocks": number, "maxPrimaryChars": number, "maxOutline": number, "maxOutlineChars": number, "maxItems": number, "maxItemChars": number, "maxComments": number, "maxCommentChars": number, "rootHandleId": string, "debug": boolean }` | `src/laika/extension/content_script.js` (`observeDom`) | Content script (Safari tab) |
 | Core navigation | `browser.open_tab` | Open a URL in a new tab. | `{ "url": "https://example.com" }` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
 | Core navigation | `browser.navigate` | Navigate the current tab to a URL. | `{ "url": "https://example.com" }` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
 | Core navigation | `browser.back` | Go back in history. | `{}` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
 | Core navigation | `browser.forward` | Go forward in history. | `{}` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
 | Core navigation | `browser.refresh` | Reload the current page. | `{}` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
-| Interaction | `browser.click` | Click a visible element by `handleId`. | `{ "handleId": "laika-12" }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
-| Interaction | `browser.type` | Type text into an input/textarea by `handleId`. | `{ "handleId": "laika-7", "text": "query" }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
-| Interaction | `browser.scroll` | Scroll the page by a vertical delta. | `{ "deltaY": 400 }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
-| Interaction | `browser.select` | Select a dropdown option by `handleId`. | `{ "handleId": "laika-9", "value": "Option" }` | `src/laika/extension/content_script.js` (`applyTool`) | Content script |
+| Core navigation | `search` | Search the web via Safari (opens search results). | `{ "query": "SEC filing deadlines", "newTab": true }` | Planned: `src/laika/extension/background.js` (`handleTool`) | Extension background |
 | Content actions | `content.summarize` | Summarize the page context using the latest observation + goal plan. | `{}` (arguments currently ignored; `scope`/`handleId` reserved) | Swift Agent Core (`SummaryService`) | Swift (local model) |
 
 Notes for `content.summarize`:
@@ -219,11 +214,16 @@ Notes for `content.summarize`:
 - The summary stream is append-only in the UI (no replacement).
 - Long inputs are chunked in `SummaryService` before final summarization.
 
+## Debugging
+
+- Set `LAIKA_DEBUG=1` to emit lightweight agent debug events (item selection, comment link scoring) to `llm.jsonl`.
+- Pass `debug: true` in `browser.observe_dom` (harness: `--debug-observe`) to include observe timings plus content-root/list-root/comment-root selection details in the observation output.
+
 ## Proposed tools (not yet implemented)
 
 | Category | Tool name | Description | Tool params | Implementation | Runs in |
 | --- | --- | --- | --- | --- | --- |
-| Content actions | `content.find` | Search in-page or on the web for more info. | `{ "query": "SEC filing deadlines", "scope": "page"|"web" }` | Swift + `background.js` | Swift + extension background |
+| Content actions | `content.find` | (Deferred) In-page find or richer retrieval. Prefer `search` for web search. | `{ "query": "SEC filing deadlines", "scope": "page"|"web" }` | Swift + `background.js` | Swift + extension background |
 
 ## Where tools are defined and gated
 
@@ -243,13 +243,14 @@ Current policy behavior:
 Autodrive can be useful when the site is low-risk and the user explicitly asks for it. It should be constrained otherwise:
 
 - Default to read-only actions.
-- Require approval for clicks and typing.
+- Require approval for navigation and search.
 - Block or require explicit approval for login, MFA, payments, account changes, or downloads.
 - If no page context is available, ask the user to provide context manually.
 
 ## References (internal)
 
 - `docs/AIBrowser.md` for architecture, trust boundaries, and UI roles.
+- `docs/dom_heuristics.md` for DOM-shape heuristics and extraction signals.
 - `docs/local_llm.md` for context window management and thinking trace handling.
 - `src/laika/model/Sources/LaikaModel/PromptBuilder.swift` for the tool JSON schema.
 - `src/laika/model/Sources/LaikaModel/ToolCallParser.swift` for parsing behavior.
