@@ -14,14 +14,37 @@ var ALLOWED_TOOLS = {
 };
 
 var DEFAULT_SIDECAR_SIDE = "right";
+var DEFAULT_SIDECAR_STICKY = true;
 var PANEL_STATE_BY_OWNER = {};
 var PANEL_TAB_TO_OWNER = {};
 var PANEL_OPEN_PROMISES = {};
 var MAX_TAB_CONTEXT = 12;
 var MAX_TAB_TITLE = 120;
+var SIDECAR_STATE_BY_WINDOW = {};
+var SIDECAR_STATE_STORAGE_KEY = "sidecarOpenByWindow";
+var sidecarStateLoaded = false;
+var sidecarStateLoadPromise = null;
+var sidecarStateSaveTimer = null;
+var SIDECAR_RETRY_BY_TAB = {};
+var SIDECAR_RETRY_LIMIT = 4;
+var SIDECAR_RETRY_BASE_DELAY = 200;
+var SIDECAR_LOG_ENABLED = true;
 
 function isNumericId(value) {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function logSidecar(message, details) {
+  if (!SIDECAR_LOG_ENABLED || typeof console === "undefined") {
+    return;
+  }
+  if (console.debug) {
+    console.debug("[Laika][sidecar]", message, details || "");
+    return;
+  }
+  if (console.log) {
+    console.log("[Laika][sidecar]", message, details || "");
+  }
 }
 
 function getOwnerKey(windowId) {
@@ -29,6 +52,105 @@ function getOwnerKey(windowId) {
     return "unknown";
   }
   return String(windowId);
+}
+
+function setSidecarOpenState(windowId, isOpen) {
+  if (!isNumericId(windowId)) {
+    return;
+  }
+  SIDECAR_STATE_BY_WINDOW[String(windowId)] = { isOpen: !!isOpen };
+  queueSidecarStateSave();
+  logSidecar("state", { windowId: windowId, isOpen: !!isOpen });
+}
+
+function isSidecarOpen(windowId) {
+  if (!isNumericId(windowId)) {
+    return false;
+  }
+  var state = SIDECAR_STATE_BY_WINDOW[String(windowId)];
+  return !!(state && state.isOpen);
+}
+
+function clearSidecarState(windowId) {
+  if (!isNumericId(windowId)) {
+    return;
+  }
+  delete SIDECAR_STATE_BY_WINDOW[String(windowId)];
+  queueSidecarStateSave();
+  logSidecar("state_cleared", { windowId: windowId });
+}
+
+function normalizeSidecarState(value) {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  var next = {};
+  var keys = Object.keys(value);
+  for (var i = 0; i < keys.length; i += 1) {
+    var entry = value[keys[i]];
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    next[keys[i]] = { isOpen: !!entry.isOpen };
+  }
+  return next;
+}
+
+function mergeSidecarState(saved) {
+  var normalized = normalizeSidecarState(saved);
+  var currentKeys = Object.keys(SIDECAR_STATE_BY_WINDOW);
+  for (var i = 0; i < currentKeys.length; i += 1) {
+    normalized[currentKeys[i]] = SIDECAR_STATE_BY_WINDOW[currentKeys[i]];
+  }
+  SIDECAR_STATE_BY_WINDOW = normalized;
+}
+
+function loadSidecarState() {
+  if (sidecarStateLoaded) {
+    return Promise.resolve();
+  }
+  if (sidecarStateLoadPromise) {
+    return sidecarStateLoadPromise;
+  }
+  if (!browser.storage || !browser.storage.local) {
+    sidecarStateLoaded = true;
+    return Promise.resolve();
+  }
+  sidecarStateLoadPromise = browser.storage.local
+    .get((function () {
+      var defaults = {};
+      defaults[SIDECAR_STATE_STORAGE_KEY] = {};
+      return defaults;
+    })())
+    .then(function (stored) {
+      mergeSidecarState(stored ? stored[SIDECAR_STATE_STORAGE_KEY] : null);
+      sidecarStateLoaded = true;
+      logSidecar("state_loaded", { windows: Object.keys(SIDECAR_STATE_BY_WINDOW).length });
+    })
+    .catch(function () {
+      sidecarStateLoaded = true;
+      logSidecar("state_load_failed");
+    });
+  return sidecarStateLoadPromise;
+}
+
+function queueSidecarStateSave() {
+  if (!browser.storage || !browser.storage.local) {
+    return;
+  }
+  if (sidecarStateSaveTimer) {
+    return;
+  }
+  sidecarStateSaveTimer = setTimeout(function () {
+    sidecarStateSaveTimer = null;
+    var payload = {};
+    payload[SIDECAR_STATE_STORAGE_KEY] = SIDECAR_STATE_BY_WINDOW;
+    var request = browser.storage.local.set(payload);
+    if (request && request.catch) {
+      request.catch(function () {
+      });
+    }
+  }, 120);
 }
 
 function getPanelState(ownerWindowId) {
@@ -176,6 +298,14 @@ async function getSidecarSide() {
   return stored.sidecarSide === "left" ? "left" : DEFAULT_SIDECAR_SIDE;
 }
 
+async function getSidecarSticky() {
+  if (!browser.storage || !browser.storage.local) {
+    return DEFAULT_SIDECAR_STICKY;
+  }
+  var stored = await browser.storage.local.get({ sidecarSticky: DEFAULT_SIDECAR_STICKY });
+  return stored.sidecarSticky !== false;
+}
+
 async function tabExists(tabId) {
   if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.get) {
     return false;
@@ -198,6 +328,28 @@ async function getTabWindowId(tabId) {
   } catch (error) {
     return null;
   }
+}
+
+async function getActiveTabInfo(tabId, windowId) {
+  if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.get) {
+    return null;
+  }
+  try {
+    var tab = await browser.tabs.get(tabId);
+    if (!tab || !tab.active) {
+      return null;
+    }
+    if (isNumericId(windowId) && tab.windowId !== windowId) {
+      return null;
+    }
+    return tab;
+  } catch (error) {
+    return null;
+  }
+}
+
+function isScriptableUrl(url) {
+  return typeof url === "string" && (url.indexOf("http:") === 0 || url.indexOf("https:") === 0);
 }
 
 function resolveOwnerWindowId(sender, fallbackWindowId) {
@@ -246,15 +398,107 @@ async function resolveTargetTabId(sender, explicitTabId) {
 }
 
 async function sendSidecarMessage(type, sideOverride, sender, tabOverride) {
+  await loadSidecarState();
   var tabId = await resolveTargetTabId(sender, tabOverride);
   if (!isNumericId(tabId)) {
     return { status: "error", error: "no_active_tab" };
   }
   var side = sideOverride || (await getSidecarSide());
   try {
-    return await browser.tabs.sendMessage(tabId, { type: type, side: side });
+    var result = await browser.tabs.sendMessage(tabId, { type: type, side: side });
+    if (result && result.status === "ok") {
+      if (type === "laika.sidecar.show" || type === "laika.sidecar.hide" || type === "laika.sidecar.toggle") {
+        var windowId = await getTabWindowId(tabId);
+        if (isNumericId(windowId)) {
+          if (type === "laika.sidecar.show") {
+            setSidecarOpenState(windowId, true);
+          } else if (type === "laika.sidecar.hide") {
+            setSidecarOpenState(windowId, false);
+          } else if (type === "laika.sidecar.toggle" && typeof result.visible === "boolean") {
+            setSidecarOpenState(windowId, result.visible);
+          }
+        }
+      }
+    }
+    logSidecar("message", { type: type, tabId: tabId, status: result ? result.status : "unknown" });
+    return result;
   } catch (error) {
+    logSidecar("message_failed", { type: type, tabId: tabId, error: "no_context" });
     return { status: "error", error: "no_context" };
+  }
+}
+
+function clearStickyRetry(tabId) {
+  var key = String(tabId);
+  var entry = SIDECAR_RETRY_BY_TAB[key];
+  if (entry && entry.timer) {
+    clearTimeout(entry.timer);
+  }
+  delete SIDECAR_RETRY_BY_TAB[key];
+}
+
+function scheduleStickyRetry(tabId, windowId) {
+  var key = String(tabId);
+  var entry = SIDECAR_RETRY_BY_TAB[key];
+  var attempt = entry ? entry.attempt + 1 : 1;
+  if (attempt > SIDECAR_RETRY_LIMIT) {
+    clearStickyRetry(tabId);
+    logSidecar("retry_giveup", { tabId: tabId, windowId: windowId });
+    return;
+  }
+  if (entry && entry.timer) {
+    clearTimeout(entry.timer);
+  }
+  var delay = SIDECAR_RETRY_BASE_DELAY * attempt;
+  logSidecar("retry_schedule", { tabId: tabId, windowId: windowId, attempt: attempt, delayMs: delay });
+  SIDECAR_RETRY_BY_TAB[key] = {
+    attempt: attempt,
+    timer: setTimeout(function () {
+      var current = SIDECAR_RETRY_BY_TAB[key];
+      if (!current || current.attempt !== attempt) {
+        return;
+      }
+      SIDECAR_RETRY_BY_TAB[key].timer = null;
+      syncStickySidecar(tabId, windowId);
+    }, delay)
+  };
+}
+
+async function syncStickySidecar(tabId, windowId) {
+  if (!isNumericId(tabId) || !isNumericId(windowId)) {
+    return;
+  }
+  await loadSidecarState();
+  var sticky = await getSidecarSticky();
+  if (!sticky) {
+    clearStickyRetry(tabId);
+    logSidecar("sync_skip", { tabId: tabId, windowId: windowId, reason: "sticky_off" });
+    return;
+  }
+  var activeTab = await getActiveTabInfo(tabId, windowId);
+  if (!activeTab) {
+    logSidecar("sync_skip", { tabId: tabId, windowId: windowId, reason: "inactive" });
+    return;
+  }
+  if (!isScriptableUrl(activeTab.url || "")) {
+    clearStickyRetry(tabId);
+    logSidecar("sync_skip", { tabId: tabId, windowId: windowId, reason: "non_scriptable" });
+    return;
+  }
+  var type = isSidecarOpen(windowId) ? "laika.sidecar.show" : "laika.sidecar.hide";
+  logSidecar("sync_send", { tabId: tabId, windowId: windowId, type: type });
+  try {
+    var result = await sendSidecarMessage(type, null, null, tabId);
+    if (result && result.status === "ok") {
+      clearStickyRetry(tabId);
+      return;
+    }
+    if (result && result.error === "no_context") {
+      scheduleStickyRetry(tabId, windowId);
+    } else {
+      clearStickyRetry(tabId);
+    }
+  } catch (error) {
   }
 }
 
@@ -761,9 +1005,34 @@ browser.runtime.onMessage.addListener(function (message, sender) {
 });
 
 registerActionClick();
+loadSidecarState();
+
+if (browser.tabs && browser.tabs.onActivated) {
+  browser.tabs.onActivated.addListener(function (activeInfo) {
+    if (!activeInfo || !isNumericId(activeInfo.tabId)) {
+      return;
+    }
+    var windowId = isNumericId(activeInfo.windowId) ? activeInfo.windowId : null;
+    syncStickySidecar(activeInfo.tabId, windowId);
+  });
+}
+
+if (browser.tabs && browser.tabs.onUpdated) {
+  browser.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
+    if (!changeInfo || changeInfo.status !== "complete") {
+      return;
+    }
+    if (!tab || !tab.active) {
+      return;
+    }
+    var windowId = isNumericId(tab.windowId) ? tab.windowId : null;
+    syncStickySidecar(tabId, windowId);
+  });
+}
 
 if (browser.windows && browser.windows.onRemoved) {
   browser.windows.onRemoved.addListener(function (windowId) {
+    clearSidecarState(windowId);
     var keys = Object.keys(PANEL_STATE_BY_OWNER);
     for (var i = 0; i < keys.length; i += 1) {
       var state = PANEL_STATE_BY_OWNER[keys[i]];
@@ -796,6 +1065,7 @@ if (browser.windows && browser.windows.onRemoved) {
 
 if (browser.tabs && browser.tabs.onRemoved) {
   browser.tabs.onRemoved.addListener(function (tabId) {
+    clearStickyRetry(tabId);
     var state = getPanelStateByTabId(tabId);
     if (state) {
       clearPanelState(state.ownerWindowId);

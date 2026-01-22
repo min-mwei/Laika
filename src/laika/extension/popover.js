@@ -5,7 +5,6 @@ var statusEl = document.getElementById("agent-status");
 var goalInput = document.getElementById("goal");
 var sendButton = document.getElementById("send");
 var chatLog = document.getElementById("chat-log");
-var settingsButton = document.getElementById("open-settings");
 var closeButton = document.getElementById("close-sidecar");
 var isPanelWindow = false;
 
@@ -25,6 +24,7 @@ var planValidator = window.LaikaPlanValidator || {
 var CHAT_HISTORY_KEY = "laika.chat.history.v1";
 var CHAT_HISTORY_LIMIT = 200;
 var chatHistory = [];
+var chatHistoryLoaded = false;
 
 var MESSAGE_FORMAT_PLAIN = "plain";
 var MESSAGE_FORMAT_MARKDOWN = "markdown";
@@ -83,20 +83,6 @@ function logDebug(text) {
   if (typeof console !== "undefined" && console.debug) {
     console.debug("[Laika]", text);
   }
-}
-
-function openSettings() {
-  if (typeof browser !== "undefined" && browser.runtime) {
-    if (browser.runtime.openOptionsPage) {
-      browser.runtime.openOptionsPage();
-      return;
-    }
-    if (browser.runtime.getURL && browser.tabs && browser.tabs.create) {
-      browser.tabs.create({ url: browser.runtime.getURL("options.html") });
-      return;
-    }
-  }
-  appendMessage("system", "Unable to open settings.");
 }
 
 function closeSidecar() {
@@ -248,6 +234,19 @@ function generateHistoryId() {
 
 function saveChatHistory() {
   try {
+    if (browser.storage && browser.storage.local) {
+      var payload = {};
+      payload[CHAT_HISTORY_KEY] = chatHistory;
+      var request = browser.storage.local.set(payload);
+      if (request && request.catch) {
+        request.catch(function () {
+        });
+      }
+      return;
+    }
+  } catch (error) {
+  }
+  try {
     if (typeof sessionStorage === "undefined") {
       return;
     }
@@ -263,34 +262,107 @@ function trimChatHistory() {
   chatHistory = chatHistory.slice(-CHAT_HISTORY_LIMIT);
 }
 
-function loadChatHistory() {
-  chatHistory = [];
-  try {
-    if (typeof sessionStorage === "undefined") {
-      return;
+function normalizeHistoryEntries(entries) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  var filtered = entries.filter(function (entry) {
+    return entry && typeof entry.id === "string" && typeof entry.role === "string" && typeof entry.text === "string";
+  });
+  if (filtered.length > CHAT_HISTORY_LIMIT) {
+    return filtered.slice(-CHAT_HISTORY_LIMIT);
+  }
+  return filtered;
+}
+
+function syncChatHistory(entries) {
+  var normalized = normalizeHistoryEntries(entries);
+  if (normalized.length === 0) {
+    return;
+  }
+  var previous = chatHistory;
+  var previousById = new Map();
+  for (var i = 0; i < previous.length; i += 1) {
+    previousById.set(previous[i].id, previous[i]);
+  }
+  chatHistory = normalized;
+  if (!chatLog) {
+    return;
+  }
+  var nodeMap = new Map();
+  var nodes = chatLog.querySelectorAll(".message[data-history-id]");
+  for (var j = 0; j < nodes.length; j += 1) {
+    var nodeId = nodes[j].getAttribute("data-history-id");
+    if (nodeId) {
+      nodeMap.set(nodeId, nodes[j]);
     }
-    var raw = sessionStorage.getItem(CHAT_HISTORY_KEY);
-    if (!raw) {
-      return;
+  }
+  var nextIds = new Set();
+  for (var k = 0; k < normalized.length; k += 1) {
+    nextIds.add(normalized[k].id);
+  }
+  nodeMap.forEach(function (node, id) {
+    if (!nextIds.has(id)) {
+      node.remove();
     }
-    var parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return;
-    }
-    chatHistory = parsed.filter(function (entry) {
-      return entry && typeof entry.id === "string" && typeof entry.role === "string" && typeof entry.text === "string";
-    });
-    trimChatHistory();
-    for (var i = 0; i < chatHistory.length; i += 1) {
-      appendMessage(chatHistory[i].role, chatHistory[i].text, {
+  });
+  for (var m = 0; m < normalized.length; m += 1) {
+    var entry = normalized[m];
+    var existingNode = nodeMap.get(entry.id);
+    if (existingNode) {
+      var previousEntry = previousById.get(entry.id);
+      if (!previousEntry || previousEntry.text !== entry.text || previousEntry.format !== entry.format) {
+        renderMessageBody(getMessageBody(existingNode), entry.text, entry.format);
+      }
+    } else {
+      appendMessage(entry.role, entry.text, {
         save: false,
-        historyId: chatHistory[i].id,
-        format: chatHistory[i].format
+        historyId: entry.id,
+        format: entry.format
       });
     }
-  } catch (error) {
-    chatHistory = [];
   }
+}
+
+async function loadChatHistory() {
+  if (chatHistoryLoaded) {
+    return;
+  }
+  chatHistoryLoaded = true;
+  var loaded = [];
+  var loadedFromStorage = false;
+  if (browser.storage && browser.storage.local) {
+    try {
+      var defaults = {};
+      defaults[CHAT_HISTORY_KEY] = [];
+      var stored = await browser.storage.local.get(defaults);
+      if (stored && Array.isArray(stored[CHAT_HISTORY_KEY])) {
+        loaded = stored[CHAT_HISTORY_KEY];
+        loadedFromStorage = true;
+      }
+    } catch (error) {
+    }
+  }
+  if (!loadedFromStorage) {
+    try {
+      if (typeof sessionStorage === "undefined") {
+        return;
+      }
+      var raw = sessionStorage.getItem(CHAT_HISTORY_KEY);
+      if (!raw) {
+        return;
+      }
+      var parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        loaded = parsed;
+      }
+    } catch (error) {
+    }
+  }
+  if (!Array.isArray(loaded) || loaded.length === 0) {
+    return;
+  }
+  syncChatHistory(loaded);
 }
 
 function appendMessage(role, text, options) {
@@ -943,17 +1015,28 @@ sendButton.addEventListener("click", async function () {
   }
 });
 
-(function init() {
+(async function init() {
   try {
     isPanelWindow = window.top === window && new URL(window.location.href).searchParams.get("panel") === "1";
   } catch (error) {
     isPanelWindow = false;
   }
   initMarkdownSupport();
-  loadChatHistory();
-  loadMaxTokens();
-  if (settingsButton) {
-    settingsButton.addEventListener("click", openSettings);
+  if (sendButton) {
+    sendButton.disabled = true;
+  }
+  await loadChatHistory();
+  await loadMaxTokens();
+  if (browser.storage && browser.storage.onChanged) {
+    browser.storage.onChanged.addListener(function (changes, areaName) {
+      if (areaName !== "local" || !changes || !changes[CHAT_HISTORY_KEY]) {
+        return;
+      }
+      syncChatHistory(changes[CHAT_HISTORY_KEY].newValue);
+    });
+  }
+  if (sendButton) {
+    sendButton.disabled = false;
   }
   if (closeButton) {
     closeButton.addEventListener("click", closeSidecar);
