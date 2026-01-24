@@ -15,7 +15,7 @@
 		6285AF8F2F1AFB45004C2F8B /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6285AF8E2F1AFB45004C2F8B /* ViewController.swift */; };
 		6285AF922F1AFB45004C2F8B /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 6285AF902F1AFB45004C2F8B /* Main.storyboard */; };
 		6285AF942F1AFB45004C2F8B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6285AF932F1AFB45004C2F8B /* Assets.xcassets */; };
-		6285AF9B2F1AFB45004C2F8B /* Laika Extension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 6285AF9A2F1AFB45004C2F8B /* Laika Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		6285AF9B2F1AFB45004C2F8B /* Laika Extension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 6285AF9A2F1AFB45004C2F8B /* Laika Extension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		6285AFA02F1AFB45004C2F8B /* SafariWebExtensionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6285AF9F2F1AFB45004C2F8B /* SafariWebExtensionHandler.swift */; };
 		6285AFB32F1AFB46004C2F8B /* background.js in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAC2F1AFB46004C2F8B /* background.js */; };
 		6285AFB42F1AFB46004C2F8B /* popover.html in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAD2F1AFB46004C2F8B /* popover.html */; };
@@ -29,6 +29,8 @@
 		A1B2C3D4E5F60718293A4B70 /* LaikaShared in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F60718293A4B60 /* LaikaShared */; };
 		A1B2C3D4E5F60718293A4B71 /* LaikaModel in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F60718293A4B61 /* LaikaModel */; };
 		A1B2C3D4E5F60718293A4B72 /* LaikaAgentCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F60718293A4B62 /* LaikaAgentCore */; };
+		B6F0A2CAD4E5F60718293A73 /* LaikaUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F0A2C9D4E5F60718293A72 /* LaikaUITests.swift */; };
+		B6F0A2D7D4E5F60718293A80 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B6F0A2D6D4E5F60718293A7F /* XCTest.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -38,6 +40,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 6285AF992F1AFB45004C2F8B;
 			remoteInfo = "Laika Extension";
+		};
+		B6F0A2D5D4E5F60718293A7E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6285AF772F1AFB45004C2F8B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6285AF7E2F1AFB45004C2F8B;
+			remoteInfo = Laika;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -80,6 +89,9 @@
 		6285AFB02F1AFB46004C2F8B /* content_script.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = content_script.js; path = ../../../extension/content_script.js; sourceTree = "<group>"; };
 		6285AFB12F1AFB46004C2F8B /* manifest.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = manifest.json; path = ../../../extension/manifest.json; sourceTree = "<group>"; };
 		6285AFB22F1AFB46004C2F8B /* lib */ = {isa = PBXFileReference; lastKnownFileType = folder; name = lib; path = ../../../extension/lib; sourceTree = "<group>"; };
+		B6F0A2C9D4E5F60718293A72 /* LaikaUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaikaUITests.swift; sourceTree = "<group>"; };
+		B6F0A2CBD4E5F60718293A74 /* LaikaUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LaikaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B6F0A2D6D4E5F60718293A7F /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -100,6 +112,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B6F0A2CED4E5F60718293A77 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B6F0A2D7D4E5F60718293A80 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -108,7 +128,9 @@
 			children = (
 				6285AF812F1AFB45004C2F8B /* Laika */,
 				6285AF9E2F1AFB45004C2F8B /* Laika Extension */,
+				B6F0A2D3D4E5F60718293A7C /* LaikaUITests */,
 				6285AF802F1AFB45004C2F8B /* Products */,
+				B6F0A2D8D4E5F60718293A81 /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -117,6 +139,7 @@
 			children = (
 				6285AF7F2F1AFB45004C2F8B /* Laika.app */,
 				6285AF9A2F1AFB45004C2F8B /* Laika Extension.appex */,
+				B6F0A2CBD4E5F60718293A74 /* LaikaUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -174,6 +197,22 @@
 			path = "Laika Extension";
 			sourceTree = SOURCE_ROOT;
 		};
+		B6F0A2D3D4E5F60718293A7C /* LaikaUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B6F0A2C9D4E5F60718293A72 /* LaikaUITests.swift */,
+			);
+			path = LaikaUITests;
+			sourceTree = "<group>";
+		};
+		B6F0A2D8D4E5F60718293A81 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B6F0A2D6D4E5F60718293A7F /* XCTest.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -221,6 +260,24 @@
 			productReference = 6285AF9A2F1AFB45004C2F8B /* Laika Extension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		B6F0A2CCD4E5F60718293A75 /* LaikaUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B6F0A2D2D4E5F60718293A7B /* Build configuration list for PBXNativeTarget "LaikaUITests" */;
+			buildPhases = (
+				B6F0A2CDD4E5F60718293A76 /* Sources */,
+				B6F0A2CED4E5F60718293A77 /* Frameworks */,
+				B6F0A2CFD4E5F60718293A78 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B6F0A2D4D4E5F60718293A7D /* PBXTargetDependency */,
+			);
+			name = LaikaUITests;
+			productName = LaikaUITests;
+			productReference = B6F0A2CBD4E5F60718293A74 /* LaikaUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -235,6 +292,9 @@
 						CreatedOnToolsVersion = 26.2;
 					};
 					6285AF992F1AFB45004C2F8B = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					B6F0A2CCD4E5F60718293A75 = {
 						CreatedOnToolsVersion = 26.2;
 					};
 				};
@@ -260,6 +320,7 @@
 			targets = (
 				6285AF7E2F1AFB45004C2F8B /* Laika */,
 				6285AF992F1AFB45004C2F8B /* Laika Extension */,
+				B6F0A2CCD4E5F60718293A75 /* LaikaUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -291,6 +352,13 @@
 				6285AFB92F1AFB46004C2F8B /* lib in Resources */,
 				6285AFB82F1AFB46004C2F8B /* manifest.json in Resources */,
 				6285AFB32F1AFB46004C2F8B /* background.js in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B6F0A2CFD4E5F60718293A78 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -335,6 +403,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B6F0A2CDD4E5F60718293A76 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B6F0A2CAD4E5F60718293A73 /* LaikaUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -342,6 +418,11 @@
 			isa = PBXTargetDependency;
 			target = 6285AF992F1AFB45004C2F8B /* Laika Extension */;
 			targetProxy = 6285AF9C2F1AFB45004C2F8B /* PBXContainerItemProxy */;
+		};
+		B6F0A2D4D4E5F60718293A7D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6285AF7E2F1AFB45004C2F8B /* Laika */;
+			targetProxy = B6F0A2D5D4E5F60718293A7E /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -670,6 +751,36 @@
 			};
 			name = Release;
 		};
+		B6F0A2D0D4E5F60718293A79 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = LaikaUITests;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.laika.LaikaUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = Laika;
+			};
+			name = Debug;
+		};
+		B6F0A2D1D4E5F60718293A7A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = LaikaUITests;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.laika.LaikaUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = Laika;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -696,6 +807,15 @@
 			buildConfigurations = (
 				6285AFA92F1AFB45004C2F8B /* Debug */,
 				6285AFAA2F1AFB45004C2F8B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B6F0A2D2D4E5F60718293A7B /* Build configuration list for PBXNativeTarget "LaikaUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B6F0A2D0D4E5F60718293A79 /* Debug */,
+				B6F0A2D1D4E5F60718293A7A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

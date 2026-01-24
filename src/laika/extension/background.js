@@ -1,6 +1,8 @@
 "use strict";
 
 var SearchTools = null;
+var PlanValidator = null;
+var AgentRunner = null;
 var SEARCH_TOOLS_INIT = { imported: false, usedFallback: false, importError: "" };
 try {
   if (typeof importScripts === "function") {
@@ -16,6 +18,24 @@ try {
 if (typeof self !== "undefined" && self.LaikaSearchTools) {
   SearchTools = self.LaikaSearchTools;
   SEARCH_TOOLS_INIT.imported = true;
+}
+try {
+  if (typeof importScripts === "function") {
+    importScripts("lib/plan_validator.js");
+  }
+} catch (error) {
+}
+if (typeof self !== "undefined" && self.LaikaPlanValidator) {
+  PlanValidator = self.LaikaPlanValidator;
+}
+try {
+  if (typeof importScripts === "function") {
+    importScripts("lib/agent_runner.js");
+  }
+} catch (error) {
+}
+if (typeof self !== "undefined" && self.LaikaAgentRunner) {
+  AgentRunner = self.LaikaAgentRunner;
 }
 if (!SearchTools) {
   SEARCH_TOOLS_INIT.usedFallback = true;
@@ -199,6 +219,13 @@ var ALLOWED_TOOLS = {
   "browser.select": true,
   "search": true
 };
+
+var NATIVE_APP_ID = "com.laika.Laika";
+var AUTOMATION_ALLOWED_HOSTS = {
+  "127.0.0.1": true,
+  "localhost": true
+};
+var AUTOMATION_RUNS = {};
 
 var DEFAULT_SIDECAR_SIDE = "right";
 var DEFAULT_SIDECAR_STICKY = true;
@@ -1482,6 +1509,190 @@ async function handleToolbarClick(tab) {
   return result;
 }
 
+function isAllowedAutomationOrigin(origin) {
+  if (!origin) {
+    return false;
+  }
+  try {
+    var parsed = new URL(origin);
+    return !!AUTOMATION_ALLOWED_HOSTS[parsed.hostname];
+  } catch (error) {
+    return false;
+  }
+}
+
+function getAutomationRun(runId) {
+  return runId && AUTOMATION_RUNS[runId] ? AUTOMATION_RUNS[runId] : null;
+}
+
+function sendAutomationMessage(tabId, payload) {
+  if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.sendMessage) {
+    return;
+  }
+  try {
+    browser.tabs.sendMessage(tabId, payload);
+  } catch (error) {
+  }
+}
+
+async function resolveAutomationTargetTabId(targetUrl, sender) {
+  if (!targetUrl) {
+    return null;
+  }
+  var openResult = await handleTool("browser.open_tab", { url: targetUrl }, sender, null);
+  if (openResult && openResult.status === "ok" && isNumericId(openResult.tabId)) {
+    return openResult.tabId;
+  }
+  return null;
+}
+
+async function startAutomationRun(message, sender) {
+  if (!AgentRunner || typeof AgentRunner.runAutomationGoals !== "function") {
+    return { status: "error", error: "runner_unavailable" };
+  }
+  if (!sender || !sender.tab || !isNumericId(sender.tab.id)) {
+    return { status: "error", error: "no_sender_tab" };
+  }
+  var origin = message.origin || (sender.url ? sender.url.split("#")[0] : "");
+  try {
+    origin = new URL(origin).origin;
+  } catch (error) {
+    origin = message.origin || "";
+  }
+  if (!isAllowedAutomationOrigin(origin)) {
+    return { status: "error", error: "origin_not_allowed" };
+  }
+  if (!message.nonce || typeof message.nonce !== "string") {
+    return { status: "error", error: "missing_nonce" };
+  }
+  var goals = Array.isArray(message.goals) ? message.goals : (message.goal ? [message.goal] : []);
+  if (!goals.length) {
+    return { status: "error", error: "missing_goals" };
+  }
+  var runId = message.runId && typeof message.runId === "string" ? message.runId : AgentRunner.generateRunId();
+  if (getAutomationRun(runId)) {
+    return { status: "error", error: "run_exists", runId: runId };
+  }
+
+  var runState = {
+    runId: runId,
+    status: "starting",
+    startedAt: Date.now(),
+    reportTabId: sender.tab.id,
+    cancelRequested: false
+  };
+  AUTOMATION_RUNS[runId] = runState;
+
+  var targetTabId = null;
+  if (message.targetUrl) {
+    targetTabId = await resolveAutomationTargetTabId(message.targetUrl, sender);
+    if (!targetTabId) {
+      runState.status = "error";
+      return { status: "error", error: "target_tab_failed" };
+    }
+  }
+
+  var ownerWindowId = resolveOwnerWindowId(sender, null);
+  var deps = {
+    observe: function (options, tabId) {
+      return handleObserve(options, sender, tabId);
+    },
+    runTool: function (action, tabId) {
+      return handleTool(action.toolCall.name, action.toolCall.arguments || {}, sender, tabId);
+    },
+    listTabs: function () {
+      return listTabsForWindow(ownerWindowId);
+    },
+    requestPlan: function (goal, context, maxTokens) {
+      return AgentRunner.requestPlan(goal, context, maxTokens, NATIVE_APP_ID);
+    },
+    validatePlan: PlanValidator && typeof PlanValidator.validatePlanResponse === "function"
+      ? PlanValidator.validatePlanResponse
+      : null,
+    shouldCancel: function () {
+      return !!runState.cancelRequested;
+    },
+    onStatus: function (status) {
+      runState.status = status || runState.status;
+      sendAutomationMessage(runState.reportTabId, {
+        type: "laika.automation.status",
+        runId: runId,
+        status: runState.status
+      });
+    },
+    onStep: function (stepInfo, meta) {
+      runState.lastStep = stepInfo && stepInfo.step ? stepInfo.step : runState.lastStep;
+      runState.goalIndex = meta && typeof meta.goalIndex === "number" ? meta.goalIndex : runState.goalIndex;
+      sendAutomationMessage(runState.reportTabId, {
+        type: "laika.automation.progress",
+        runId: runId,
+        goal: meta ? meta.goal : null,
+        goalIndex: meta ? meta.goalIndex : null,
+        step: stepInfo
+      });
+    }
+  };
+
+  AgentRunner.runAutomationGoals({
+    runId: runId,
+    goals: goals,
+    maxSteps: message.options && message.options.maxSteps,
+    autoApprove: message.options && typeof message.options.autoApprove === "boolean" ? message.options.autoApprove : true,
+    observeOptions: message.options && message.options.observeOptions,
+    detail: message.options && !!message.options.detail,
+    maxTokens: message.options && message.options.maxTokens,
+    tabId: targetTabId,
+    nativeAppId: NATIVE_APP_ID,
+    deps: deps
+  }).then(function (result) {
+    runState.status = "completed";
+    runState.completedAt = Date.now();
+    runState.result = result;
+    sendAutomationMessage(runState.reportTabId, {
+      type: "laika.automation.result",
+      runId: runId,
+      result: result
+    });
+  }).catch(function (error) {
+    runState.status = "error";
+    runState.completedAt = Date.now();
+    runState.error = String(error && error.message ? error.message : error);
+    sendAutomationMessage(runState.reportTabId, {
+      type: "laika.automation.error",
+      runId: runId,
+      error: runState.error
+    });
+  });
+
+  return { status: "ok", runId: runId };
+}
+
+function getAutomationStatus(runId) {
+  var runState = getAutomationRun(runId);
+  if (!runState) {
+    return { status: "error", error: "unknown_run" };
+  }
+  return {
+    status: "ok",
+    runId: runState.runId,
+    state: runState.status,
+    startedAt: runState.startedAt,
+    completedAt: runState.completedAt || null,
+    lastStep: runState.lastStep || null,
+    goalIndex: typeof runState.goalIndex === "number" ? runState.goalIndex : null
+  };
+}
+
+function cancelAutomationRun(runId) {
+  var runState = getAutomationRun(runId);
+  if (!runState) {
+    return { status: "error", error: "unknown_run" };
+  }
+  runState.cancelRequested = true;
+  runState.status = "cancel_requested";
+  return { status: "ok", runId: runId };
+}
+
 browser.runtime.onMessage.addListener(function (message, sender) {
   if (!message || !message.type) {
     return Promise.resolve({ status: "error", error: "invalid_message" });
@@ -1517,6 +1728,15 @@ browser.runtime.onMessage.addListener(function (message, sender) {
     return closePanelWindow(sender, message.windowId).then(function () {
       return { status: "ok" };
     });
+  }
+  if (message.type === "laika.automation.start") {
+    return startAutomationRun(message, sender);
+  }
+  if (message.type === "laika.automation.status") {
+    return Promise.resolve(getAutomationStatus(message.runId));
+  }
+  if (message.type === "laika.automation.cancel") {
+    return Promise.resolve(cancelAutomationRun(message.runId));
   }
   if (message.type === "laika.search.cleanup") {
     if (!isTrustedUiSender(sender)) {

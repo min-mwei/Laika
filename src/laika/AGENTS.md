@@ -29,10 +29,12 @@ This directory is reserved for the Safari extension, macOS companion app, and th
 
 ## Development process (required)
 1) Design and update the relevant design doc before coding.
-2) Implement, write code, and test locally.
+2) Implement the feature and test locally.
 3) Run the Laika automation harness to validate behavior (see `docs/automation.md`).
-4) Confirm the build works, logging is sufficient, then ask for manual user testing.
-5) Read logs and incorporate user feedback.
+4) Fix bugs found in the automation run.
+5) Re-run the Laika automation harness until clean.
+6) Confirm the build works, logging is sufficient, then ask for manual user testing.
+7) Read logs and incorporate user feedback.
 
 ## Build (Swift packages)
 
@@ -50,6 +52,20 @@ cd src/laika/app
 MLX_METAL_JIT=1 ./.build/arm64-apple-macosx/debug/laika-server \
   --model-dir ../extension/lib/models/Qwen3-0.6B-MLX-4bit \
   --port 8765
+```
+
+## Automation harness (Safari UI)
+
+```bash
+cd src/laika/automation_harness
+scripts/run_safari_ui_test.sh --scenario scripts/scenarios/hn.json --output /tmp/laika-hn.json
+```
+
+Run the full UI harness suite:
+
+```bash
+cd src/laika/automation_harness
+scripts/run_all_safari_ui_tests.sh --output-dir /tmp/laika-automation
 ```
 
 ## Automation harness (Playwright)

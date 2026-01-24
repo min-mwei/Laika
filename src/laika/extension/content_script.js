@@ -3090,10 +3090,129 @@
     return { status: "error", error: "unsupported_tool" };
   }
 
+  var AUTOMATION_ALLOWED_HOSTS = {
+    "127.0.0.1": true,
+    "localhost": true
+  };
+  var automationState = {
+    origin: null,
+    nonce: null,
+    runId: null
+  };
+
+  function isAllowedAutomationOrigin(origin) {
+    if (!origin) {
+      return false;
+    }
+    try {
+      var parsed = new URL(origin);
+      return !!AUTOMATION_ALLOWED_HOSTS[parsed.hostname];
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function setAutomationState(origin, nonce, runId) {
+    automationState.origin = origin;
+    automationState.nonce = nonce;
+    automationState.runId = runId;
+  }
+
+  function postAutomationMessage(payload) {
+    if (typeof window === "undefined" || !automationState.origin) {
+      return;
+    }
+    var message = payload && typeof payload === "object" ? payload : { type: "laika.automation.message" };
+    if (automationState.nonce && !message.nonce) {
+      message.nonce = automationState.nonce;
+    }
+    window.postMessage(message, automationState.origin);
+  }
+
+  async function sendAutomationRequest(payload) {
+    if (typeof browser === "undefined" || !browser.runtime || !browser.runtime.sendMessage) {
+      return { status: "error", error: "runtime_unavailable" };
+    }
+    try {
+      return await browser.runtime.sendMessage(payload);
+    } catch (error) {
+      return { status: "error", error: "message_failed" };
+    }
+  }
+
+  function handleAutomationMessage(event) {
+    if (!event || event.source !== window || !event.data || typeof event.data.type !== "string") {
+      return;
+    }
+    if (!isAllowedAutomationOrigin(event.origin)) {
+      return;
+    }
+    var payload = event.data || {};
+    if (payload.type === "laika.automation.start") {
+      var nonce = typeof payload.nonce === "string" && payload.nonce.length >= 8 ? payload.nonce : null;
+      if (!nonce) {
+        if (typeof window !== "undefined") {
+          window.postMessage({ type: "laika.automation.error", error: "missing_nonce" }, event.origin);
+        }
+        return;
+      }
+      var runId = typeof payload.runId === "string" && payload.runId ? payload.runId : null;
+      setAutomationState(event.origin, nonce, runId);
+      sendAutomationRequest({
+        type: "laika.automation.start",
+        runId: runId,
+        goals: payload.goals,
+        goal: payload.goal,
+        options: payload.options || {},
+        targetUrl: payload.targetUrl || "",
+        origin: event.origin,
+        nonce: nonce
+      }).then(function (response) {
+        if (!response || response.status !== "ok") {
+          postAutomationMessage({ type: "laika.automation.error", runId: runId, error: (response && response.error) || "start_failed" });
+          return;
+        }
+        if (response && response.runId) {
+          setAutomationState(event.origin, nonce, response.runId);
+        }
+        postAutomationMessage({ type: "laika.automation.ack", runId: response.runId || runId, status: "ok" });
+      });
+      return;
+    }
+    if (!automationState.nonce || payload.nonce !== automationState.nonce) {
+      return;
+    }
+    if (payload.type === "laika.automation.status" || payload.type === "laika.automation.cancel") {
+      sendAutomationRequest({
+        type: payload.type,
+        runId: payload.runId || automationState.runId,
+        nonce: payload.nonce
+      }).then(function (response) {
+        postAutomationMessage({
+          type: payload.type === "laika.automation.cancel" ? "laika.automation.cancelled" : "laika.automation.status",
+          runId: payload.runId || automationState.runId,
+          status: response && response.status ? response.status : "unknown",
+          error: response && response.error ? response.error : undefined
+        });
+      });
+    }
+  }
+
+  if (typeof window !== "undefined" && window.addEventListener) {
+    window.addEventListener("message", handleAutomationMessage);
+  }
+
   if (typeof browser !== "undefined" && browser.runtime && browser.runtime.onMessage) {
     browser.runtime.onMessage.addListener(function (message) {
       if (!message || !message.type) {
         return Promise.resolve({ status: "error", error: "invalid_message" });
+      }
+      if (message.type === "laika.automation.progress" ||
+          message.type === "laika.automation.result" ||
+          message.type === "laika.automation.error" ||
+          message.type === "laika.automation.status") {
+        postAutomationMessage(message);
+        return Promise.resolve({ status: "ok" });
       }
       if (message.type === "laika.observe") {
         return Promise.resolve({ status: "ok", observation: observeDom(message.options || {}) });

@@ -1,12 +1,17 @@
 # Laika Action Vocabulary (Internal)
 
-This doc defines a small, composable action vocabulary Laika can use internally to decompose a plain-English user request into safer, more reviewable steps. It also defines the canonical **tool vocabulary** (typed tool calls) that Laika’s planner model can propose and that Policy Gate can mediate.
+This doc defines a small, composable **high-level action vocabulary** Laika can use internally to decompose a plain-English user request into safer, more reviewable steps. It also defines the canonical **low-level primitives** (typed tool calls) that Laika’s planner model can propose and that Policy Gate can mediate.
 
 Users should write normal prompts. Laika may translate that intent into one or more internal actions like:
 
-`Summarize(Entity), Find(Topic, Entity), Share(Artifact), Investigate(Topic, Entity), Create(Artifact), Price(Artifact), Buy(Artifact), Save(Artifact), Invoke(API), Calculate(Expression), Dossier(Topic, Entity)`.
+`Summarize(Entity), Find(Topic, Entity), Search(Query), Share(Artifact), Investigate(Topic, Entity), Create(Artifact), Price(Artifact), Buy(Artifact), Save(Artifact), Invoke(API), Calculate(Expression), Dossier(Topic, Entity)`.
 
 For end-user scenarios and positioning, see `docs/laika_pitch.md`.
+
+Laika uses a two-layer model:
+
+- High-level vocabulary (this doc’s verbs): intent-level building blocks that are easy to plan, gate, and audit.
+- Low-level primitives (typed tool calls): the only executable surface; small, deterministic operations implemented in trusted code (extension/app).
 
 ---
 
@@ -57,22 +62,36 @@ This vocabulary exists to solve a few practical problems:
 
 ---
 
-## 2.5 Tool Vocabulary (Typed Calls)
+## 2.5 Low-Level Primitives (Typed Tool Calls)
 
-Laika uses **typed tool calls** to execute actions. The model only **proposes** tools; Policy Gate decides allow/ask/deny, and the extension executes them.
+Laika uses **typed tool calls** as its low-level primitives. The model only **proposes** these calls; Policy Gate decides allow/ask/deny, and trusted code in the extension/app executes them.
 
-Core tools (v1):
+Low-level primitives should be:
+
+- Generic: rely on web platform semantics (DOM + accessibility), not site-specific selectors.
+- Efficient: aggressively budgeted, incremental, and safe to run repeatedly.
+- Robust: deterministic output shapes, stable error codes, and self-verifying (re-observe after actions).
+- Safe: treat web content as untrusted input; avoid data egress unless explicit; sanitize URLs.
+
+Core primitives (v1):
 
 - `browser.observe_dom`: capture page text + element handles (read-only).
 - `browser.click`, `browser.type`, `browser.select`, `browser.scroll`: DOM actions.
 - `browser.open_tab`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.refresh`: tab actions.
 - `search`: web search.
 
+Scope note:
+
+- The catalog in this doc is the browser primitive surface (extension + agent core).
+- App-level primitives (artifact store, exports/sharing, connectors, deterministic compute) should also be typed and policy-gated. Their schemas live in `docs/llm_context_protocol.md` under “App-level primitives”.
+
 Notes:
 
 - `handleId` values must come from the current observation.
-- There is no legacy `content.summarize` or Markdown summary path; summaries are returned as `assistant.render` Documents.
+- There is no legacy `content.summarize` or Markdown summary path; summaries are returned as `assistant.render` Documents (the "Summarize" verb is high-level intent, not a tool).
 - Tool schemas live in `docs/llm_context_protocol.md`.
+- Tool schemas are the source of truth; section 4.4 summarizes the browser tool catalog and documents reliability/safety rules (and `docs/AIBrowser.md` goes deeper on `browser.observe_dom`).
+- Primitive error codes and observation `signals` are part of the interface. Treat them as versioned, stable enums with a single source of truth shared across Swift + JS + docs.
 
 ---
 
@@ -204,6 +223,27 @@ Below, each action includes:
 - Safety notes: how it should behave in a privacy-first browser agent.
 - Examples: compelling prompts and compositions.
 
+Implementation model:
+
+- High-level verbs are *not* Safari APIs. They are intent-level building blocks used for planning and auditing.
+- When a verb requires browser interaction, it must compile down to one or more low-level primitives from the tool catalog (section 4.4), mediated by Policy Gate.
+- Some verbs are primarily “local/model” work (summarization, drafting, calculation) and may require *zero* browser tool calls if the needed context is already present.
+
+Common mapping (informal):
+
+| High-level verb | What provides the logic | Typical low-level primitives |
+| --- | --- | --- |
+| `Summarize` | LLM summarization over `observe_dom` documents + grounding checks | `browser.observe_dom` (optional re-observe/zoom) |
+| `Find` | LLM/local retrieval over observed content | `browser.observe_dom` (scoped), `browser.scroll` |
+| `Search` | Open a search results page | `search` |
+| `Investigate` | Multi-step evidence gathering + synthesis | `search`, `browser.open_tab`/`browser.navigate`, `browser.observe_dom`, `browser.click`, `browser.scroll` |
+| `Create` | LLM drafting/structuring (artifact generation) | (no browser primitive required) |
+| `Save` / `Share` / `Invoke` | Persistence + egress (workspace + connectors) | `artifact.save`, `artifact.share`, `integration.invoke` (app-level primitives; not part of the browser tool surface) |
+| `Price` | Extract + compare + compute totals/assumptions | (usually a mix of `Find`/`Search` + navigation + observation; plus deterministic calculation) |
+| `Buy` | Assisted form/checkout flow with explicit approvals | `browser.click`, `browser.type`, `browser.select`, `browser.scroll` (+ navigation) |
+| `Calculate` | Deterministic compute | `app.calculate` (app-level primitive) |
+| `Dossier` | Structured brief with citations (often “Investigate + Create”) | (same as `Investigate`, plus synthesis) |
+
 ---
 
 ### Summarize(Entity)
@@ -216,6 +256,11 @@ Typical output:
 
 Safety notes:
 - Read-only by default. Should not navigate or click unless you explicitly ask it to.
+- If the entity is another link/item ("summarize the first result"), it may use read-only navigation (`browser.open_tab`) to fetch that entity before summarizing.
+
+Reliability notes:
+- The summary must be grounded in the observed content. If the page appears blocked/sparse (paywall, login, overlay, CAPTCHA), say so and do not speculate.
+- If grounding is weak, fall back to an extractive/quoted summary or ask for a re-observe/scroll rather than guessing.
 
 Examples:
 
@@ -250,7 +295,13 @@ Typical output:
 - A short ranked list of matches (with citations/anchors when possible), plus suggested next steps.
 
 Safety notes:
-- Usually read-only. If you intend cross-site navigation or searching the web, say so (or allow Laika to ask).
+- Usually read-only within an entity. Use `Search(Query)` for web search / opening search results in a new tab.
+
+Implementation notes (how to keep it robust):
+- Prefer finding within the latest observation (`primary`, `blocks`, `items`, `outline`, `comments`) instead of clicking around.
+- Return matches with quotes/snippets and (when possible) anchors/handles so the user can verify.
+- Treat results as partial on dynamic/virtualized pages; if nothing is found, propose a deterministic next step (scroll + re-observe, re-observe with larger budget, or switch to `Search`).
+- V1 decision: keep `Find` model-driven (observe + scroll + re-observe). Do not add a dedicated `browser.find_text` primitive unless we later need it for reliability/perf.
 
 Examples:
 
@@ -275,6 +326,42 @@ Pattern: "Find then extract"
 ```text
 Find("pricing table", ThisPage)
 Create("a 2-column table of plan name vs monthly price from the pricing table")
+```
+
+---
+
+### Search(Query)
+
+Purpose:
+- Run a web search for a query and open the results (typically in a new tab).
+
+Typical output:
+- A brief preview of the query (and engine, if specified), then a search results page to browse/summarize.
+
+Safety notes:
+- Low-risk navigation, but the query is sent to a search engine (data egress). If the query includes personal/sensitive details, Laika should ask before searching.
+- In practice, treat emails, phone numbers, full addresses, account/order numbers, and other identifiers as sensitive by default.
+
+Examples:
+
+```text
+Search("SEC filing deadlines")
+```
+
+```text
+Search("standing desk under $700 60x30")
+```
+
+```text
+Search("refund policy Stripe cancellation terms")
+```
+
+Pattern: "Search -> Find -> Investigate"
+
+```text
+Search("vendor SOC 2 report")
+Find("SOC 2", ThisPage)
+Investigate("is the SOC 2 current and what scope it covers", ThisPage)
 ```
 
 ---
@@ -435,10 +522,10 @@ Price("these 5 laptop options; compute total cost for each with estimated tax in
 Price("this trip itinerary: flights + hotel + local transit estimate for 4 days")
 ```
 
-Pattern: "Find -> Price -> Create"
+Pattern: "Search -> Price -> Create"
 
 ```text
-Find("standing desk under $700 with 60x30 size", "web")
+Search("standing desk under $700 with 60x30 size")
 Price("top 5 candidates")
 Create("a recommendation with best value pick and what trade-offs I accept")
 ```
@@ -528,6 +615,10 @@ Typical output:
 Safety notes:
 - Read-only and local. Still, be explicit about units and rounding.
 
+Implementation notes:
+- Prefer a deterministic evaluator (app-local) for arithmetic/unit conversion over asking an LLM to "do math".
+- Define supported operators/functions and rounding rules so repeated runs are consistent and audit-friendly.
+
 Examples:
 
 ```text
@@ -602,11 +693,13 @@ Most browsing work follows a few repeatable shapes:
 ```text
 Summarize(Entity)
 Find(Topic, Entity)
+Search(Query)
 ```
 
 2) Research and decide
 
 ```text
+Search(Query)
 Find(Topic, Entity)
 Investigate(Topic, Entity)
 Create(Artifact)
@@ -617,6 +710,7 @@ Share(Artifact)
 3) Shop and transact (with approvals)
 
 ```text
+Search(Query)
 Find(Topic, Entity)
 Price(Artifact)
 Create(Artifact)   // comparison table / recommendation
@@ -634,9 +728,9 @@ Share(Artifact)
 
 ---
 
-### 4.4 Tool vocabulary (typed tool calls + LLM integration)
+### 4.4 Low-Level Primitives (typed tool calls + LLM integration)
 
-This doc’s verbs (e.g., `Find`, `Buy`, `Summarize`) are **high-level intent**. Execution happens via **typed tool calls** that the model proposes and Laika enforces.
+This doc’s verbs (e.g., `Find`, `Buy`, `Summarize`) are **high-level intent**. Execution happens via **low-level primitives** (typed tool calls) that the model proposes and Laika enforces.
 
 Core rules:
 
@@ -644,7 +738,7 @@ Core rules:
 - The model never performs actions directly; it proposes **tool calls**.
 - Tool calls are mediated by **Policy Gate** (allow/ask/deny), executed by trusted code, and logged.
 
-#### Tool lifecycle (one step)
+#### Primitive lifecycle (one step)
 
 1. Observe: capture page context + element handles.
 2. Plan: model emits an LLMCP JSON response with `assistant.render` plus optional `tool_calls`.
@@ -685,11 +779,11 @@ Parsing behavior (important for prompting):
 
 Implementation note: Laika uses a JSON-only prompt + LLMCP parser. See `docs/QWen3.md` for thinking control and `docs/llm_context_protocol.md` for the protocol schema.
 
-#### Tool catalog (authoritative)
+#### Primitive catalog (authoritative)
 
-This is the **only** tool surface Laika should carry forward.
+This table mirrors `docs/llm_context_protocol.md` (treat that doc as the schema source of truth). This is the **only** browser tool surface Laika should carry forward. App-level primitives (artifacts, exports, connectors, deterministic compute) are defined in `docs/llm_context_protocol.md` under “App-level primitives”.
 
-| Category | Tool name | What it does | Arguments (JSON) | Runs in |
+| Category | Primitive | What it does | Arguments (JSON) | Runs in |
 | --- | --- | --- | --- | --- |
 | Observation | `browser.observe_dom` | Capture/refresh page text + structured blocks/items/comments + element handles. | `{ "maxChars"?: number, "maxElements"?: number, "maxBlocks"?: number, "maxPrimaryChars"?: number, "maxOutline"?: number, "maxOutlineChars"?: number, "maxItems"?: number, "maxItemChars"?: number, "maxComments"?: number, "maxCommentChars"?: number, "rootHandleId"?: string }` | Extension (content script via background) |
 | DOM action | `browser.click` | Click a link/button element in the page. | `{ "handleId": string }` | Extension content script |
@@ -702,6 +796,111 @@ This is the **only** tool surface Laika should carry forward.
 | Navigation | `browser.forward` | Go forward in tab history. | `{}` | Extension background |
 | Navigation | `browser.refresh` | Reload the current page. | `{}` | Extension background |
 | Navigation | `search` | Open search results for a query (engine selection is optional). | `{ "query": string, "engine"?: string, "newTab"?: boolean }` | Extension background |
+
+#### Implementing primitives (generic, efficient, robust)
+
+Low-level primitives should be intentionally boring: small, deterministic, and site-agnostic. The reliability comes from (1) a strong observation primitive, (2) strict handle semantics, and (3) a re-observe/verify loop.
+
+`browser.observe_dom` (the foundation):
+
+- Extract a compact, structured view of the current page that works across content types:
+  - `primary`: best-effort “main content” (article body, product detail, doc text).
+  - `blocks`: paragraph-ish chunks with link density (helps ignore nav/ads).
+  - `items`: list-like pages (search results, feeds, tables-as-cards).
+  - `outline`: headings/section structure.
+  - `comments`: discussion threads (often outside the primary root).
+  - `elements`: interactive controls (role + label + handleId) for safe actioning.
+  - `signals`: access/visibility hints (paywall/login/overlay/captcha/sparse_text/virtualized_list/etc).
+- Include observation metadata in every result (at minimum: `documentId`, `navigationGeneration`, and `observedAtMs`). Handle validity should be tied to this metadata.
+- Be aggressively budgeted:
+  - Clamp counts and chars (`maxChars`, `maxItems`, `maxBlocks`, ...).
+  - Prefer viewport-first extraction; include “tail” coverage only if budget remains.
+  - Avoid expensive style/layout queries; use heuristics that work off DOM + cheap bounding checks.
+- Support tight scoping:
+  - `rootHandleId` should re-observe a specific container/section (a "zoom in") while preserving the same output schema.
+- Be robust to modern web primitives:
+  - Shadow DOM: traverse open shadow roots; treat closed shadow as not inspectable and surface a `signal`.
+  - Iframes: traverse same-origin frames; emit a `signal` for cross-origin frames you can’t read.
+  - Virtualized/infinite lists: treat output as partial; rely on `browser.scroll` + re-`browser.observe_dom` loops.
+  - Non-text pages (canvas/images/video): rely on accessible names/alt text when present; otherwise emit `signal`s like `non_text_content` and return a minimal observation.
+- Never emit raw HTML. Prefer line-preserving text with lightweight structure prefixes (headings, lists, quotes, code) so summarization is stable under truncation.
+- Always mint action handles (`handleId`) only from trusted extraction; never from model text.
+
+Handles + staleness (cross-cutting):
+
+- Bind handles to a specific (`documentId`, `navigationGeneration`) and invalidate them on navigation/refresh. If the current page metadata does not match, return `stale_handle` and require a fresh `browser.observe_dom`.
+- Make handle resolution resilient:
+  - Keep an internal handle store (handleId -> element reference + fallback selectors/role/label hints).
+  - If resolution fails, return a stable `stale_handle` / `not_found` error and force a fresh `browser.observe_dom`.
+
+DOM action primitives (`browser.click`, `browser.type`, `browser.select`, `browser.scroll`):
+
+- Treat each action as “attempt once, then verify”:
+  - Precondition checks: element exists, is connected, is visible/disabled state, is the expected role/type.
+  - Perform the action (scroll into view if needed).
+  - Postcondition strategy: don’t guess; re-`browser.observe_dom` and let the planner decide next.
+- Keep error codes stable and meaningful (`not_found`, `stale_handle`, `not_interactable`, `blocked_by_overlay`, ...). Models learn the retry strategy from these.
+
+Canonical primitive error codes (v1):
+
+- Tool execution results should use a stable shape: `{ "status": "ok" }` or `{ "status": "error", "error": "<code>" }`.
+- Treat `error` codes as a versioned enum (shared across Swift + JS) so the orchestration layer can respond deterministically.
+- Use lower_snake_case strings for codes (matches the extension tool surface and avoids casing drift).
+
+Common codes (v1):
+
+- `invalid_arguments`
+- `missing_url`, `invalid_url`, `missing_query`, `missing_template`
+- `no_active_tab`, `no_target_tab`, `tabs_unavailable`, `no_context`
+- `unsupported_tool`
+- `stale_handle`, `not_found`, `not_interactable`, `disabled`, `blocked_by_overlay`
+- `not_editable`, `not_select`, `missing_value`
+- `search_unavailable`, `search_failed`
+- `open_tab_failed`, `navigate_failed`, `back_failed`, `forward_failed`, `refresh_failed`
+- `permission_denied`, `rate_limited`, `timeout`, `verification_failed`
+
+Navigation primitives (`browser.open_tab`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.refresh`, `search`):
+
+- Sanitize URLs and restrict to `http(s)`; never allow `javascript:`, `data:`, `file:`, or extension URLs.
+- `search` should build URLs from engine templates and treat the query as data egress (gate sensitive queries).
+- Use a conservative sensitive-query detector (emails/phones/account-like strings) and default to "ask" when unsure.
+
+Canonical `signals` from `browser.observe_dom` (v1):
+
+- Treat these as a versioned enum (shared across Swift + JS) so the model and UI can reliably explain limitations.
+
+Signals should be designed to be:
+
+- Present/absent booleans (no values), so they are easy to gate and easy to prompt on.
+- Conservative (better to say "maybe blocked" than to pretend content is visible).
+
+Currently emitted (v1):
+
+- `auth_fields`, `auth_gate`
+- `paywall`
+- `overlay_or_dialog`, `consent_overlay`
+- `age_gate`, `geo_block`, `script_required`
+- `url_redacted`
+
+Reserved / planned (v1+):
+
+- `sparse_text`, `non_text_content`
+- `captcha_or_robot_check`
+- `cross_origin_iframe`, `closed_shadow_root`
+- `virtualized_list`, `infinite_scroll`
+- `pdf_viewer` (or `document_viewer`)
+
+Testing/hardening strategy:
+
+- Unit test the pure logic (URL sanitation, handle invalidation rules, extraction heuristics).
+- Maintain a small “capability probe” harness: run `observe_dom`/click/type/scroll on representative sites (news, web apps, ecommerce, docs, feeds) and record failure modes.
+- Start with a fixed set of 10-20 probes and track simple metrics (success rate per primitive, common failure codes, and median/p95 timings).
+
+Orchestration invariants (high-level verbs built on primitives):
+
+- Prefer at most 1 primitive call per step (reviewability and determinism).
+- Re-observe after any navigation or DOM action before making another decision.
+- Enforce step budgets and stop conditions (return partial results + "what I need next" instead of looping).
 
 #### Execution surfaces (prototype)
 
@@ -761,7 +960,7 @@ Find 5 options that match my criteria, compare total cost (tax/shipping/warranty
 Internal action chain:
 
 ```text
-Find("product criteria", "web")
+Search("product criteria")
 Price("top options; include tax/shipping/warranty assumptions")
 Create("comparison table + recommendation + what to verify")
 Buy("recommended option; stop at final review; ask before placing order")
@@ -821,7 +1020,7 @@ Find postings that match my criteria from the last 7 days, build a table (compan
 Internal action chain:
 
 ```text
-Find("weekly criteria", "web")
+Search("weekly criteria")
 Create("structured table")
 Invoke("GoogleSheets.writeTable: Tracker")  // optional
 Invoke("Slack.postMessage: #channel")       // optional

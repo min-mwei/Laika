@@ -268,7 +268,7 @@ Tool calls are proposals only. The execution flow is:
 1. Observe: capture page context + element handles.
 2. Plan: model emits an LLMCP response with `assistant.render` and optional `tool_calls`.
 3. Gate: Policy Gate decides allow/ask/deny per tool call.
-4. Act: allowed tools run in the extension (`content_script.js` for DOM actions, `background.js` for tab actions).
+4. Act: allowed tools run in the appropriate trusted executor (extension for browser tools; Agent Core for app-level tools).
 5. Re-observe: capture fresh state after navigation/interaction.
 
 The UI renders `assistant.render` only; there is no summary streaming path.
@@ -278,6 +278,19 @@ The UI renders `assistant.render` only; there is no summary streaming path.
 ## Tool call schema (v1)
 
 Tool calls are typed and schema-validated before execution. Allowed tools and arguments:
+
+Tool call item shape:
+
+```json
+{ "name": "browser.click", "arguments": { "handleId": "laika-1" } }
+```
+
+Notes:
+
+- `tool_calls` must be an array of tool call objects.
+- `arguments` may be omitted or `{}` when a tool takes no parameters.
+
+### Browser primitives (Safari extension)
 
 - `browser.observe_dom`: `{ "maxChars"?: int, "maxElements"?: int, "maxBlocks"?: int, "maxPrimaryChars"?: int, "maxOutline"?: int, "maxOutlineChars"?: int, "maxItems"?: int, "maxItemChars"?: int, "maxComments"?: int, "maxCommentChars"?: int, "rootHandleId"?: string }`
 - `browser.click`: `{ "handleId": string }`
@@ -290,6 +303,18 @@ Tool calls are typed and schema-validated before execution. Allowed tools and ar
 - `browser.forward`: `{}`
 - `browser.refresh`: `{}`
 - `search`: `{ "query": string, "engine"?: string, "newTab"?: boolean }`
+
+### App-level primitives (Agent Core)
+
+These tools run in trusted app code (Swift) rather than the extension, but follow the same rules: the model only proposes them and Policy Gate mediates allow/ask/deny.
+
+Planned/primitives to layer the high-level vocabulary on top of:
+
+- `artifact.save`: `{ "title": string, "mime"?: string, "text"?: string, "doc"?: { "...": "Laika Document" }, "tags"?: [string], "redaction"?: "default"|"none" }`
+  - Exactly one of `text` or `doc` should be provided.
+- `artifact.share`: `{ "artifactId": string, "format": "markdown"|"text"|"json"|"csv"|"pdf", "filename"?: string, "target"?: "share_sheet"|"clipboard"|"file" }`
+- `integration.invoke`: `{ "integration": string, "operation": string, "payload": object, "idempotencyKey"?: string }`
+- `app.calculate`: `{ "expression": string, "precision"?: number }`
 
 Rules:
 

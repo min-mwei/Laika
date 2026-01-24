@@ -39,8 +39,10 @@ Build and run the `Laika` app target. The app hosts the extension; you must run 
 Shortcut build script:
 
 ```bash
-./src/laika_build.sh
+DEVELOPMENT_TEAM=4Z82EAJL2W ./src/laika_build.sh
 ```
+
+By default the build script installs to `~/Applications` so Safari can see the extension. Set `INSTALL_APP=0` to skip install, or `OPEN_APP=1` to launch the app after install.
 
 ## 3) Enable the Safari extension
 
@@ -66,7 +68,21 @@ Follow this loop for any change:
 
 ## 6) Automation harness
 
-Start the local plan server:
+Safari UI harness (real Safari + extension + native app):
+
+```bash
+cd src/laika/automation_harness
+scripts/run_safari_ui_test.sh --scenario scripts/scenarios/hn.json --output /tmp/laika-hn.json
+```
+
+Run the full UI harness suite (HN/BBC/WSJ):
+
+```bash
+cd src/laika/automation_harness
+scripts/run_all_safari_ui_tests.sh --output-dir /tmp/laika-automation
+```
+
+Legacy Playwright harness (DOM-only). Start the local plan server:
 
 ```bash
 cd src/laika/app
@@ -84,6 +100,6 @@ node scripts/laika_harness.js --scenario scripts/scenarios/wsj.json --output /tm
 
 ## Notes
 
-- Native messaging is used for JS -> Swift communication; no local HTTP server is required.
+- Safari UI harness uses native messaging (no local HTTP server required); the Playwright harness uses `LaikaServer`.
 - MLX Swift LM requires macOS 14+ (Apple Silicon).
 - Local logs are written under the sandbox container when running in Safari: `~/Library/Containers/com.laika.Laika.Extension/Data/Laika/logs/llm.jsonl` (host app: `~/Library/Containers/com.laika.Laika/Data/Laika/logs/llm.jsonl`). Non-sandboxed CLI/server runs default to `~/Laika/logs/llm.jsonl` and can be overridden with `LAIKA_HOME=/path`. Full prompt/output previews are enabled by default; set `LAIKA_LOG_FULL_LLM=0` to disable.

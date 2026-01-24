@@ -1,0 +1,154 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Laika Automation Harness</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 20px;
+        color: #1f2a3a;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 18px;
+      }
+      #status {
+        font-size: 14px;
+        margin-bottom: 12px;
+        color: #4a5b70;
+      }
+      #log {
+        border: 1px solid #d6e2f1;
+        border-radius: 6px;
+        padding: 10px;
+        background: #f7f9fc;
+        font-family: "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Laika Automation Harness</h1>
+    <div id="status">Loading scenario...</div>
+    <div id="log"></div>
+
+    <script>
+      (function () {
+        "use strict";
+
+        var statusEl = document.getElementById("status");
+        var logEl = document.getElementById("log");
+        var runId = null;
+        var nonce = null;
+        var scenario = null;
+
+        function log(message) {
+          var line = typeof message === "string" ? message : JSON.stringify(message, null, 2);
+          logEl.textContent += line + "\n";
+        }
+
+        function setStatus(text) {
+          statusEl.textContent = text;
+        }
+
+        function postAutomationStart() {
+          if (!scenario || !nonce) {
+            return;
+          }
+          window.postMessage({
+            type: "laika.automation.start",
+            runId: runId,
+            goals: scenario.goals || [],
+            goal: scenario.goal || "",
+            targetUrl: scenario.url || "",
+            options: scenario.options || {},
+            nonce: nonce
+          }, window.origin);
+        }
+
+        function reportResult(payload) {
+          return fetch("/api/report", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+        }
+
+        window.addEventListener("message", function (event) {
+          if (!event || event.source !== window || event.origin !== window.origin) {
+            return;
+          }
+          var data = event.data || {};
+          if (!data.type || typeof data.type !== "string") {
+            return;
+          }
+          if (data.nonce && nonce && data.nonce !== nonce) {
+            return;
+          }
+          if (data.type === "laika.automation.ack") {
+            setStatus("Automation started: " + (data.runId || "unknown"));
+            log({ event: "ack", runId: data.runId });
+            return;
+          }
+          if (data.type === "laika.automation.status") {
+            setStatus("Status: " + (data.status || "unknown"));
+            log({ event: "status", status: data.status, runId: data.runId });
+            return;
+          }
+          if (data.type === "laika.automation.progress") {
+            log({ event: "progress", runId: data.runId, goal: data.goal, step: data.step && data.step.step });
+            return;
+          }
+          if (data.type === "laika.automation.result") {
+            setStatus("Completed");
+            log({ event: "result", runId: data.runId });
+            reportResult({
+              runId: data.runId,
+              scenario: scenario,
+              result: data.result,
+              receivedAt: new Date().toISOString()
+            }).catch(function () {
+              log({ event: "report_failed" });
+            });
+            return;
+          }
+          if (data.type === "laika.automation.error") {
+            setStatus("Error: " + (data.error || "unknown"));
+            log({ event: "error", runId: data.runId, error: data.error });
+            reportResult({
+              runId: data.runId,
+              scenario: scenario,
+              error: data.error,
+              receivedAt: new Date().toISOString()
+            }).catch(function () {
+              log({ event: "report_failed" });
+            });
+          }
+        });
+
+        fetch("/api/config")
+          .then(function (response) {
+            return response.json();
+          })
+          .then(function (config) {
+            scenario = config.scenario || null;
+            runId = config.runId || null;
+            nonce = config.nonce || null;
+            if (!scenario || !scenario.url) {
+              setStatus("Invalid scenario config");
+              return;
+            }
+            setStatus("Scenario loaded. Starting...");
+            log({ event: "config", scenario: scenario.url, goals: (scenario.goals || []).length });
+            postAutomationStart();
+          })
+          .catch(function (error) {
+            setStatus("Failed to load config");
+            log({ event: "config_error", error: String(error) });
+          });
+      })();
+    </script>
+  </body>
+</html>
