@@ -1525,6 +1525,30 @@ function getAutomationRun(runId) {
   return runId && AUTOMATION_RUNS[runId] ? AUTOMATION_RUNS[runId] : null;
 }
 
+async function resetAutomationState() {
+  if (!browser.storage || !browser.storage.local || !browser.storage.local.clear) {
+    return { status: "error", error: "storage_unavailable" };
+  }
+  try {
+    await browser.storage.local.clear();
+  } catch (error) {
+    return { status: "error", error: "storage_clear_failed" };
+  }
+  searchSettingsCache = null;
+  searchSettingsLoadPromise = null;
+  sidecarStateLoaded = false;
+  sidecarStateLoadPromise = null;
+  if (sidecarStateSaveTimer) {
+    clearTimeout(sidecarStateSaveTimer);
+    sidecarStateSaveTimer = null;
+  }
+  SIDECAR_STATE_BY_WINDOW = {};
+  PANEL_STATE_BY_OWNER = {};
+  PANEL_TAB_TO_OWNER = {};
+  PANEL_OPEN_PROMISES = {};
+  return { status: "ok" };
+}
+
 function sendAutomationMessage(tabId, payload) {
   if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.sendMessage) {
     return;
@@ -1568,6 +1592,16 @@ async function startAutomationRun(message, sender) {
   var goals = Array.isArray(message.goals) ? message.goals : (message.goal ? [message.goal] : []);
   if (!goals.length) {
     return { status: "error", error: "missing_goals" };
+  }
+  var shouldReset = true;
+  if (message.options && typeof message.options.resetStorage === "boolean") {
+    shouldReset = message.options.resetStorage;
+  }
+  if (shouldReset) {
+    var resetResult = await resetAutomationState();
+    if (!resetResult || resetResult.status !== "ok") {
+      return { status: "error", error: resetResult && resetResult.error ? resetResult.error : "reset_failed" };
+    }
   }
   var runId = message.runId && typeof message.runId === "string" ? message.runId : AgentRunner.generateRunId();
   if (getAutomationRun(runId)) {

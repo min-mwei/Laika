@@ -78,6 +78,7 @@ This repo needs an end-to-end automation path that exercises the real Safari ext
 4) Results
 - The bridge posts structured results to the page.
 - UI automation collects JSON output and writes a report.
+- The automation run clears extension local storage by default to avoid state carryover.
 
 ## Bridge gating and safety
 
@@ -110,10 +111,13 @@ Keep existing JSON but allow automation options:
   "options": {
     "maxSteps": 6,
     "autoApprove": true,
-    "observeDelayMs": 300
+    "observeDelayMs": 300,
+    "resetStorage": true
   }
 }
 ```
+
+`resetStorage` defaults to `true` for automation runs; set it to `false` if you need to keep extension storage between scenarios.
 
 ## Runner outputs
 
