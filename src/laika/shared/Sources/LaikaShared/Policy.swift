@@ -48,6 +48,9 @@ public final class PolicyGate: Sendable {
             return PolicyResult(decision: .allow, reasonCode: "summarize_allowed")
         case .browserObserveDom:
             return PolicyResult(decision: .allow, reasonCode: "observe_allowed")
+        case .search:
+            // Web search is the safest "navigation" primitive we expose; allow by default.
+            return PolicyResult(decision: .allow, reasonCode: "search_allowed")
         case .browserClick,
              .browserType,
              .browserScroll,

@@ -49,7 +49,7 @@ Shortcut build script:
 
 ## 4) Use the sidecar
 
-1. Click the Laika toolbar icon to toggle the attached sidecar panel in the current tab (scoped to the current Safari window). By default, the sidecar stays open as you switch tabs and appears on the right. If the sidecar can’t attach, Laika opens the UI as a standalone panel window.
+1. Click the Laika toolbar icon to toggle the attached sidecar panel in the current tab (scoped to the current Safari window). By default, the sidecar stays open as you switch tabs, appears on the right, and the open/closed state is saved in extension storage. If the sidecar can’t attach, Laika opens the UI as a standalone panel window.
 2. Ask a question (e.g., "summarize this page") and click "Send".
 3. Approve or reject any proposed actions inline in the chat.
 4. Adjust sidecar preferences in `Safari` -> `Settings` -> `Extensions` -> `Laika` (sticky vs per-tab, left vs right).

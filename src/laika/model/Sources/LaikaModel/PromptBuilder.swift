@@ -65,6 +65,7 @@ Rules:
 - Use browser.type only for editable fields (role "input" / "textarea" or contenteditable).
 - Use browser.select only for <select>.
 - Use browser.observe_dom with rootHandleId to focus on a specific block/comment when needed.
+- Use search for web search; include query and optional engine/newTab.
 - Tool arguments must match the schema exactly; do not add extra keys.
 - After a tool call runs, you will receive updated page context in the next step.
 - If you include a tool call, still provide a short summary of what you are doing.
@@ -85,6 +86,7 @@ Tools:
 - browser.back arguments: {}
 - browser.forward arguments: {}
 - browser.refresh arguments: {}
+- search arguments: {"query": string, "engine": string?, "newTab": boolean?}
 - content.summarize arguments: {"scope": string?, "handleId": string?}
 
 Return:

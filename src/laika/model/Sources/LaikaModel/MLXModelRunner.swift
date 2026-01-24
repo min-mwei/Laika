@@ -86,6 +86,32 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         self.maxTokens = maxTokens
     }
 
+    private func recentToolDebugInfo(for context: ContextPack) -> (name: String?, args: String?, resultStatus: String?, resultPreview: String?) {
+        guard let lastCall = context.recentToolCalls.last else {
+            return (nil, nil, nil, nil)
+        }
+        let name = lastCall.name.rawValue
+        let args = encodePreview(lastCall.arguments, maxChars: 240)
+        let result = context.recentToolResults.last(where: { $0.toolCallId == lastCall.id })
+        let status = result?.status.rawValue
+        let payload = result.map { encodePreview($0.payload, maxChars: 240) }
+        return (name, args, status, payload ?? nil)
+    }
+
+    private func encodePreview(_ object: [String: LaikaShared.JSONValue], maxChars: Int) -> String? {
+        guard !object.isEmpty else {
+            return nil
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(object),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return LaikaLogger.preview(text, maxChars: maxChars)
+    }
+
     public func parseGoalPlan(context: ContextPack, userGoal: String) async throws -> GoalPlan {
         let container = try await store.container(for: modelURL)
         let systemPrompt = PromptBuilder.goalParseSystemPrompt()
@@ -98,6 +124,7 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         )
         let parseMaxTokens = goalParseMaxTokens(goal: userGoal)
         let maxOutputChars = 8_000
+        let recentTool = recentToolDebugInfo(for: context)
 
         LaikaLogger.logLLMEvent(.request(
             id: requestId,
@@ -123,6 +150,10 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
             primaryChars: context.observation.primary?.text.count ?? 0,
             commentCount: context.observation.comments.count,
             tabCount: context.tabs.count,
+            recentToolName: recentTool.name,
+            recentToolArgumentsPreview: recentTool.args,
+            recentToolResultStatus: recentTool.resultStatus,
+            recentToolResultPreview: recentTool.resultPreview,
             stage: "goal_parse"
         ))
 
@@ -180,6 +211,7 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         let attempts = planAttempts(context: context, userGoal: userGoal)
         let maxOutputChars = 24_000
         let planMaxTokens = planMaxTokens(context: context, userGoal: userGoal)
+        let recentTool = recentToolDebugInfo(for: context)
 
         var lastOutput: String?
         var lastError: Error?
@@ -210,6 +242,10 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
                 primaryChars: context.observation.primary?.text.count ?? 0,
                 commentCount: context.observation.comments.count,
                 tabCount: context.tabs.count,
+                recentToolName: recentTool.name,
+                recentToolArgumentsPreview: recentTool.args,
+                recentToolResultStatus: recentTool.resultStatus,
+                recentToolResultPreview: recentTool.resultPreview,
                 stage: "plan"
             ))
 

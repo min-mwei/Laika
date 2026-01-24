@@ -67,4 +67,36 @@ final class AgentCoreTests: XCTestCase {
         XCTAssertEqual(response.actions.count, 0)
         XCTAssertEqual(response.summaryFormat, .markdown)
     }
+
+    func testSearchIntentPlansSearchTool() async throws {
+        let observation = Observation(url: "https://example.com", title: "Example", text: "", elements: [])
+        let context = ContextPack(origin: "https://example.com", mode: .assist, observation: observation, recentToolCalls: [])
+        let model = MockModelRunner(summary: "No tool calls proposed.")
+        let orchestrator = AgentOrchestrator(model: model)
+
+        let response = try await orchestrator.runOnce(context: context, userGoal: "Search the web for OpenAI GPT-5")
+
+        XCTAssertEqual(response.actions.count, 1)
+        XCTAssertEqual(response.actions.first?.toolCall.name, .search)
+    }
+
+    func testSearchIntentStripsSummarySuffix() async throws {
+        let observation = Observation(url: "https://example.com", title: "Example", text: "", elements: [])
+        let context = ContextPack(origin: "https://example.com", mode: .assist, observation: observation, recentToolCalls: [])
+        let model = MockModelRunner(summary: "No tool calls proposed.")
+        let orchestrator = AgentOrchestrator(model: model)
+
+        let response = try await orchestrator.runOnce(
+            context: context,
+            userGoal: "Search the web for OpenAI GPT-5 and summarize the top results"
+        )
+
+        XCTAssertEqual(response.actions.count, 1)
+        XCTAssertEqual(response.actions.first?.toolCall.name, .search)
+        if case let .string(query)? = response.actions.first?.toolCall.arguments["query"] {
+            XCTAssertEqual(query, "OpenAI GPT-5")
+        } else {
+            XCTFail("Missing search query")
+        }
+    }
 }

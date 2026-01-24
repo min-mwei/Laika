@@ -11,6 +11,7 @@ public enum ToolName: String, Codable, CaseIterable, Sendable {
     case browserForward = "browser.forward"
     case browserRefresh = "browser.refresh"
     case browserSelect = "browser.select"
+    case search = "search"
     case contentSummarize = "content.summarize"
 }
 

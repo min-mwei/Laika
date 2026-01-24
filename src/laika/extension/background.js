@@ -1,5 +1,191 @@
 "use strict";
 
+var SearchTools = null;
+var SEARCH_TOOLS_INIT = { imported: false, usedFallback: false, importError: "" };
+try {
+  if (typeof importScripts === "function") {
+    importScripts("lib/search_tools.js");
+  }
+} catch (error) {
+  try {
+    SEARCH_TOOLS_INIT.importError = String(error && error.message ? error.message : error);
+  } catch (innerError) {
+    SEARCH_TOOLS_INIT.importError = "import_failed";
+  }
+}
+if (typeof self !== "undefined" && self.LaikaSearchTools) {
+  SearchTools = self.LaikaSearchTools;
+  SEARCH_TOOLS_INIT.imported = true;
+}
+if (!SearchTools) {
+  SEARCH_TOOLS_INIT.usedFallback = true;
+  SearchTools = (function () {
+    var PROVIDERS = {
+      google: { template: "https://www.google.com/search?q={query}" },
+      duckduckgo: { template: "https://duckduckgo.com/?q={query}" },
+      bing: { template: "https://www.bing.com/search?q={query}" },
+      yahoo: { template: "https://search.yahoo.com/search?p={query}" }
+    };
+    var DEFAULT_SETTINGS = {
+      mode: "direct",
+      customTemplate: "https://www.google.com/search?q={query}",
+      defaultEngine: "google",
+      addLoopParam: false,
+      loopParam: "laika_redirect",
+      maxQueryLength: 512
+    };
+    function isObject(value) {
+      return value !== null && typeof value === "object" && !Array.isArray(value);
+    }
+    function normalizeWhitespace(text) {
+      return String(text || "").replace(/\s+/g, " ").trim();
+    }
+    function clampPositiveInt(value, fallback) {
+      if (typeof value !== "number" || !isFinite(value)) {
+        return fallback;
+      }
+      var rounded = Math.floor(value);
+      return rounded > 0 ? rounded : fallback;
+    }
+    function normalizeQuery(query, maxLength) {
+      var normalized = normalizeWhitespace(query);
+      if (!normalized) {
+        return "";
+      }
+      var limit = clampPositiveInt(maxLength, DEFAULT_SETTINGS.maxQueryLength);
+      if (normalized.length > limit) {
+        normalized = normalized.slice(0, limit);
+      }
+      return normalized;
+    }
+    function normalizeEngine(engine) {
+      return normalizeWhitespace(engine).toLowerCase();
+    }
+    function normalizeSettings(settings) {
+      var normalized = {
+        mode: DEFAULT_SETTINGS.mode,
+        customTemplate: DEFAULT_SETTINGS.customTemplate,
+        defaultEngine: DEFAULT_SETTINGS.defaultEngine,
+        addLoopParam: DEFAULT_SETTINGS.addLoopParam,
+        loopParam: DEFAULT_SETTINGS.loopParam,
+        maxQueryLength: DEFAULT_SETTINGS.maxQueryLength
+      };
+      if (!isObject(settings)) {
+        return normalized;
+      }
+      if (settings.mode === "direct" || settings.mode === "redirect-default") {
+        normalized.mode = settings.mode;
+      }
+      if (typeof settings.customTemplate === "string") {
+        var template = normalizeWhitespace(settings.customTemplate);
+        if (template) {
+          normalized.customTemplate = template;
+        }
+      }
+      if (typeof settings.defaultEngine === "string") {
+        var engine = normalizeEngine(settings.defaultEngine);
+        if (engine === "custom" || PROVIDERS[engine]) {
+          normalized.defaultEngine = engine;
+        }
+      }
+      if (typeof settings.addLoopParam === "boolean") {
+        normalized.addLoopParam = settings.addLoopParam;
+      }
+      if (typeof settings.loopParam === "string") {
+        var loopParam = normalizeWhitespace(settings.loopParam);
+        if (loopParam) {
+          normalized.loopParam = loopParam;
+        }
+      }
+      normalized.maxQueryLength = clampPositiveInt(settings.maxQueryLength, normalized.maxQueryLength);
+      return normalized;
+    }
+    function resolveEngine(engine, settings) {
+      var normalized = normalizeEngine(engine);
+      if (normalized === "default") {
+        normalized = normalizeEngine(settings.defaultEngine);
+      }
+      if (!normalized) {
+        if (settings.mode === "redirect-default") {
+          normalized = normalizeEngine(settings.defaultEngine);
+        } else {
+          normalized = "custom";
+        }
+      }
+      if (normalized === "custom" || PROVIDERS[normalized]) {
+        return normalized;
+      }
+      return "custom";
+    }
+    function applyTemplate(template, query) {
+      var encoded = encodeURIComponent(query);
+      if (template.indexOf("{query}") !== -1) {
+        return template.split("{query}").join(encoded);
+      }
+      if (template.indexOf("%s") !== -1) {
+        return template.split("%s").join(encoded);
+      }
+      return template + encoded;
+    }
+    function appendLoopParam(url, loopParam) {
+      if (!loopParam) {
+        return { url: url, alreadyApplied: false };
+      }
+      try {
+        var parsed = new URL(url);
+        if (parsed.searchParams.has(loopParam)) {
+          return { url: parsed.toString(), alreadyApplied: true };
+        }
+        parsed.searchParams.set(loopParam, "1");
+        return { url: parsed.toString(), alreadyApplied: false };
+      } catch (error) {
+        return { url: url, alreadyApplied: false };
+      }
+    }
+    function buildSearchUrl(query, engine, settings) {
+      var normalizedSettings = normalizeSettings(settings);
+      var normalizedQuery = normalizeQuery(query, normalizedSettings.maxQueryLength);
+      if (!normalizedQuery) {
+        return { error: "missing_query" };
+      }
+      var resolvedEngine = resolveEngine(engine, normalizedSettings);
+      var template = resolvedEngine === "custom"
+        ? normalizedSettings.customTemplate
+        : (PROVIDERS[resolvedEngine] ? PROVIDERS[resolvedEngine].template : normalizedSettings.customTemplate);
+      if (!template) {
+        return { error: "missing_template" };
+      }
+      var url = applyTemplate(template, normalizedQuery);
+      var addLoopParam = normalizedSettings.addLoopParam;
+      if (typeof addLoopParam !== "boolean") {
+        addLoopParam = normalizedSettings.mode === "redirect-default";
+      }
+      var loopApplied = false;
+      if (addLoopParam && normalizedSettings.loopParam) {
+        var guarded = appendLoopParam(url, normalizedSettings.loopParam);
+        url = guarded.url;
+        loopApplied = !guarded.alreadyApplied;
+      }
+      return {
+        url: url,
+        query: normalizedQuery,
+        engine: resolvedEngine,
+        loopParam: normalizedSettings.loopParam,
+        loopApplied: loopApplied
+      };
+    }
+    return {
+      DEFAULT_SETTINGS: DEFAULT_SETTINGS,
+      normalizeSettings: normalizeSettings,
+      normalizeQuery: normalizeQuery,
+      resolveEngine: resolveEngine,
+      applyTemplate: applyTemplate,
+      appendLoopParam: appendLoopParam,
+      buildSearchUrl: buildSearchUrl
+    };
+  })();
+}
+
 var ALLOWED_TOOLS = {
   "browser.observe_dom": true,
   "browser.click": true,
@@ -10,7 +196,8 @@ var ALLOWED_TOOLS = {
   "browser.back": true,
   "browser.forward": true,
   "browser.refresh": true,
-  "browser.select": true
+  "browser.select": true,
+  "search": true
 };
 
 var DEFAULT_SIDECAR_SIDE = "right";
@@ -29,6 +216,10 @@ var SIDECAR_RETRY_BY_TAB = {};
 var SIDECAR_RETRY_LIMIT = 4;
 var SIDECAR_RETRY_BASE_DELAY = 200;
 var SIDECAR_LOG_ENABLED = true;
+var SEARCH_LOG_ENABLED = true;
+var SEARCH_SETTINGS_KEY = "searchSettings";
+var searchSettingsCache = null;
+var searchSettingsLoadPromise = null;
 
 function isNumericId(value) {
   return typeof value === "number" && Number.isFinite(value);
@@ -44,6 +235,94 @@ function logSidecar(message, details) {
   }
   if (console.log) {
     console.log("[Laika][sidecar]", message, details || "");
+  }
+}
+
+function logSearch(message, details) {
+  if (!SEARCH_LOG_ENABLED || typeof console === "undefined") {
+    return;
+  }
+  if (console.debug) {
+    console.debug("[Laika][search]", message, details || "");
+    return;
+  }
+  if (console.log) {
+    console.log("[Laika][search]", message, details || "");
+  }
+}
+
+(function logSearchInit() {
+  var details = {
+    imported: SEARCH_TOOLS_INIT.imported,
+    fallback: SEARCH_TOOLS_INIT.usedFallback
+  };
+  if (SEARCH_TOOLS_INIT.importError) {
+    details.importError = SEARCH_TOOLS_INIT.importError;
+  }
+  if (SearchTools && SearchTools.DEFAULT_SETTINGS) {
+    details.defaultEngine = SearchTools.DEFAULT_SETTINGS.defaultEngine || "";
+    details.mode = SearchTools.DEFAULT_SETTINGS.mode || "";
+  }
+  logSearch("init", details);
+})();
+
+function isSearchResultsUrl(url) {
+  if (!url) {
+    return false;
+  }
+  try {
+    var parsed = new URL(String(url));
+    var host = (parsed.hostname || "").toLowerCase();
+    var path = parsed.pathname || "";
+    if (host.indexOf("google.") >= 0 && path === "/search") {
+      return parsed.searchParams && parsed.searchParams.has("q");
+    }
+    if (host.indexOf("duckduckgo.com") >= 0 && path === "/") {
+      return parsed.searchParams && parsed.searchParams.has("q");
+    }
+    if (host.indexOf("bing.com") >= 0 && path === "/search") {
+      return parsed.searchParams && parsed.searchParams.has("q");
+    }
+    if (host === "search.yahoo.com" && path === "/search") {
+      return parsed.searchParams && parsed.searchParams.has("p");
+    }
+  } catch (error) {
+  }
+  return false;
+}
+
+function isTrustedUiSender(sender) {
+  if (!sender || !sender.url || !browser.runtime || !browser.runtime.getURL) {
+    return false;
+  }
+  var base = browser.runtime.getURL("popover.html");
+  return typeof sender.url === "string" && sender.url.indexOf(base) === 0;
+}
+
+function summarizeTemplateHost(template) {
+  if (!template) {
+    return "";
+  }
+  var replaced = String(template)
+    .replace("{query}", "test")
+    .replace("%s", "test");
+  try {
+    var parsed = new URL(replaced);
+    return parsed.hostname || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function urlInfo(url) {
+  if (!url) {
+    return { origin: "", path: "" };
+  }
+  try {
+    var parsed = new URL(url);
+    return { origin: parsed.origin, path: parsed.pathname };
+  } catch (error) {
+    return { origin: "", path: "" };
   }
 }
 
@@ -290,6 +569,169 @@ async function handleObserve(options, sender, tabOverride) {
   }
 }
 
+async function handleSearchTool(args, sender, tabOverride) {
+  if (!SearchTools || typeof SearchTools.buildSearchUrl !== "function") {
+    logSearch("error", { stage: "init", error: "search_unavailable" });
+    return { status: "error", error: "search_unavailable" };
+  }
+  if (!args || typeof args.query !== "string") {
+    logSearch("error", { stage: "validate", error: "missing_query" });
+    return { status: "error", error: "missing_query" };
+  }
+  var settings = await loadSearchSettings();
+  var engine = typeof args.engine === "string" ? args.engine : "";
+  var queryPreview = budgetText(args.query, 120);
+  logSearch("request", {
+    query: queryPreview,
+    engine: engine || "(default)",
+    newTab: typeof args.newTab === "boolean" ? args.newTab : true,
+    mode: settings.mode,
+    defaultEngine: settings.defaultEngine,
+    templateHost: summarizeTemplateHost(settings.customTemplate)
+  });
+  var built = SearchTools.buildSearchUrl(args.query, engine, settings);
+  if (!built || built.error) {
+    logSearch("error", { stage: "build", error: built && built.error ? built.error : "search_failed" });
+    return { status: "error", error: built && built.error ? built.error : "search_failed" };
+  }
+  var safeUrl = sanitizeOpenUrl(built.url);
+  if (!safeUrl) {
+    logSearch("error", { stage: "sanitize", error: "invalid_url", url: built.url });
+    return { status: "error", error: "invalid_url" };
+  }
+  var urlDetails = urlInfo(safeUrl);
+  logSearch("built_url", { url: budgetText(safeUrl, 280) });
+  logSearch("built", {
+    engine: built.engine || "",
+    origin: urlDetails.origin,
+    path: urlDetails.path,
+    loopApplied: !!built.loopApplied,
+    loopParam: built.loopParam || ""
+  });
+  var openInNewTab = typeof args.newTab === "boolean" ? args.newTab : true;
+  if (openInNewTab) {
+    if (!browser.tabs || !browser.tabs.create) {
+      logSearch("error", { stage: "open_tab", error: "tabs_unavailable" });
+      return { status: "error", error: "tabs_unavailable" };
+    }
+    var targetWindowId = await getTabWindowId(tabOverride);
+    if (!isNumericId(targetWindowId)) {
+      targetWindowId = resolveOwnerWindowId(sender, null);
+    }
+    var createOptions = { url: safeUrl, active: true };
+    if (isNumericId(targetWindowId)) {
+      createOptions.windowId = targetWindowId;
+    }
+    // Searches are typically intermediate steps; don't steal focus from the user's current tab.
+    createOptions.active = false;
+    try {
+      var created = await browser.tabs.create(createOptions);
+      logSearch("open_tab", {
+        tabId: created && isNumericId(created.id) ? created.id : null,
+        origin: urlDetails.origin
+      });
+      return {
+        status: "ok",
+        tabId: created && isNumericId(created.id) ? created.id : null,
+        url: safeUrl,
+        engine: built.engine || ""
+      };
+    } catch (error) {
+      if (isNumericId(createOptions.windowId)) {
+        try {
+          var createdFallback = await browser.tabs.create({ url: safeUrl, active: false });
+          logSearch("open_tab_fallback", {
+            tabId: createdFallback && isNumericId(createdFallback.id) ? createdFallback.id : null,
+            origin: urlDetails.origin
+          });
+          return {
+            status: "ok",
+            tabId: createdFallback && isNumericId(createdFallback.id) ? createdFallback.id : null,
+            url: safeUrl,
+            engine: built.engine || ""
+          };
+        } catch (innerError) {
+        }
+      }
+      logSearch("error", {
+        stage: "open_tab",
+        error: "open_tab_failed",
+        message: String(error && error.message ? error.message : error).slice(0, 200)
+      });
+      return { status: "error", error: "open_tab_failed" };
+    }
+  }
+
+  var tabId = null;
+  if (isNumericId(tabOverride)) {
+    if (await tabExists(tabOverride)) {
+      tabId = tabOverride;
+    } else {
+      return { status: "error", error: "no_target_tab" };
+    }
+  } else {
+    tabId = await resolveTargetTabId(sender, null);
+  }
+  if (!isNumericId(tabId)) {
+    logSearch("error", { stage: "navigate", error: "no_active_tab" });
+    return { status: "error", error: "no_active_tab" };
+  }
+  if (!browser.tabs || !browser.tabs.update) {
+    logSearch("error", { stage: "navigate", error: "tabs_unavailable" });
+    return { status: "error", error: "tabs_unavailable" };
+  }
+  try {
+    await browser.tabs.update(tabId, { url: safeUrl });
+    logSearch("navigate", { tabId: tabId, origin: urlDetails.origin });
+    return { status: "ok", url: safeUrl, engine: built.engine || "" };
+  } catch (error) {
+    logSearch("error", {
+      stage: "navigate",
+      error: "navigate_failed",
+      message: String(error && error.message ? error.message : error).slice(0, 200)
+    });
+    return { status: "error", error: "navigate_failed" };
+  }
+}
+
+async function closeSearchTabs(tabIds, fallbackTabId) {
+  if (!browser.tabs || !browser.tabs.get || !browser.tabs.remove) {
+    return { status: "error", error: "tabs_unavailable" };
+  }
+  var ids = Array.isArray(tabIds) ? tabIds : [];
+  var closed = 0;
+  var skipped = 0;
+  for (var i = 0; i < ids.length; i += 1) {
+    var tabId = ids[i];
+    if (!isNumericId(tabId)) {
+      continue;
+    }
+    var tab;
+    try {
+      tab = await browser.tabs.get(tabId);
+    } catch (error) {
+      continue;
+    }
+    if (!tab || !isSearchResultsUrl(tab.url || "")) {
+      skipped += 1;
+      continue;
+    }
+    if (tab.active && isNumericId(fallbackTabId) && fallbackTabId !== tabId && browser.tabs.update) {
+      try {
+        await browser.tabs.update(fallbackTabId, { active: true });
+      } catch (error) {
+      }
+    }
+    try {
+      await browser.tabs.remove(tabId);
+      closed += 1;
+    } catch (error) {
+    }
+  }
+  logSearch("cleanup", { closed: closed, skipped: skipped, total: ids.length });
+  return { status: "ok", closed: closed, skipped: skipped };
+}
+
 async function getSidecarSide() {
   if (!browser.storage || !browser.storage.local) {
     return DEFAULT_SIDECAR_SIDE;
@@ -530,6 +972,78 @@ function sanitizeOpenUrl(url) {
   } catch (error) {
     return "";
   }
+}
+
+function defaultSearchSettings() {
+  if (SearchTools && typeof SearchTools.normalizeSettings === "function") {
+    return SearchTools.normalizeSettings(null);
+  }
+  return {
+    mode: "direct",
+    customTemplate: "https://www.google.com/search?q={query}",
+    defaultEngine: "google",
+    addLoopParam: false,
+    loopParam: "laika_redirect",
+    maxQueryLength: 512
+  };
+}
+
+function normalizeSearchSettings(value) {
+  if (SearchTools && typeof SearchTools.normalizeSettings === "function") {
+    return SearchTools.normalizeSettings(value);
+  }
+  return defaultSearchSettings();
+}
+
+async function loadSearchSettings() {
+  if (searchSettingsCache) {
+    return searchSettingsCache;
+  }
+  if (searchSettingsLoadPromise) {
+    return searchSettingsLoadPromise;
+  }
+  var defaults = defaultSearchSettings();
+  if (!browser.storage || !browser.storage.local) {
+    searchSettingsCache = defaults;
+    logSearch("settings_loaded", {
+      source: "defaults",
+      mode: defaults.mode,
+      defaultEngine: defaults.defaultEngine,
+      templateHost: summarizeTemplateHost(defaults.customTemplate)
+    });
+    return defaults;
+  }
+  searchSettingsLoadPromise = browser.storage.local
+    .get((function () {
+      var payload = {};
+      payload[SEARCH_SETTINGS_KEY] = defaults;
+      return payload;
+    })())
+    .then(function (stored) {
+      var settings = normalizeSearchSettings(stored ? stored[SEARCH_SETTINGS_KEY] : null);
+      searchSettingsCache = settings;
+      logSearch("settings_loaded", {
+        source: "storage",
+        mode: settings.mode,
+        defaultEngine: settings.defaultEngine,
+        templateHost: summarizeTemplateHost(settings.customTemplate),
+        addLoopParam: !!settings.addLoopParam,
+        loopParam: settings.loopParam || "",
+        maxQueryLength: settings.maxQueryLength || 0
+      });
+      return settings;
+    })
+    .catch(function () {
+      searchSettingsCache = defaults;
+      logSearch("settings_load_failed", {
+        source: "defaults",
+        mode: defaults.mode,
+        defaultEngine: defaults.defaultEngine,
+        templateHost: summarizeTemplateHost(defaults.customTemplate)
+      });
+      return defaults;
+    });
+  return searchSettingsLoadPromise;
 }
 
 function normalizeWhitespace(text) {
@@ -824,6 +1338,9 @@ async function handleTool(toolName, args, sender, tabOverride) {
     }
     return handleObserve(options, sender, tabOverride);
   }
+  if (toolName === "search") {
+    return handleSearchTool(args || {}, sender, tabOverride);
+  }
   if (toolName === "browser.open_tab") {
     if (args && args.url) {
       var safeUrl = sanitizeOpenUrl(args.url);
@@ -1001,8 +1518,27 @@ browser.runtime.onMessage.addListener(function (message, sender) {
       return { status: "ok" };
     });
   }
+  if (message.type === "laika.search.cleanup") {
+    if (!isTrustedUiSender(sender)) {
+      return Promise.resolve({ status: "error", error: "forbidden" });
+    }
+    return closeSearchTabs(message.tabIds || [], message.fallbackTabId);
+  }
   return Promise.resolve({ status: "error", error: "unknown_type" });
 });
+
+if (browser.storage && browser.storage.onChanged) {
+  browser.storage.onChanged.addListener(function (changes, areaName) {
+    if (areaName !== "local" || !changes) {
+      return;
+    }
+    if (changes[SEARCH_SETTINGS_KEY]) {
+      searchSettingsCache = null;
+      searchSettingsLoadPromise = null;
+      logSearch("settings_invalidated", { source: "storage_change" });
+    }
+  });
+}
 
 registerActionClick();
 loadSidecarState();

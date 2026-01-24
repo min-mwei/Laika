@@ -16,6 +16,7 @@
     "browser.forward": true,
     "browser.refresh": true,
     "browser.select": true,
+    "search": true,
     "content.summarize": true
   };
 
@@ -100,6 +101,18 @@
     }
     if (toolCall.name === "browser.back" || toolCall.name === "browser.forward" || toolCall.name === "browser.refresh") {
       return Object.keys(args).length === 0 ? null : "no arguments allowed";
+    }
+    if (toolCall.name === "search") {
+      if (typeof args.query !== "string" || !args.query) {
+        return "search.query required";
+      }
+      if (typeof args.engine !== "undefined" && typeof args.engine !== "string") {
+        return "search.engine must be string";
+      }
+      if (typeof args.newTab !== "undefined" && typeof args.newTab !== "boolean") {
+        return "search.newTab must be boolean";
+      }
+      return null;
     }
     if (toolCall.name === "content.summarize") {
       if (typeof args.scope !== "undefined" && typeof args.scope !== "string") {

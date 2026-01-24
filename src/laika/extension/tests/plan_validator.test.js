@@ -52,3 +52,33 @@ test("validatePlanResponse accepts summarize action", () => {
   const result = validator.validatePlanResponse(payload);
   assert.equal(result.ok, true);
 });
+
+test("validatePlanResponse accepts search action", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "search",
+          arguments: { query: "SEC filing deadlines", engine: "custom", newTab: true }
+        },
+        policy: { decision: "ask", reasonCode: "assist_requires_approval" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, true);
+});
+
+test("validatePlanResponse rejects search without query", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: { id: "12345678-1234-1234-1234-1234567890ab", name: "search", arguments: {} },
+        policy: { decision: "ask", reasonCode: "assist_requires_approval" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, false);
+});

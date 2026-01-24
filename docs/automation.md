@@ -28,6 +28,7 @@ This repo includes a lightweight automation harness that drives the real Laika p
 ## Supported tools
 
 - `browser.observe_dom`, `browser.open_tab`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.refresh`.
+- `search` (maps to a URL build + navigation in the harness).
 - `browser.click`, `browser.type`, `browser.scroll`, `browser.select` (handle IDs from the observer).
 - Other tool names return `unsupported_tool` in the harness.
 

@@ -3,6 +3,16 @@
 
 const fs = require("fs");
 const path = require("path");
+const searchTools = require("../../extension/lib/search_tools");
+
+// Automation runs get throttled by Google frequently. Default to DuckDuckGo here,
+// while keeping the extension's default engine as Google.
+const HARNESS_SEARCH_SETTINGS = searchTools.normalizeSettings({
+  ...searchTools.DEFAULT_SETTINGS,
+  mode: "redirect-default",
+  defaultEngine: "duckduckgo",
+  customTemplate: searchTools.PROVIDERS.duckduckgo.template
+});
 
 let playwright;
 try {
@@ -16,6 +26,7 @@ const DEFAULT_SERVER_URL = "http://127.0.0.1:8765";
 const DEFAULT_MAX_STEPS = 6;
 const DEFAULT_OBSERVE_DELAY_MS = 300;
 const DETAIL_OBSERVE_DELAY_MS = 500;
+const SEARCH_OBSERVE_DELAY_MS = 1500;
 const EMPTY_OBSERVE_RETRY_DELAY_MS = 900;
 const EMPTY_OBSERVE_MAX_RETRIES = 1;
 const DEFAULT_OBSERVE_OPTIONS = {
@@ -441,6 +452,24 @@ async function executeTool(page, toolCall, observeOptions, navTimeoutMs, observe
     const observed = await observeWithRetry(page, Object.keys(args).length ? args : observeOptions, observeDelayMs);
     observation = observed.observation;
     retryCount = observed.retryCount;
+  } else if (name === "search") {
+    const query = args.query;
+    if (typeof query !== "string" || !query) {
+      result = { status: "error", error: "missing_query" };
+    } else {
+      const built = searchTools.buildSearchUrl(query, args.engine || "", HARNESS_SEARCH_SETTINGS);
+      if (!built || built.error) {
+        result = { status: "error", error: built && built.error ? built.error : "search_failed" };
+      } else {
+        await page.goto(built.url, { waitUntil: "domcontentloaded", timeout: navTimeoutMs });
+        result = { status: "ok", url: built.url, finalUrl: page.url(), engine: built.engine || "" };
+        const searchDelay = Math.max(observeDelayMs || 0, SEARCH_OBSERVE_DELAY_MS);
+        await waitForObserveDelay(page, searchDelay);
+        const observed = await observeWithRetry(page, observeOptions, searchDelay);
+        observation = observed.observation;
+        retryCount = observed.retryCount;
+      }
+    }
   } else if (name === "browser.open_tab" || name === "browser.navigate") {
     const url = args.url;
     if (typeof url !== "string" || !url) {
@@ -566,7 +595,13 @@ async function runGoals(state, goals, options) {
       recentToolCalls.push(action.toolCall);
       const payload = action.toolCall.name === "browser.observe_dom"
         ? buildObservePayload(executed.observation)
-        : {};
+        : (action.toolCall.name === "search"
+          ? {
+              url: executed.result && executed.result.url ? executed.result.url : "",
+              finalUrl: executed.result && executed.result.finalUrl ? executed.result.finalUrl : "",
+              engine: executed.result && executed.result.engine ? executed.result.engine : ""
+            }
+          : {});
       recentToolResults.push(buildToolResult(action.toolCall, executed.result.status || "ok", payload));
       stepInfo.toolResult = executed.result;
       stepInfo.nextObservation = summarizeObservation(executed.observation);

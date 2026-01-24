@@ -164,6 +164,10 @@ public struct LLMTraceEvent: Codable, Sendable {
     public let commentCount: Int?
     public let tabCount: Int?
     public let recentToolCallsCount: Int?
+    public let recentToolName: String?
+    public let recentToolArgumentsPreview: String?
+    public let recentToolResultStatus: String?
+    public let recentToolResultPreview: String?
     public let promptPreview: String?
     public let outputChars: Int?
     public let outputPreview: String?
@@ -195,6 +199,10 @@ public struct LLMTraceEvent: Codable, Sendable {
         primaryChars: Int,
         commentCount: Int,
         tabCount: Int,
+        recentToolName: String? = nil,
+        recentToolArgumentsPreview: String? = nil,
+        recentToolResultStatus: String? = nil,
+        recentToolResultPreview: String? = nil,
         stage: String? = "plan"
     ) -> LLMTraceEvent {
         let shouldLog = LaikaLogger.shouldLogFullLLM
@@ -226,6 +234,10 @@ public struct LLMTraceEvent: Codable, Sendable {
             commentCount: commentCount,
             tabCount: tabCount,
             recentToolCallsCount: recentToolCallsCount,
+            recentToolName: recentToolName,
+            recentToolArgumentsPreview: recentToolArgumentsPreview,
+            recentToolResultStatus: recentToolResultStatus,
+            recentToolResultPreview: recentToolResultPreview,
             promptPreview: promptPreview,
             outputChars: nil,
             outputPreview: nil,
@@ -280,6 +292,10 @@ public struct LLMTraceEvent: Codable, Sendable {
             commentCount: nil,
             tabCount: nil,
             recentToolCallsCount: nil,
+            recentToolName: nil,
+            recentToolArgumentsPreview: nil,
+            recentToolResultStatus: nil,
+            recentToolResultPreview: nil,
             promptPreview: nil,
             outputChars: output.count,
             outputPreview: outputPreview,

@@ -1391,6 +1391,66 @@
     return best;
   }
 
+  function detectSearchEngine() {
+    try {
+      var parsed = new URL(window.location.href);
+      var host = (parsed.hostname || "").toLowerCase();
+      var path = parsed.pathname || "";
+      if (host.indexOf("duckduckgo.com") >= 0 && parsed.searchParams && parsed.searchParams.get("q")) {
+        return "duckduckgo";
+      }
+      if (host.indexOf("bing.com") >= 0 && path === "/search" && parsed.searchParams && parsed.searchParams.get("q")) {
+        return "bing";
+      }
+      if (host.indexOf("google.") >= 0 && path === "/search" && parsed.searchParams && parsed.searchParams.get("q")) {
+        return "google";
+      }
+    } catch (error) {
+    }
+    return null;
+  }
+
+  function selectDuckDuckGoResultsRoot(root) {
+    if (!root || !root.querySelectorAll) {
+      return null;
+    }
+    var articles = root.querySelectorAll('article[id^="r1-"]');
+    if (!articles || articles.length < 4) {
+      return null;
+    }
+    var targetCount = Math.min(articles.length, 6);
+    var candidate = articles[0].parentElement;
+    while (candidate && candidate !== root && candidate !== document.body && candidate !== document.documentElement) {
+      try {
+        var count = candidate.querySelectorAll ? candidate.querySelectorAll('article[id^="r1-"]').length : 0;
+        if (count >= targetCount) {
+          return candidate;
+        }
+      } catch (error) {
+      }
+      candidate = candidate.parentElement;
+    }
+    return root;
+  }
+
+  function selectSearchRoot(root, roots, debugInfo) {
+    var engine = detectSearchEngine();
+    if (!engine) {
+      return null;
+    }
+    var selected = null;
+    if (engine === "duckduckgo") {
+      selected = selectDuckDuckGoResultsRoot(root);
+    }
+    if (debugInfo) {
+      debugInfo.searchRoot = {
+        engine: engine,
+        selected: debugElementInfo(selected)
+      };
+    }
+    return selected;
+  }
+
   function collectTextBlocks(root, maxBlocks, maxPrimaryChars, roots) {
     if (!root) {
       return { blocks: [], primary: null };
@@ -2707,7 +2767,12 @@
       debugInfo.signals = signals;
     }
     var textRoot = root;
+    var searchRoot = null;
     if (!options || !options.rootHandleId) {
+      searchRoot = selectSearchRoot(root, rootRoots, debugInfo);
+      if (searchRoot) {
+        textRoot = searchRoot;
+      } else {
       var contentStart = debugEnabled ? nowMs() : 0;
       var contentRoot = pickContentRoot(root, rootRoots, debugInfo);
       if (debugInfo) {
@@ -2743,6 +2808,7 @@
       }
       if (contentRoot) {
         textRoot = contentRoot;
+      }
       }
     }
     if (debugInfo) {
@@ -2815,7 +2881,10 @@
       debugInfo.counts.itemCount = items.length;
     }
     var commentsStart = debugEnabled ? nowMs() : 0;
-    var comments = collectComments(root, maxComments, maxCommentChars, rootRoots);
+    var comments = [];
+    if (!searchRoot) {
+      comments = collectComments(root, maxComments, maxCommentChars, rootRoots);
+    }
     if (debugInfo) {
       debugInfo.timings.collectCommentsMs = Math.round(nowMs() - commentsStart);
       debugInfo.counts.commentCount = comments.length;

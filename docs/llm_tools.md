@@ -205,7 +205,7 @@ Long-context guidance (from `docs/local_llm.md`):
 | Core navigation | `browser.back` | Go back in history. | `{}` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
 | Core navigation | `browser.forward` | Go forward in history. | `{}` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
 | Core navigation | `browser.refresh` | Reload the current page. | `{}` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
-| Core navigation | `search` | Search the web via Safari (opens search results). | `{ "query": "SEC filing deadlines", "newTab": true }` | Planned: `src/laika/extension/background.js` (`handleTool`) | Extension background |
+| Core navigation | `search` | Search the web via the configured engine (opens search results). | `{ "query": "SEC filing deadlines", "engine": "custom", "newTab": true }` | `src/laika/extension/background.js` (`handleTool`) | Extension background |
 | Content actions | `content.summarize` | Summarize the page context using the latest observation + goal plan. | `{}` (arguments currently ignored; `scope`/`handleId` reserved) | Swift Agent Core (`SummaryService`) | Swift (local model) |
 
 Notes for `content.summarize`:

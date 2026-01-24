@@ -87,6 +87,13 @@ public final class AgentOrchestrator: @unchecked Sendable {
             return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan, summaryFormat: .plain)
         }
 
+        if let planned = planSearchTool(context: enrichedContext, userGoal: userGoal) {
+            let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
+            logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
+            logFinalSummary(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan, source: "planned_action")
+            return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan, summaryFormat: .plain)
+        }
+
         if let planned = planSummaryTool(context: enrichedContext, goalPlan: goalPlan) {
             let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
             logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
@@ -100,6 +107,13 @@ public final class AgentOrchestrator: @unchecked Sendable {
             return AgentResponse(summary: summary, actions: [], goalPlan: goalPlan, summaryFormat: .markdown)
         }
         let modelResponse = try await model.generatePlan(context: enrichedContext, userGoal: userGoal)
+        if modelResponse.toolCalls.isEmpty,
+           let planned = planSearchTool(context: enrichedContext, userGoal: userGoal) {
+            let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
+            logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
+            logFinalSummary(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan, source: "planned_action")
+            return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan, summaryFormat: .plain)
+        }
         if shouldForceSummary(context: enrichedContext, goalPlan: goalPlan, modelResponse: modelResponse) {
             let summary = try await generateSummaryFallback(context: enrichedContext, userGoal: userGoal, goalPlan: goalPlan)
             logFinalSummary(summary: summary, context: enrichedContext, goalPlan: goalPlan, source: "summary_fallback")
@@ -152,6 +166,67 @@ public final class AgentOrchestrator: @unchecked Sendable {
         }
         let summary = summaryToolIntro(goalPlan: goalPlan)
         let toolCall = ToolCall(name: .contentSummarize, arguments: [:])
+        return PlannedAction(toolCall: toolCall, summary: summary)
+    }
+
+    private func planSearchTool(context: ContextPack, userGoal: String) -> PlannedAction? {
+        guard let intent = extractSearchIntent(from: userGoal) else {
+            return nil
+        }
+        if Self.debugEnabled {
+            let payload: [String: JSONValue] = [
+                "query": .string(truncateForLog(intent.query, maxChars: 160)),
+                "engine": .string(intent.engine ?? ""),
+                "goal": .string(truncateForLog(userGoal, maxChars: 160))
+            ]
+            logDebugEvent("search_intent", context: context, payload: payload)
+        }
+        if let lastSearch = mostRecentSearchCall(context) {
+            let lastQuery = extractSearchQuery(from: lastSearch)
+            if lastQuery == intent.query {
+                let blockReason = searchBlockReason(context.observation)
+                if shouldRetrySearch(intent: intent, lastSearch: lastSearch, blockReason: blockReason) {
+                    if Self.debugEnabled {
+                        let payload: [String: JSONValue] = [
+                            "reason": .string(blockReason ?? "unknown"),
+                            "fromEngine": .string(extractSearchEngine(from: lastSearch) ?? ""),
+                            "toEngine": .string("duckduckgo"),
+                            "url": .string(truncateForLog(context.observation.url, maxChars: 200))
+                        ]
+                        logDebugEvent("search_retry", context: context, payload: payload)
+                    }
+                    return buildSearchAction(query: intent.query, engine: "duckduckgo", summaryPrefix: "Search blocked")
+                }
+                if Self.debugEnabled {
+                    let payload: [String: JSONValue] = [
+                        "reason": .string("duplicate_query"),
+                        "engine": .string(extractSearchEngine(from: lastSearch) ?? "")
+                    ]
+                    logDebugEvent("search_skip", context: context, payload: payload)
+                }
+                return nil
+            }
+        }
+        var arguments: [String: JSONValue] = [
+            "query": .string(intent.query),
+            "newTab": .bool(true)
+        ]
+        if let engine = intent.engine, !engine.isEmpty {
+            arguments["engine"] = .string(engine)
+        }
+        let summary = "Searching the web for '\(intent.query)'."
+        let toolCall = ToolCall(name: .search, arguments: arguments)
+        return PlannedAction(toolCall: toolCall, summary: summary)
+    }
+
+    private func buildSearchAction(query: String, engine: String, summaryPrefix: String) -> PlannedAction? {
+        let arguments: [String: JSONValue] = [
+            "query": .string(query),
+            "engine": .string(engine),
+            "newTab": .bool(true)
+        ]
+        let summary = "\(summaryPrefix). Retrying with \(engine.capitalized)."
+        let toolCall = ToolCall(name: .search, arguments: arguments)
         return PlannedAction(toolCall: toolCall, summary: summary)
     }
 
@@ -320,6 +395,11 @@ public final class AgentOrchestrator: @unchecked Sendable {
         }
         if looksLikeActionGoal(normalized) {
             return nil
+        }
+        // Treat explicit search requests as a page summary workflow so we always follow
+        // the search with a summary of the results page.
+        if extractSearchIntent(from: userGoal) != nil {
+            return GoalPlan(intent: .pageSummary, itemIndex: nil, itemQuery: nil, wantsComments: false)
         }
         let wantsComments = extractWantsComments(from: userGoal)
         let itemIndex = extractOrdinalIndex(from: userGoal)
@@ -531,6 +611,178 @@ public final class AgentOrchestrator: @unchecked Sendable {
         }
         let value = Int(goal[indexRange]) ?? 0
         return value > 0 ? value : nil
+    }
+
+    private struct SearchIntent {
+        let query: String
+        let engine: String?
+    }
+
+    private func extractSearchIntent(from goal: String) -> SearchIntent? {
+        let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return nil
+        }
+        let lower = trimmed.lowercased()
+        let enginePrefixes: [(String, String)] = [
+            ("google", "google"),
+            ("bing", "bing"),
+            ("duckduckgo", "duckduckgo"),
+            ("ddg", "duckduckgo"),
+            ("kagi", "custom")
+        ]
+        for (token, engine) in enginePrefixes {
+            let prefix = token + " "
+            if lower.hasPrefix(prefix) {
+                let remainder = String(trimmed.dropFirst(prefix.count))
+                let query = sanitizeSearchQuery(remainder)
+                if !query.isEmpty {
+                    return SearchIntent(query: query, engine: engine)
+                }
+            }
+        }
+        let prefixes = [
+            "search the web for",
+            "search the web about",
+            "search the web",
+            "web search for",
+            "web search",
+            "search for",
+            "search",
+            "look up",
+            "lookup",
+            "find on the web",
+            "find online"
+        ]
+        if let intent = extractSearchIntent(from: trimmed, lower: lower, prefixes: prefixes) {
+            return intent
+        }
+        let embedded = ["search the web for", "web search for"]
+        if let intent = extractSearchIntent(from: trimmed, lower: lower, prefixes: embedded) {
+            return intent
+        }
+        return nil
+    }
+
+    private func extractSearchIntent(from text: String, lower: String, prefixes: [String]) -> SearchIntent? {
+        for prefix in prefixes {
+            if let intent = extractSearchIntent(from: text, lower: lower, prefix: prefix) {
+                return intent
+            }
+        }
+        return nil
+    }
+
+    private func extractSearchIntent(from text: String, lower: String, prefix: String) -> SearchIntent? {
+        let prefixToken = prefix + " "
+        if lower.hasPrefix(prefixToken) {
+            let remainder = String(text.dropFirst(prefixToken.count))
+            let query = sanitizeSearchQuery(remainder)
+            return query.isEmpty ? nil : SearchIntent(query: query, engine: nil)
+        }
+        if let range = lower.range(of: prefix) {
+            let offset = lower.distance(from: lower.startIndex, to: range.upperBound)
+            if offset < 2 {
+                let remainder = String(text.dropFirst(offset))
+                let query = sanitizeSearchQuery(remainder)
+                return query.isEmpty ? nil : SearchIntent(query: query, engine: nil)
+            }
+        }
+        return nil
+    }
+
+    private func sanitizeSearchQuery(_ query: String) -> String {
+        var trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        while trimmed.hasPrefix(":") || trimmed.hasPrefix("-") {
+            trimmed.removeFirst()
+            trimmed = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let strip = CharacterSet(charactersIn: "\"'.,:;!?")
+        trimmed = trimmed.trimmingCharacters(in: strip)
+        trimmed = stripSearchSuffix(from: trimmed)
+        return trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func stripSearchSuffix(from query: String) -> String {
+        let lower = query.lowercased()
+        let suffixes = [
+            " and summarize",
+            " and summarize the",
+            " and list",
+            " and list the",
+            " and show",
+            " and show the",
+            " and give",
+            " and give me",
+            " and provide",
+            " and provide a",
+            " then summarize",
+            " then list",
+            " then show",
+            " then give",
+            " then provide"
+        ]
+        for suffix in suffixes {
+            if let range = lower.range(of: suffix) {
+                let offset = lower.distance(from: lower.startIndex, to: range.lowerBound)
+                if offset > 0 && offset < query.count {
+                    return String(query.prefix(offset)).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        }
+        return query
+    }
+
+    private func mostRecentSearchCall(_ context: ContextPack) -> ToolCall? {
+        return context.recentToolCalls.reversed().first { $0.name == .search }
+    }
+
+    private func extractSearchQuery(from call: ToolCall) -> String? {
+        if case let .string(query)? = call.arguments["query"] {
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return nil
+    }
+
+    private func extractSearchEngine(from call: ToolCall) -> String? {
+        if case let .string(engine)? = call.arguments["engine"] {
+            let trimmed = engine.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed.lowercased()
+        }
+        return nil
+    }
+
+    private func shouldRetrySearch(
+        intent: SearchIntent,
+        lastSearch: ToolCall,
+        blockReason: String?
+    ) -> Bool {
+        guard blockReason != nil else {
+            return false
+        }
+        if let engine = extractSearchEngine(from: lastSearch), engine == "duckduckgo" {
+            return false
+        }
+        if let engine = intent.engine, !engine.isEmpty, engine.lowercased() != "google" {
+            return false
+        }
+        return true
+    }
+
+    private func searchBlockReason(_ observation: Observation) -> String? {
+        let url = observation.url.lowercased()
+        if url.contains("google.com/sorry") || url.contains("consent.google.") {
+            return "google_block_url"
+        }
+        let text = normalizeForMatch(observation.text)
+        if text.contains("unusual traffic") && text.contains("google") {
+            return "unusual_traffic_text"
+        }
+        if text.contains("verify that you are not a robot") {
+            return "robot_check_text"
+        }
+        return nil
     }
 
     private func planAction(context: ContextPack, goalPlan: GoalPlan) -> PlannedAction? {
@@ -1098,6 +1350,14 @@ public final class AgentOrchestrator: @unchecked Sendable {
             return "Going forward."
         case .browserRefresh:
             return "Refreshing the page."
+        case .search:
+            if case let .string(query)? = call.arguments["query"] {
+                let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return "Searching the web for '\(trimmed)'."
+                }
+            }
+            return "Running a web search."
         }
     }
 
