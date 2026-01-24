@@ -5,7 +5,7 @@ Sources consulted to expand web navigation and form interaction question templat
 Internal Laika docs (tool contract + flows):
 
 0) Tool contract and catalog
-- docs/llm_tools.md
+- docs/laika_vocabulary.md
 
 0) Automation harness goals (HN scenario)
 - docs/automation.md

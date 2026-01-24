@@ -8,7 +8,8 @@ final class AgentCoreTests: XCTestCase {
         let summary: String
 
         func generatePlan(context: ContextPack, userGoal: String) async throws -> ModelResponse {
-            ModelResponse(toolCalls: [], summary: summary)
+            let assistant = AssistantMessage(render: Document.paragraph(text: summary))
+            return ModelResponse(toolCalls: [], assistant: assistant)
         }
     }
 
@@ -28,7 +29,7 @@ final class AgentCoreTests: XCTestCase {
 
         XCTAssertTrue(response.summary.isEmpty == false)
         XCTAssertEqual(response.actions.count, 0)
-        XCTAssertEqual(response.summaryFormat, .markdown)
+        XCTAssertEqual(response.assistant.render.plainText(), response.summary)
     }
 
     func testAssistSummaryFallbackIncludesItems() async throws {
@@ -65,7 +66,45 @@ final class AgentCoreTests: XCTestCase {
 
         XCTAssertTrue(response.summary.contains("Alpha Beta Gamma"))
         XCTAssertEqual(response.actions.count, 0)
-        XCTAssertEqual(response.summaryFormat, .markdown)
+        XCTAssertEqual(response.assistant.render.plainText(), response.summary)
+    }
+
+    func testTopDiscussionsAppendedForListPages() async throws {
+        let items = [
+            ObservedItem(
+                title: "Alpha",
+                url: "https://example.com/a",
+                snippet: "12 comments",
+                tag: "article",
+                linkCount: 1,
+                linkDensity: 0.1,
+                links: [ObservedItemLink(title: "12 comments", url: "https://example.com/a#comments")]
+            ),
+            ObservedItem(
+                title: "Beta",
+                url: "https://example.com/b",
+                snippet: "200 comments",
+                tag: "article",
+                linkCount: 1,
+                linkDensity: 0.1,
+                links: [ObservedItemLink(title: "200 comments", url: "https://example.com/b#comments")]
+            )
+        ]
+        let observation = Observation(
+            url: "https://example.com",
+            title: "Example",
+            text: "",
+            elements: [],
+            items: items
+        )
+        let context = ContextPack(origin: "https://example.com", mode: .assist, observation: observation, recentToolCalls: [])
+        let model = MockModelRunner(summary: "This page lists a few items.")
+        let orchestrator = AgentOrchestrator(model: model)
+
+        let response = try await orchestrator.runOnce(context: context, userGoal: "summarize this page")
+
+        XCTAssertTrue(response.summary.contains("Top discussions (by comments):"))
+        XCTAssertTrue(response.summary.contains("Beta (200 comments)"))
     }
 
     func testSearchIntentPlansSearchTool() async throws {

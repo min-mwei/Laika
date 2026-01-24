@@ -12,27 +12,22 @@ public struct AgentAction: Codable, Equatable, Sendable {
     }
 }
 
-public enum MessageFormat: String, Codable, Equatable, Sendable {
-    case plain
-    case markdown
-}
-
 public struct AgentResponse: Codable, Equatable, Sendable {
     public let summary: String
+    public let assistant: AssistantMessage
     public let actions: [AgentAction]
     public let goalPlan: GoalPlan?
-    public let summaryFormat: MessageFormat
 
     public init(
         summary: String,
+        assistant: AssistantMessage,
         actions: [AgentAction],
-        goalPlan: GoalPlan? = nil,
-        summaryFormat: MessageFormat = .plain
+        goalPlan: GoalPlan? = nil
     ) {
         self.summary = summary
+        self.assistant = assistant
         self.actions = actions
         self.goalPlan = goalPlan
-        self.summaryFormat = summaryFormat
     }
 }
 
@@ -51,6 +46,10 @@ public final class AgentOrchestrator: @unchecked Sendable {
             return true
         }
         return false
+    }()
+    private static let commentCountRegex: NSRegularExpression = {
+        let pattern = "(\\d[\\d,]*)\\s*(comments?|repl(?:y|ies))"
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 
     private enum SummaryFocus {
@@ -84,27 +83,24 @@ public final class AgentOrchestrator: @unchecked Sendable {
             let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
             logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
             logFinalSummary(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan, source: "planned_action")
-            return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan, summaryFormat: .plain)
+            return AgentResponse(
+                summary: planned.summary,
+                assistant: assistantFromSummary(planned.summary),
+                actions: actions,
+                goalPlan: goalPlan
+            )
         }
 
         if let planned = planSearchTool(context: enrichedContext, userGoal: userGoal) {
             let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
             logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
             logFinalSummary(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan, source: "planned_action")
-            return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan, summaryFormat: .plain)
-        }
-
-        if let planned = planSummaryTool(context: enrichedContext, goalPlan: goalPlan) {
-            let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
-            logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
-            logSummaryIntro(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan)
-            return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan, summaryFormat: .plain)
-        }
-
-        if shouldSummarizeWithoutTools(goalPlan: goalPlan) {
-            let summary = try await generateSummaryFallback(context: enrichedContext, userGoal: userGoal, goalPlan: goalPlan)
-            logFinalSummary(summary: summary, context: enrichedContext, goalPlan: goalPlan, source: "summary_fallback")
-            return AgentResponse(summary: summary, actions: [], goalPlan: goalPlan, summaryFormat: .markdown)
+            return AgentResponse(
+                summary: planned.summary,
+                assistant: assistantFromSummary(planned.summary),
+                actions: actions,
+                goalPlan: goalPlan
+            )
         }
         let modelResponse = try await model.generatePlan(context: enrichedContext, userGoal: userGoal)
         if modelResponse.toolCalls.isEmpty,
@@ -112,12 +108,22 @@ public final class AgentOrchestrator: @unchecked Sendable {
             let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
             logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
             logFinalSummary(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan, source: "planned_action")
-            return AgentResponse(summary: planned.summary, actions: actions, goalPlan: goalPlan, summaryFormat: .plain)
+            return AgentResponse(
+                summary: planned.summary,
+                assistant: assistantFromSummary(planned.summary),
+                actions: actions,
+                goalPlan: goalPlan
+            )
         }
         if shouldForceSummary(context: enrichedContext, goalPlan: goalPlan, modelResponse: modelResponse) {
             let summary = try await generateSummaryFallback(context: enrichedContext, userGoal: userGoal, goalPlan: goalPlan)
             logFinalSummary(summary: summary, context: enrichedContext, goalPlan: goalPlan, source: "summary_fallback")
-            return AgentResponse(summary: summary, actions: [], goalPlan: goalPlan, summaryFormat: .markdown)
+            return AgentResponse(
+                summary: summary,
+                assistant: assistantFromSummary(summary),
+                actions: [],
+                goalPlan: goalPlan
+            )
         }
         let focus = summaryFocus(context: enrichedContext, goalPlan: goalPlan)
         let format = summaryFormat(goalPlan: goalPlan)
@@ -128,8 +134,9 @@ public final class AgentOrchestrator: @unchecked Sendable {
             format: format
         )
         let actions = applyPolicy(to: modelResponse.toolCalls, context: enrichedContext)
+        let assistant = assistantForModelResponse(modelResponse, summary: summary)
         logFinalSummary(summary: summary, context: enrichedContext, goalPlan: goalPlan, source: "model_summary")
-        return AgentResponse(summary: summary, actions: actions, goalPlan: goalPlan, summaryFormat: .plain)
+        return AgentResponse(summary: summary, assistant: assistant, actions: actions, goalPlan: goalPlan)
     }
 
     private func applyPolicy(to toolCalls: [ToolCall], context: ContextPack) -> [AgentAction] {
@@ -155,18 +162,6 @@ public final class AgentOrchestrator: @unchecked Sendable {
     private struct PlannedAction {
         let toolCall: ToolCall
         let summary: String
-    }
-
-    private func planSummaryTool(context: ContextPack, goalPlan: GoalPlan) -> PlannedAction? {
-        guard shouldSummarizeWithoutTools(goalPlan: goalPlan) else {
-            return nil
-        }
-        guard model is StreamingModelRunner else {
-            return nil
-        }
-        let summary = summaryToolIntro(goalPlan: goalPlan)
-        let toolCall = ToolCall(name: .contentSummarize, arguments: [:])
-        return PlannedAction(toolCall: toolCall, summary: summary)
     }
 
     private func planSearchTool(context: ContextPack, userGoal: String) -> PlannedAction? {
@@ -230,14 +225,17 @@ public final class AgentOrchestrator: @unchecked Sendable {
         return PlannedAction(toolCall: toolCall, summary: summary)
     }
 
-    private func summaryToolIntro(goalPlan: GoalPlan) -> String {
-        if goalPlan.intent == .commentSummary || goalPlan.wantsComments {
-            return "Summarizing the discussion on this page."
+    private func assistantFromSummary(_ summary: String) -> AssistantMessage {
+        AssistantMessage(render: Document.paragraph(text: summary))
+    }
+
+    private func assistantForModelResponse(_ modelResponse: ModelResponse, summary: String) -> AssistantMessage {
+        let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let original = modelResponse.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == original {
+            return modelResponse.assistant
         }
-        if goalPlan.intent == .itemSummary {
-            return "Summarizing the main content on this page."
-        }
-        return "Summarizing the page content."
+        return assistantFromSummary(trimmed)
     }
 
     public func resolveGoalPlan(context: ContextPack, userGoal: String) async -> GoalPlan {
@@ -292,15 +290,6 @@ public final class AgentOrchestrator: @unchecked Sendable {
             return context.observation.primary != nil || !context.observation.blocks.isEmpty
         }
         return false
-    }
-
-    private func shouldSummarizeWithoutTools(goalPlan: GoalPlan) -> Bool {
-        switch goalPlan.intent {
-        case .pageSummary, .itemSummary, .commentSummary:
-            return true
-        case .action, .unknown:
-            return goalPlan.wantsComments
-        }
     }
 
     private func applyFallbackGoalPlan(_ parsed: GoalPlan, context: ContextPack, userGoal: String) -> GoalPlan {
@@ -533,24 +522,6 @@ public final class AgentOrchestrator: @unchecked Sendable {
         ]
         LaikaLogger.logAgentEvent(
             type: "agent.final_summary",
-            runId: context.runId,
-            step: context.step,
-            maxSteps: context.maxSteps,
-            payload: payload
-        )
-    }
-
-    private func logSummaryIntro(summary: String, context: ContextPack, goalPlan: GoalPlan) {
-        let preview = truncateForLog(summary, maxChars: 200)
-        let payload: [String: JSONValue] = [
-            "summaryPreview": .string(preview),
-            "intent": .string(goalPlan.intent.rawValue),
-            "wantsComments": .bool(goalPlan.wantsComments),
-            "mode": .string(context.mode.rawValue),
-            "source": .string("summary_tool_intro")
-        ]
-        LaikaLogger.logAgentEvent(
-            type: "agent.summary_tool_intro",
             runId: context.runId,
             step: context.step,
             maxSteps: context.maxSteps,
@@ -1252,19 +1223,6 @@ public final class AgentOrchestrator: @unchecked Sendable {
 
     private func generateSummaryFallback(context: ContextPack, userGoal: String, goalPlan: GoalPlan) async throws -> String {
         let format = summaryFormat(goalPlan: goalPlan)
-        let summaryService = SummaryService(model: model)
-        do {
-            let summary = try await summaryService.summarize(
-                context: context,
-                goalPlan: goalPlan,
-                userGoal: userGoal,
-                maxTokens: nil
-            )
-            if !summary.isEmpty {
-                return summary
-            }
-        } catch {
-        }
         return buildSummaryFallback(format: format, context: context)
     }
 
@@ -1284,6 +1242,9 @@ public final class AgentOrchestrator: @unchecked Sendable {
             }
             return buildStructuredFallback(format: format, context: context)
         }
+        if trimmed.isEmpty || trimmed == "Unable to parse response." || trimmed.hasPrefix("Unable to parse response.") {
+            return buildStructuredFallback(format: format, context: context)
+        }
         let grounding = evaluateGrounding(summary: trimmed, context: context, focus: focus)
         var output = enforceGrounding(
             summary: trimmed,
@@ -1299,7 +1260,79 @@ public final class AgentOrchestrator: @unchecked Sendable {
                 output = buildStructuredFallback(format: format, context: context)
             }
         }
+        output = appendTopDiscussionsIfNeeded(summary: output, context: context, focus: focus)
         return output
+    }
+
+    private func appendTopDiscussionsIfNeeded(
+        summary: String,
+        context: ContextPack,
+        focus: SummaryFocus
+    ) -> String {
+        guard focus == .mainLinks else {
+            return summary
+        }
+        let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return summary
+        }
+        let lower = trimmed.lowercased()
+        if lower.contains("top discussions") || lower.contains("top discussion") {
+            return summary
+        }
+        let topDiscussions = topDiscussionSummaries(from: context.observation.items, limit: 3)
+        guard !topDiscussions.isEmpty else {
+            return summary
+        }
+        let line = "Top discussions (by comments): " + topDiscussions.joined(separator: "; ")
+        return trimmed + "\n" + line
+    }
+
+    private func topDiscussionSummaries(from items: [ObservedItem], limit: Int) -> [String] {
+        guard limit > 0 else {
+            return []
+        }
+        let candidates = items.compactMap { item -> (title: String, count: Int)? in
+            let title = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty, let count = commentCount(for: item) else {
+                return nil
+            }
+            return (title, count)
+        }
+        let sorted = candidates.sorted { $0.count > $1.count }
+        return sorted.prefix(limit).map { entry in
+            let label = entry.count == 1 ? "comment" : "comments"
+            return "\(entry.title) (\(entry.count) \(label))"
+        }
+    }
+
+    private func commentCount(for item: ObservedItem) -> Int? {
+        var counts: [Int] = []
+        counts.reserveCapacity(item.links.count + 1)
+        for link in item.links {
+            if let count = parseCommentCount(from: link.title) {
+                counts.append(count)
+            }
+        }
+        if let count = parseCommentCount(from: item.snippet) {
+            counts.append(count)
+        }
+        return counts.max()
+    }
+
+    private func parseCommentCount(from text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+        guard let match = Self.commentCountRegex.firstMatch(in: trimmed, options: [], range: range),
+              match.numberOfRanges > 1,
+              let countRange = Range(match.range(at: 1), in: trimmed) else {
+            return nil
+        }
+        let rawValue = trimmed[countRange].replacingOccurrences(of: ",", with: "")
+        return Int(rawValue)
     }
 
     private func summarizeToolCalls(_ toolCalls: [ToolCall], context: ContextPack) -> String? {
@@ -1342,8 +1375,6 @@ public final class AgentOrchestrator: @unchecked Sendable {
             return "Scrolling to see more content."
         case .browserObserveDom:
             return "Reading the page for more detail."
-        case .contentSummarize:
-            return summaryToolIntro(goalPlan: context.goalPlan ?? .unknown)
         case .browserBack:
             return "Going back to the previous page."
         case .browserForward:

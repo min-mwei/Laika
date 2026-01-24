@@ -18,9 +18,7 @@ private actor NativeAgent {
     private var modelURL: URL?
     private var runner: ModelRunner?
     private var orchestrator: AgentOrchestrator?
-    private var summaryService: SummaryService?
     private var maxTokens: Int?
-    private let summaryStreams = SummaryStreamManager()
 
     func plan(request: PlanRequest, maxTokens: Int?) async throws -> AgentResponse {
         try request.validate()
@@ -51,58 +49,6 @@ private actor NativeAgent {
         let response = try await orchestrator!.runOnce(context: request.context, userGoal: request.goal)
         os_log("Plan response actions=%{public}d", log: log, type: .info, response.actions.count)
         return response
-    }
-
-    func startSummaryStream(request: PlanRequest, goalPlanHint: GoalPlan?, maxTokens: Int?) async throws -> String {
-        try request.validate()
-        _ = ensureRunner(maxTokens: maxTokens)
-        guard let orchestrator else {
-            throw ModelError.modelUnavailable("Agent unavailable.")
-        }
-        guard let summaryService else {
-            throw ModelError.modelUnavailable("Summary service unavailable.")
-        }
-        let resolvedGoalPlan: GoalPlan
-        if let hint = goalPlanHint {
-            resolvedGoalPlan = hint
-        } else {
-            resolvedGoalPlan = await orchestrator.resolveGoalPlan(context: request.context, userGoal: request.goal)
-        }
-        let wantsSummary = resolvedGoalPlan.intent == GoalPlan.Intent.pageSummary
-            || resolvedGoalPlan.intent == GoalPlan.Intent.itemSummary
-            || resolvedGoalPlan.intent == GoalPlan.Intent.commentSummary
-            || resolvedGoalPlan.wantsComments
-        guard wantsSummary else {
-            throw ModelError.invalidResponse("not_summary")
-        }
-        let context = contextWithGoalPlan(request.context, goalPlan: resolvedGoalPlan)
-        let stream = summaryService.streamSummary(
-            context: context,
-            goalPlan: resolvedGoalPlan,
-            userGoal: request.goal,
-            maxTokens: normalizeMaxTokens(maxTokens)
-        )
-        let streamId = UUID().uuidString
-        let metadata = SummaryStreamMetadata(
-            runId: context.runId,
-            step: context.step,
-            maxSteps: context.maxSteps,
-            goalPlan: resolvedGoalPlan,
-            mode: context.mode,
-            origin: context.origin,
-            url: context.observation.url,
-            title: context.observation.title
-        )
-        await summaryStreams.start(id: streamId, stream: stream, metadata: metadata)
-        return streamId
-    }
-
-    func pollSummaryStream(id: String) async -> SummaryStreamPollResult? {
-        await summaryStreams.poll(id: id, maxChunks: 6)
-    }
-
-    func cancelSummaryStream(id: String) async {
-        await summaryStreams.cancel(id: id)
     }
 
     private func contextWithGoalPlan(_ context: ContextPack, goalPlan: GoalPlan) -> ContextPack {
@@ -149,7 +95,6 @@ private actor NativeAgent {
                 modelURL = resolvedURL
                 self.maxTokens = tokens
                 orchestrator = nil
-                summaryService = nil
             }
             nextRunner = runner ?? StaticModelRunner()
         } else {
@@ -159,15 +104,11 @@ private actor NativeAgent {
             modelURL = nil
             self.maxTokens = tokens
             orchestrator = nil
-            summaryService = nil
             nextRunner = fallback
         }
 
         if orchestrator == nil {
             orchestrator = AgentOrchestrator(model: nextRunner)
-        }
-        if summaryService == nil {
-            summaryService = SummaryService(model: nextRunner)
         }
         return nextRunner
     }
@@ -258,62 +199,6 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             return ["ok": true, "status": "ready"]
         }
 
-        if type == "summary.start" {
-            guard let requestPayload = dict["request"] else {
-                os_log("Missing summary request payload", log: log, type: .error)
-                return ["ok": false, "error": "missing_request"]
-            }
-            do {
-                guard JSONSerialization.isValidJSONObject(requestPayload) else {
-                    os_log("Summary request payload is not valid JSON", log: log, type: .error)
-                    return ["ok": false, "error": "invalid_request_payload"]
-                }
-                let data = try JSONSerialization.data(withJSONObject: requestPayload, options: [])
-                let planRequest = try JSONDecoder().decode(PlanRequest.self, from: data)
-                let maxTokens = (dict["maxTokens"] as? NSNumber)?.intValue
-                var goalPlanHint: GoalPlan?
-                if let hintPayload = dict["goalPlan"], JSONSerialization.isValidJSONObject(hintPayload) {
-                    let hintData = try JSONSerialization.data(withJSONObject: hintPayload, options: [])
-                    goalPlanHint = try? JSONDecoder().decode(GoalPlan.self, from: hintData)
-                }
-                let streamId = try await agent.startSummaryStream(
-                    request: planRequest,
-                    goalPlanHint: goalPlanHint,
-                    maxTokens: maxTokens
-                )
-                return ["ok": true, "stream": ["id": streamId]]
-            } catch {
-                os_log("Summary start error: %{public}@", log: log, type: .error, error.localizedDescription)
-                return ["ok": false, "error": error.localizedDescription]
-            }
-        }
-
-        if type == "summary.poll" {
-            guard let streamId = dict["streamId"] as? String, !streamId.isEmpty else {
-                return ["ok": false, "error": "missing_stream_id"]
-            }
-            if let result = await agent.pollSummaryStream(id: streamId) {
-                var payload: [String: Any] = [
-                    "ok": true,
-                    "streamId": streamId,
-                    "chunks": result.chunks,
-                    "done": result.done
-                ]
-                if let error = result.error {
-                    payload["error"] = error
-                }
-                return payload
-            }
-            return ["ok": false, "error": "unknown_stream"]
-        }
-
-        if type == "summary.cancel" {
-            if let streamId = dict["streamId"] as? String, !streamId.isEmpty {
-                await agent.cancelSummaryStream(id: streamId)
-            }
-            return ["ok": true]
-        }
-
         guard type == "plan" else {
             os_log("Unsupported native message type=%{public}@", log: log, type: .error, type)
             return ["ok": false, "error": "unsupported_type"]
@@ -324,6 +209,7 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             return ["ok": false, "error": "missing_request"]
         }
 
+        let messageStartedAt = Date()
         do {
             guard JSONSerialization.isValidJSONObject(requestPayload) else {
                 os_log("Plan request payload is not valid JSON", log: log, type: .error)
@@ -332,7 +218,40 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             let data = try JSONSerialization.data(withJSONObject: requestPayload, options: [])
             let planRequest = try JSONDecoder().decode(PlanRequest.self, from: data)
             let maxTokens = (dict["maxTokens"] as? NSNumber)?.intValue
+            LaikaLogger.logAgentEvent(
+                type: "native.plan_request",
+                runId: planRequest.context.runId,
+                step: planRequest.context.step,
+                maxSteps: planRequest.context.maxSteps,
+                payload: [
+                    "goalPreview": .string(LaikaLogger.preview(planRequest.goal, maxChars: 200)),
+                    "origin": .string(planRequest.context.origin),
+                    "pageURL": .string(planRequest.context.observation.url),
+                    "requestBytes": .number(Double(data.count)),
+                    "observationChars": .number(Double(planRequest.context.observation.text.count)),
+                    "elementCount": .number(Double(planRequest.context.observation.elements.count)),
+                    "itemCount": .number(Double(planRequest.context.observation.items.count)),
+                    "commentCount": .number(Double(planRequest.context.observation.comments.count)),
+                    "tabCount": .number(Double(planRequest.context.tabs.count))
+                ]
+            )
+            let planStartedAt = Date()
             let response = try await agent.plan(request: planRequest, maxTokens: maxTokens)
+            let planDurationMs = max(0, Date().timeIntervalSince(planStartedAt) * 1000)
+            let totalDurationMs = max(0, Date().timeIntervalSince(messageStartedAt) * 1000)
+            LaikaLogger.logAgentEvent(
+                type: "native.plan_response",
+                runId: planRequest.context.runId,
+                step: planRequest.context.step,
+                maxSteps: planRequest.context.maxSteps,
+                payload: [
+                    "ok": .bool(true),
+                    "planDurationMs": .number(planDurationMs),
+                    "totalDurationMs": .number(totalDurationMs),
+                    "actions": .number(Double(response.actions.count)),
+                    "summaryChars": .number(Double(response.summary.count))
+                ]
+            )
             let jsonData = try JSONEncoder().encode(response)
             let jsonObject = try JSONSerialization.jsonObject(with: jsonData, options: [])
             return ["ok": true, "plan": jsonObject]
@@ -341,6 +260,18 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             return ["ok": false, "error": error.localizedDescription]
         } catch {
             os_log("Plan error: %{public}@", log: log, type: .error, error.localizedDescription)
+            let durationMs = max(0, Date().timeIntervalSince(messageStartedAt) * 1000)
+            LaikaLogger.logAgentEvent(
+                type: "native.plan_response",
+                runId: nil,
+                step: nil,
+                maxSteps: nil,
+                payload: [
+                    "ok": .bool(false),
+                    "totalDurationMs": .number(durationMs),
+                    "error": .string(error.localizedDescription)
+                ]
+            )
             return ["ok": false, "error": error.localizedDescription]
         }
     }

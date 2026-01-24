@@ -14,9 +14,9 @@ This is a design draft for an MVP. It focuses on security posture, system bounda
 
 Prototype UI note: the current build renders an attached, in-page **sidecar panel** inside the active tab, toggled by the toolbar icon. The sidecar is scoped per Safari window and, by default, stays open as you switch tabs within that window on the right; the open/closed state is persisted in extension storage. Settings live in Safari → Settings → Extensions → Laika, where you can switch between sticky/per-tab behavior and left/right placement. If the active tab can’t be scripted, the toolbar opens the same UI as a standalone panel window. Plan requests include a sanitized summary of open tabs in the current window (title + origin only, no query/hash) so the agent can reason about multi-tab context without gaining cross-tab access. References to a “popover” below should be read as “sidecar UI” for the prototype.
 
-Prototype mode note: the current implementation runs in **assist-only** mode. Read-only tasks (summaries) are handled via the `content.summarize` tool plus policy gating; there is no separate observe-only mode in code.
+Prototype mode note: the current implementation runs in **assist-only** mode. Read-only tasks are handled by the planner returning `assistant.render` in the plan response; there is no separate observe-only mode in code.
 
-Prototype runtime note: the Safari extension’s native handler (`SafariWebExtensionHandler.swift`) hosts the model runner, orchestrator, and summary service in-process today. The automation harness uses `laika-server` (SwiftPM target) for local testing only. Moving inference into the companion app/XPC worker remains the target architecture.
+Prototype runtime note: the Safari extension’s native handler (`SafariWebExtensionHandler.swift`) hosts the model runner and orchestrator in-process today. The automation harness uses `laika-server` (SwiftPM target) for local testing only. Moving inference into the companion app/XPC worker remains the target architecture.
 
 Convergence note: further changes should be driven by probe/prototype results (Safari/WebExtension behavior, IPC limits, sandboxed local inference), not more design expansion.
 
@@ -148,7 +148,7 @@ Privacy boundary (what leaves the device):
 - **Adaptive planning**: handles login gates, pagination, infinite scroll, and DOM updates.
 - **Long-running workflows**: pause/resume across restarts and long approvals, backed by a durable run log.
 - **Autonomy levels**:
-  - *Assist* (current): propose actions; user approves each step or batch; read-only summaries run through `content.summarize`.
+  - *Assist* (current): propose actions; user approves each step or batch; read-only tasks return `assistant.render` in the plan response.
   - *Autopilot* (future): execute within strict policy constraints; escalates to user on sensitive steps.
 
 ### 3) Multi-modal Human Interaction
@@ -204,13 +204,13 @@ The current prototype keeps all inference in the Safari extension’s native han
                                 │ native messaging (typed)
                                 ▼
 ┌──── SafariWebExtensionHandler (Swift, extension process) ──┐
-│  Agent Orchestrator + Policy Gate + SummaryService         │
+│  Agent Orchestrator + Policy Gate                          │
 │  ModelRunner (MLX/Qwen3)                                   │
-│  Summary streams: summary.start/poll/cancel                │
+│  LLMCP response (assistant.render)                         │
 └───────────────────────────────┬────────────────────────────┘
                                 │ tool results
                                 ▼
-Sidecar UI (popover.js) ── append-only chat + streaming summary
+Sidecar UI (popover.js) ── append-only chat + render AST
 ```
 
 ### Target architecture (planned)
@@ -286,9 +286,9 @@ Summarization data path (current prototype):
 - `SummaryInputBuilder` selects list vs page text vs comments and compacts the text while preserving line structure for headings/lists and nested indentation (dedupe + low-signal filtering).
 - For comment summaries, navigation only opens a discussion link when the current observation lacks substantial comments; once comment candidates are real and dense enough, it summarizes in place to avoid chasing reply actions.
 - Comment summaries prefer short, grounded phrasing; when details are missing they report “Not stated in the page” without filler.
-- `SummaryService` chunk-summarizes long inputs with the local model, then produces a final summary; its prompt interprets structural prefixes and avoids total-count claims or rank inferences. Output streams to the UI and is **append-only** (no replacement).
-- Summary output uses a **sanitized Markdown subset** and includes a `summaryFormat` hint so the UI can render safely (see `docs/rendering.md`).
-- Validation enforces grounding against anchors; if the stream is empty, a fallback summary is appended.
+- The planner returns `assistant.render` directly in the LLMCP response; prompts interpret structural prefixes and avoid total-count claims or rank inferences.
+- The UI renders the allowlisted Render Document AST (see `docs/rendering.md`).
+- Grounding checks enforce anchor coverage; if grounding fails, Agent Core replaces the assistant render with a grounded fallback summary.
 
 ## Execution Surfaces (Isolated vs “My Browser” Connector)
 
@@ -829,7 +829,7 @@ Additional entry points (to reduce friction, not to add power):
 Treat anything derived from a webpage as untrusted content and render it accordingly:
 
 - **Text-only rendering for page content**: page excerpts, titles, and extracted strings must be rendered as text (escape everything; never `innerHTML`).
-- **Sanitized Markdown for assistant responses only**: assistant summaries may be rendered using a restricted Markdown subset after parsing and sanitization; never allow raw HTML from the model. See `docs/rendering.md`.
+- **Render AST for assistant responses**: assistant messages render only from the allowlisted Render Document AST; never allow raw HTML or Markdown. See `docs/rendering.md`.
 - **No untrusted labels**: never use page text as a button label, menu item, or approval CTA. CTAs must be app-defined strings.
 - **Safe citations/anchors**:
   - Display the verified `origin` next to citations so users can see where content came from.

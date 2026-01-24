@@ -16,7 +16,7 @@ var maxTokensSetting = DEFAULT_MAX_TOKENS;
 
 var lastObservation = null;
 var lastObservationTabId = null;
-var lastAssistantSummary = "";
+var lastAssistantFingerprint = "";
 var planValidator = window.LaikaPlanValidator || {
   validatePlanResponse: function () {
     return { ok: true };
@@ -34,30 +34,7 @@ var chatHistoryLoaded = false;
 var chatHistoryTombstone = 0;
 
 var MESSAGE_FORMAT_PLAIN = "plain";
-var MESSAGE_FORMAT_MARKDOWN = "markdown";
-var markdownRenderer = null;
-var sanitizerReady = false;
-var MARKDOWN_SANITIZE_CONFIG = {
-  ALLOWED_TAGS: [
-    "p",
-    "br",
-    "ul",
-    "ol",
-    "li",
-    "strong",
-    "em",
-    "code",
-    "pre",
-    "blockquote",
-    "h2",
-    "h3",
-    "h4",
-    "a"
-  ],
-  ALLOWED_ATTR: ["href", "title", "rel", "target"],
-  ALLOW_DATA_ATTR: false,
-  ALLOWED_URI_REGEXP: /^(https?:|mailto:)/i
-};
+var MESSAGE_FORMAT_RENDER = "render";
 
 var MAX_AGENT_STEPS = 6;
 var DEFAULT_OBSERVE_OPTIONS = {
@@ -194,39 +171,211 @@ function labelForRole(role) {
 }
 
 function normalizeMessageFormat(format) {
-  if (format === MESSAGE_FORMAT_MARKDOWN) {
-    return MESSAGE_FORMAT_MARKDOWN;
+  if (format === MESSAGE_FORMAT_RENDER) {
+    return MESSAGE_FORMAT_RENDER;
   }
   return MESSAGE_FORMAT_PLAIN;
 }
 
-function initMarkdownSupport() {
-  if (!markdownRenderer && typeof window !== "undefined" && window.markdownit) {
-    markdownRenderer = window.markdownit({
-      html: false,
-      linkify: true,
-      breaks: false
-    });
-    markdownRenderer.disable(["table", "strikethrough"]);
+function isDocument(doc) {
+  return doc && typeof doc === "object" && doc.type === "doc" && Array.isArray(doc.children);
+}
+
+function sanitizeHref(href) {
+  if (!href || typeof href !== "string") {
+    return null;
   }
-  if (!sanitizerReady && typeof window !== "undefined" && window.DOMPurify) {
-    window.DOMPurify.addHook("afterSanitizeAttributes", function (node) {
-      if (!node || !node.tagName) {
-        return;
+  var trimmed = href.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^(https?:|mailto:)/i.test(trimmed)) {
+    return trimmed;
+  }
+  return null;
+}
+
+function renderInlineNodes(container, nodes) {
+  if (!Array.isArray(nodes)) {
+    return;
+  }
+  for (var i = 0; i < nodes.length; i += 1) {
+    var node = renderDocumentNode(nodes[i]);
+    if (node) {
+      container.appendChild(node);
+    }
+  }
+}
+
+function renderDocumentNode(node) {
+  if (!node || typeof node !== "object") {
+    return null;
+  }
+  var type = node.type;
+  if (type === "text") {
+    var textValue = typeof node.text === "string" ? node.text : "";
+    return document.createTextNode(textValue);
+  }
+  if (type === "link") {
+    var href = sanitizeHref(node.href);
+    if (!href) {
+      var fallback = document.createDocumentFragment();
+      renderInlineNodes(fallback, node.children);
+      return fallback;
+    }
+    var link = document.createElement("a");
+    link.setAttribute("href", href);
+    link.setAttribute("target", "_blank");
+    link.setAttribute("rel", "noopener noreferrer");
+    renderInlineNodes(link, node.children);
+    return link;
+  }
+  if (type === "heading") {
+    var level = typeof node.level === "number" ? Math.max(1, Math.min(6, Math.floor(node.level))) : 2;
+    var heading = document.createElement("h" + String(level));
+    renderInlineNodes(heading, node.children);
+    return heading;
+  }
+  if (type === "paragraph") {
+    var paragraph = document.createElement("p");
+    renderInlineNodes(paragraph, node.children);
+    return paragraph;
+  }
+  if (type === "list") {
+    var ordered = !!node.ordered;
+    var list = document.createElement(ordered ? "ol" : "ul");
+    if (Array.isArray(node.items)) {
+      for (var i = 0; i < node.items.length; i += 1) {
+        var itemNode = renderDocumentNode(node.items[i]);
+        if (itemNode) {
+          list.appendChild(itemNode);
+        }
       }
-      if (node.tagName.toLowerCase() !== "a") {
-        return;
-      }
-      var href = node.getAttribute("href");
-      if (!href) {
-        node.removeAttribute("target");
-        node.removeAttribute("rel");
-        return;
-      }
-      node.setAttribute("target", "_blank");
-      node.setAttribute("rel", "noopener noreferrer");
-    });
-    sanitizerReady = true;
+    }
+    return list;
+  }
+  if (type === "list_item") {
+    var listItem = document.createElement("li");
+    renderInlineNodes(listItem, node.children);
+    return listItem;
+  }
+  if (type === "blockquote") {
+    var blockquote = document.createElement("blockquote");
+    renderInlineNodes(blockquote, node.children);
+    return blockquote;
+  }
+  if (type === "code_block") {
+    var pre = document.createElement("pre");
+    var code = document.createElement("code");
+    var codeText = typeof node.text === "string" ? node.text : "";
+    code.textContent = codeText;
+    pre.appendChild(code);
+    return pre;
+  }
+  return null;
+}
+
+function renderDocument(body, doc) {
+  if (!body) {
+    return;
+  }
+  body.textContent = "";
+  if (!isDocument(doc)) {
+    body.textContent = "Unable to render response.";
+    return;
+  }
+  for (var i = 0; i < doc.children.length; i += 1) {
+    var node = renderDocumentNode(doc.children[i]);
+    if (node) {
+      body.appendChild(node);
+    }
+  }
+}
+
+function renderPlainInline(nodes) {
+  if (!Array.isArray(nodes)) {
+    return "";
+  }
+  var output = "";
+  for (var i = 0; i < nodes.length; i += 1) {
+    output += renderPlainNode(nodes[i]);
+  }
+  return output.trim();
+}
+
+function renderPlainList(items, ordered) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return "";
+  }
+  var lines = [];
+  for (var i = 0; i < items.length; i += 1) {
+    var content = renderPlainBlock(items[i]);
+    if (!content) {
+      content = "";
+    }
+    var prefix = ordered ? String(i + 1) + ". " : "- ";
+    lines.push(prefix + content);
+  }
+  return lines.join("\n");
+}
+
+function renderPlainBlock(node) {
+  if (!node || typeof node !== "object") {
+    return "";
+  }
+  switch (node.type) {
+  case "heading":
+    return renderPlainInline(node.children);
+  case "paragraph":
+    return renderPlainInline(node.children);
+  case "list":
+    return renderPlainList(node.items, !!node.ordered);
+  case "list_item":
+    return renderPlainInline(node.children);
+  case "blockquote": {
+    var inner = renderPlainInline(node.children);
+    return inner ? "> " + inner : "";
+  }
+  case "code_block": {
+    var text = typeof node.text === "string" ? node.text.trim() : "";
+    return text;
+  }
+  case "text":
+    return typeof node.text === "string" ? node.text : "";
+  case "link":
+    return renderPlainInline(node.children);
+  default:
+    return "";
+  }
+}
+
+function renderPlainNode(node) {
+  return renderPlainBlock(node);
+}
+
+function plainTextFromDocument(doc) {
+  if (!isDocument(doc)) {
+    return "";
+  }
+  var parts = [];
+  for (var i = 0; i < doc.children.length; i += 1) {
+    var block = renderPlainBlock(doc.children[i]);
+    if (block) {
+      parts.push(block);
+    }
+  }
+  return parts.join("\n").trim();
+}
+
+function renderDocumentFingerprint(doc) {
+  var text = plainTextFromDocument(doc);
+  if (text) {
+    return text;
+  }
+  try {
+    return JSON.stringify(doc);
+  } catch (error) {
+    return "";
   }
 }
 
@@ -234,17 +383,14 @@ function renderMessageBody(body, text, format) {
   if (!body) {
     return;
   }
-  initMarkdownSupport();
   var normalizedFormat = normalizeMessageFormat(format);
-  var output = typeof text === "string" ? text : String(text || "");
-  body.classList.toggle("markdown", normalizedFormat === MESSAGE_FORMAT_MARKDOWN);
-  if (normalizedFormat === MESSAGE_FORMAT_MARKDOWN && markdownRenderer && window.DOMPurify) {
-    var html = markdownRenderer.render(output);
-    var sanitized = window.DOMPurify.sanitize(html, MARKDOWN_SANITIZE_CONFIG);
-    body.innerHTML = sanitized;
-  } else {
-    body.textContent = output;
+  var output = typeof text === "string" ? text : text;
+  body.classList.toggle("render", normalizedFormat === MESSAGE_FORMAT_RENDER);
+  if (normalizedFormat === MESSAGE_FORMAT_RENDER) {
+    renderDocument(body, output);
+    return;
   }
+  body.textContent = typeof output === "string" ? output : String(output || "");
 }
 
 function getMessageBody(message) {
@@ -252,6 +398,42 @@ function getMessageBody(message) {
     return null;
   }
   return message.querySelector(".message-body");
+}
+
+function assistantPayloadFromPlan(plan) {
+  if (!plan) {
+    return null;
+  }
+  if (plan.assistant && isDocument(plan.assistant.render)) {
+    var renderDoc = plan.assistant.render;
+    return {
+      format: MESSAGE_FORMAT_RENDER,
+      content: renderDoc,
+      fingerprint: renderDocumentFingerprint(renderDoc)
+    };
+  }
+  if (typeof plan.summary === "string" && plan.summary.trim()) {
+    var summary = plan.summary.trim();
+    return {
+      format: MESSAGE_FORMAT_PLAIN,
+      content: summary,
+      fingerprint: summary
+    };
+  }
+  return null;
+}
+
+function appendAssistantFromPlan(plan) {
+  var payload = assistantPayloadFromPlan(plan);
+  if (!payload) {
+    return false;
+  }
+  if (payload.fingerprint && payload.fingerprint === lastAssistantFingerprint) {
+    return false;
+  }
+  appendMessage("assistant", payload.content, { format: payload.format });
+  lastAssistantFingerprint = payload.fingerprint || "";
+  return true;
 }
 
 function generateHistoryId() {
@@ -265,6 +447,39 @@ function timestampFromHistoryId(historyId) {
   var head = String(historyId).split("-")[0] || "";
   var parsed = parseInt(head, 10);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function historyEntryContent(entry) {
+  if (entry && entry.format === MESSAGE_FORMAT_RENDER && isDocument(entry.render)) {
+    return entry.render;
+  }
+  return entry && typeof entry.text === "string" ? entry.text : "";
+}
+
+function historyEntryKey(entry) {
+  if (entry && entry.format === MESSAGE_FORMAT_RENDER && isDocument(entry.render)) {
+    return renderDocumentFingerprint(entry.render);
+  }
+  return entry && typeof entry.text === "string" ? entry.text : "";
+}
+
+function historyEntrySize(entry) {
+  if (!entry) {
+    return 0;
+  }
+  if (entry.format === MESSAGE_FORMAT_RENDER && isDocument(entry.render)) {
+    var text = plainTextFromDocument(entry.render);
+    if (!text) {
+      try {
+        text = JSON.stringify(entry.render);
+      } catch (error) {
+        text = "";
+      }
+    }
+    return text.length + 80;
+  }
+  var raw = typeof entry.text === "string" ? entry.text : "";
+  return raw.length + 80;
 }
 
 function saveChatHistory() {
@@ -340,8 +555,7 @@ function trimChatHistoryToBudget() {
   var kept = [];
   for (var i = chatHistory.length - 1; i >= 0; i -= 1) {
     var entry = chatHistory[i];
-    var text = entry && typeof entry.text === "string" ? entry.text : "";
-    var cost = text.length + 80;
+    var cost = historyEntrySize(entry);
     if (kept.length > 0 && total + cost > CHAT_HISTORY_CHAR_BUDGET) {
       break;
     }
@@ -358,13 +572,32 @@ function normalizeHistoryEntries(entries) {
   if (!Array.isArray(entries)) {
     return [];
   }
-  var filtered = entries.filter(function (entry) {
-    return entry && typeof entry.id === "string" && typeof entry.role === "string" && typeof entry.text === "string";
-  });
-  for (var i = 0; i < filtered.length; i += 1) {
-    if (typeof filtered[i].createdAt !== "number" || !isFinite(filtered[i].createdAt)) {
-      filtered[i].createdAt = timestampFromHistoryId(filtered[i].id);
+  var filtered = [];
+  for (var i = 0; i < entries.length; i += 1) {
+    var entry = entries[i];
+    if (!entry || typeof entry.id !== "string" || typeof entry.role !== "string") {
+      continue;
     }
+    var format = normalizeMessageFormat(entry.format);
+    var normalized = {
+      id: entry.id,
+      role: entry.role,
+      format: format,
+      createdAt: typeof entry.createdAt === "number" && isFinite(entry.createdAt)
+        ? entry.createdAt
+        : timestampFromHistoryId(entry.id)
+    };
+    if (format === MESSAGE_FORMAT_RENDER && isDocument(entry.render)) {
+      normalized.render = entry.render;
+    } else {
+      var text = typeof entry.text === "string" ? entry.text : "";
+      if (!text && isDocument(entry.render)) {
+        text = plainTextFromDocument(entry.render);
+      }
+      normalized.text = text;
+      normalized.format = MESSAGE_FORMAT_PLAIN;
+    }
+    filtered.push(normalized);
   }
   if (filtered.length > CHAT_HISTORY_LIMIT) {
     return filtered.slice(-CHAT_HISTORY_LIMIT);
@@ -427,11 +660,11 @@ function syncChatHistory(entries) {
     var existingNode = nodeMap.get(entry.id);
     if (existingNode) {
       var previousEntry = previousById.get(entry.id);
-      if (!previousEntry || previousEntry.text !== entry.text || previousEntry.format !== entry.format) {
-        renderMessageBody(getMessageBody(existingNode), entry.text, entry.format);
+      if (!previousEntry || historyEntryKey(previousEntry) !== historyEntryKey(entry) || previousEntry.format !== entry.format) {
+        renderMessageBody(getMessageBody(existingNode), historyEntryContent(entry), entry.format);
       }
     } else {
-      appendMessage(entry.role, entry.text, {
+      appendMessage(entry.role, historyEntryContent(entry), {
         save: false,
         historyId: entry.id,
         format: entry.format
@@ -469,7 +702,7 @@ async function clearChatHistory() {
   }
   lastObservation = null;
   lastObservationTabId = null;
-  lastAssistantSummary = "";
+  lastAssistantFingerprint = "";
   try {
     if (typeof sessionStorage !== "undefined") {
       sessionStorage.removeItem(CHAT_HISTORY_KEY);
@@ -553,7 +786,6 @@ async function loadChatHistory() {
 }
 
 function appendMessage(role, text, options) {
-  var contentText = typeof text === "string" ? text : String(text || "");
   var message = document.createElement("div");
   message.className = "message";
   message.setAttribute("data-role", role);
@@ -562,20 +794,30 @@ function appendMessage(role, text, options) {
   var body = document.createElement("div");
   body.className = "message-body";
   var format = normalizeMessageFormat(options && options.format ? options.format : MESSAGE_FORMAT_PLAIN);
-  renderMessageBody(body, contentText, format);
+  if (format === MESSAGE_FORMAT_RENDER && !isDocument(text)) {
+    format = MESSAGE_FORMAT_PLAIN;
+  }
+  var content = format === MESSAGE_FORMAT_PLAIN && typeof text !== "string" ? String(text || "") : text;
+  renderMessageBody(body, content, format);
   message.appendChild(label);
   message.appendChild(body);
   var shouldSave = !(options && options.save === false);
   if (shouldSave) {
     var historyId = generateHistoryId();
     message.setAttribute("data-history-id", historyId);
-    chatHistory.push({
+    var entry = {
       id: historyId,
       role: role,
-      text: contentText,
       format: format,
       createdAt: timestampFromHistoryId(historyId)
-    });
+    };
+    if (format === MESSAGE_FORMAT_RENDER && isDocument(content)) {
+      entry.render = content;
+    } else {
+      entry.text = typeof content === "string" ? content : String(content || "");
+      entry.format = MESSAGE_FORMAT_PLAIN;
+    }
+    chatHistory.push(entry);
     trimChatHistory();
     saveChatHistory();
   } else if (options && options.historyId) {
@@ -584,27 +826,6 @@ function appendMessage(role, text, options) {
   chatLog.appendChild(message);
   chatLog.scrollTop = chatLog.scrollHeight;
   return message;
-}
-
-function updateHistoryMessage(message, text, format) {
-  if (!message) {
-    return;
-  }
-  var historyId = message.getAttribute("data-history-id");
-  if (!historyId) {
-    return;
-  }
-  var contentText = typeof text === "string" ? text : String(text || "");
-  for (var i = chatHistory.length - 1; i >= 0; i -= 1) {
-    if (chatHistory[i].id === historyId) {
-      chatHistory[i].text = contentText;
-      if (format) {
-        chatHistory[i].format = normalizeMessageFormat(format);
-      }
-      saveChatHistory();
-      break;
-    }
-  }
 }
 
 function removeHistoryMessage(message) {
@@ -646,7 +867,7 @@ function formatToolCall(action) {
   return name + (argText ? " (" + argText + ")" : "");
 }
 
-function appendActionPrompt(action, tabId, toolOptions) {
+function appendActionPrompt(action, tabId) {
   return new Promise(function (resolve) {
   var message = document.createElement("div");
   message.className = "message";
@@ -665,7 +886,7 @@ function appendActionPrompt(action, tabId, toolOptions) {
   approveButton.addEventListener("click", function () {
     approveButton.disabled = true;
     rejectButton.disabled = true;
-    runTool(action, tabId, toolOptions).then(function (result) {
+    runTool(action, tabId).then(function (result) {
       resolve({ decision: "approve", result: result });
     });
   });
@@ -712,106 +933,6 @@ async function checkNative() {
   } catch (error) {
     setStatus("Status: offline");
   }
-}
-
-function isSummaryGoalPlan(goalPlan) {
-  if (!goalPlan || typeof goalPlan.intent !== "string") {
-    return false;
-  }
-  if (goalPlan.intent === "page_summary" || goalPlan.intent === "item_summary" || goalPlan.intent === "comment_summary") {
-    return true;
-  }
-  return goalPlan.wantsComments === true;
-}
-
-function buildSummaryContext(params) {
-  if (!params || !params.observation) {
-    return null;
-  }
-  var origin = "";
-  try {
-    origin = new URL(params.observation.url).origin;
-  } catch (error) {
-    origin = params.observation.url || "";
-  }
-  return {
-    origin: origin,
-    mode: "assist",
-    runId: params.runId || null,
-    step: typeof params.step === "number" ? params.step : null,
-    maxSteps: typeof params.maxSteps === "number" ? params.maxSteps : null,
-    observation: params.observation,
-    recentToolCalls: Array.isArray(params.recentToolCalls) ? params.recentToolCalls : [],
-    recentToolResults: Array.isArray(params.recentToolResults) ? params.recentToolResults : [],
-    tabs: Array.isArray(params.tabs) ? params.tabs : [],
-    goalPlan: params.goalPlan || null
-  };
-}
-
-function formatFromPlan(plan) {
-  if (plan && plan.summaryFormat === MESSAGE_FORMAT_MARKDOWN) {
-    return MESSAGE_FORMAT_MARKDOWN;
-  }
-  return MESSAGE_FORMAT_PLAIN;
-}
-
-async function startSummaryStream(goal, context, goalPlan) {
-  var payload = {
-    type: "summary.start",
-    maxTokens: clampMaxTokens(maxTokensSetting),
-    request: {
-      goal: goal,
-      context: context
-    }
-  };
-  if (goalPlan) {
-    payload.goalPlan = goalPlan;
-  }
-  return await sendNativeMessage(payload);
-}
-
-async function pollSummaryStream(streamId) {
-  return await sendNativeMessage({ type: "summary.poll", streamId: streamId });
-}
-
-async function cancelSummaryStream(streamId) {
-  return await sendNativeMessage({ type: "summary.cancel", streamId: streamId });
-}
-
-async function consumeSummaryStream(streamId) {
-  var message = appendMessage("assistant", "", { format: MESSAGE_FORMAT_MARKDOWN });
-  var body = getMessageBody(message);
-  var text = "";
-  var delayMs = 140;
-  for (;;) {
-    var result = await pollSummaryStream(streamId);
-    if (!result || result.ok !== true) {
-      appendMessage("system", "Summary stream failed.");
-      break;
-    }
-    if (Array.isArray(result.chunks) && result.chunks.length > 0) {
-      text += result.chunks.join("");
-      renderMessageBody(body, text, MESSAGE_FORMAT_MARKDOWN);
-      chatLog.scrollTop = chatLog.scrollHeight;
-    }
-    if (result.error) {
-      appendMessage("system", "Summary stream error: " + result.error);
-      break;
-    }
-    if (result.done) {
-      break;
-    }
-    await sleep(delayMs);
-  }
-  if (text.trim()) {
-    lastAssistantSummary = text;
-    updateHistoryMessage(message, text, MESSAGE_FORMAT_MARKDOWN);
-  } else if (message) {
-    var fallbackText = "No summary available.";
-    renderMessageBody(body, fallbackText, MESSAGE_FORMAT_MARKDOWN);
-    updateHistoryMessage(message, fallbackText, MESSAGE_FORMAT_MARKDOWN);
-  }
-  return text;
 }
 
 async function observePage() {
@@ -925,35 +1046,8 @@ async function requestPlan(goal, context) {
   return await sendNativeMessage(payload);
 }
 
-async function runTool(action, tabId, options) {
+async function runTool(action, tabId) {
   logDebug("Running tool " + action.toolCall.name);
-  if (action.toolCall.name === "content.summarize") {
-    if (!options || !options.summaryContext) {
-      appendMessage("system", "Summary failed: missing context.");
-      return { status: "error", error: "missing_context" };
-    }
-    setStatus("Status: summarizing...");
-    try {
-      var streamResponse = await startSummaryStream(options.goal || "", options.summaryContext, options.goalPlan || null);
-      if (streamResponse && streamResponse.ok && streamResponse.stream && streamResponse.stream.id) {
-        var summaryText = await consumeSummaryStream(streamResponse.stream.id);
-        if (summaryText && summaryText.trim()) {
-          return { status: "ok", summary: summaryText };
-        }
-        return { status: "error", error: "empty_summary" };
-      }
-      var errorMessage = "Summary failed: no stream.";
-      var errorDetail = streamResponse && streamResponse.error ? String(streamResponse.error) : "";
-      if (errorDetail) {
-        errorMessage = "Summary failed: " + errorDetail;
-      }
-      appendMessage("system", errorMessage);
-      return { status: "error", error: errorDetail || "no_stream" };
-    } catch (error) {
-      appendMessage("system", "Summary failed: " + error.message);
-      return { status: "error", error: error.message };
-    }
-  }
   try {
     var payload = {
       type: "laika.tool",
@@ -984,10 +1078,6 @@ function buildToolResult(toolCall, toolName, rawResult) {
   var payload = {};
   if (rawResult && rawResult.error) {
     payload.error = rawResult.error;
-  }
-  if (toolName === "content.summarize" && rawResult && typeof rawResult.summary === "string") {
-    payload.summary = rawResult.summary;
-    payload.summaryChars = rawResult.summary.length;
   }
   if (toolName === "search") {
     if (rawResult && typeof rawResult.tabId === "number") {
@@ -1085,7 +1175,7 @@ sendButton.addEventListener("click", async function () {
     openPanelButton.disabled = true;
   }
   lastObservationTabId = null;
-  lastAssistantSummary = "";
+  lastAssistantFingerprint = "";
   var searchTabIdsToCleanup = [];
   var originTabId = null;
 
@@ -1129,78 +1219,38 @@ sendButton.addEventListener("click", async function () {
         return;
       }
       var goalPlan = plan.goalPlan || null;
-      var summaryContext = buildSummaryContext({
-        runId: context.runId,
-        step: context.step,
-        maxSteps: context.maxSteps,
-        observation: lastObservation,
-        recentToolCalls: recentToolCalls.slice(-8),
-        recentToolResults: recentToolResults.slice(-8),
-        tabs: tabsContext,
-        goalPlan: goalPlan
-      });
-      var toolOptions = {
-        goal: goal,
-        goalPlan: goalPlan,
-        summaryContext: summaryContext
-      };
-
       var nextAction = pickNextAction(plan.actions);
       if (!nextAction) {
-        var streamed = false;
-        if (isSummaryGoalPlan(goalPlan) && summaryContext) {
-          setStatus("Status: summarizing...");
-          try {
-            var streamResponse = await startSummaryStream(goal, summaryContext, goalPlan);
-            if (streamResponse && streamResponse.ok && streamResponse.stream && streamResponse.stream.id) {
-              var streamedText = await consumeSummaryStream(streamResponse.stream.id);
-              streamed = !!(streamedText && streamedText.trim());
-            }
-          } catch (error) {
-          }
-        }
-        if (!streamed && plan.summary && plan.summary !== lastAssistantSummary) {
-          setStatus("Status: summarizing...");
-          appendMessage("assistant", plan.summary, { format: formatFromPlan(plan) });
-          lastAssistantSummary = plan.summary;
-        }
+        setStatus("Status: responding...");
+        appendAssistantFromPlan(plan);
         break;
       }
       if (nextAction.policy.decision === "deny") {
         appendMessage("system", "Blocked: " + nextAction.policy.reasonCode);
-        if (plan.summary && plan.summary !== lastAssistantSummary) {
-          setStatus("Status: summarizing...");
-          appendMessage("assistant", plan.summary, { format: formatFromPlan(plan) });
-          lastAssistantSummary = plan.summary;
-        }
+        setStatus("Status: responding...");
+        appendAssistantFromPlan(plan);
         break;
       }
       if (step === maxSteps) {
         appendMessage("system", "Step limit reached.");
-        if (plan.summary && plan.summary !== lastAssistantSummary) {
-          setStatus("Status: summarizing...");
-          appendMessage("assistant", plan.summary, { format: formatFromPlan(plan) });
-          lastAssistantSummary = plan.summary;
-        }
+        setStatus("Status: responding...");
+        appendAssistantFromPlan(plan);
         break;
       }
 
       var approval = null;
       if (nextAction.policy.decision === "ask") {
-        if (plan.summary && plan.summary !== lastAssistantSummary) {
-          setStatus("Status: summarizing...");
-          appendMessage("assistant", plan.summary, { format: formatFromPlan(plan) });
-          lastAssistantSummary = plan.summary;
-        }
+        setStatus("Status: responding...");
+        appendAssistantFromPlan(plan);
         setStatus("Status: awaiting approval...");
-        approval = await appendActionPrompt(nextAction, tabIdForPlan, toolOptions);
+        approval = await appendActionPrompt(nextAction, tabIdForPlan);
         if (!approval || approval.decision !== "approve") {
           appendMessage("system", "Stopped: action not approved.");
           break;
         }
       } else {
         setStatus("Status: running action...");
-        approval = { decision: "approve", result: await runTool(nextAction, tabIdForPlan, toolOptions) };
+        approval = { decision: "approve", result: await runTool(nextAction, tabIdForPlan) };
       }
 
       var toolResult = approval.result;
@@ -1213,16 +1263,6 @@ sendButton.addEventListener("click", async function () {
           searchTabIdsToCleanup.push(toolResult.tabId);
         }
       }
-      if (nextAction.toolCall.name === "content.summarize") {
-        if (toolResult && toolResult.status === "ok" && typeof toolResult.summary === "string") {
-          lastAssistantSummary = toolResult.summary;
-        } else if (plan.summary && plan.summary !== lastAssistantSummary) {
-          appendMessage("assistant", plan.summary, { format: formatFromPlan(plan) });
-          lastAssistantSummary = plan.summary;
-        }
-        break;
-      }
-
       if (toolResult && typeof toolResult.tabId === "number") {
         tabIdForPlan = toolResult.tabId;
       } else if (executedToolName === "search" || executedToolName === "browser.open_tab" || executedToolName === "browser.navigate") {
@@ -1285,7 +1325,6 @@ sendButton.addEventListener("click", async function () {
   } catch (error) {
     isPanelWindow = false;
   }
-  initMarkdownSupport();
   if (sendButton) {
     sendButton.disabled = true;
   }

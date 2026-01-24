@@ -29,21 +29,40 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         let enableThinking: Bool
     }
 
+    private struct GenerationResult {
+        let output: String
+        let firstTokenMs: Double?
+        let firstJSONMs: Double?
+        let captureMode: String
+        let outputTruncated: Bool
+    }
+
     private struct JSONCapture {
         private(set) var buffer = ""
         private var depth = 0
         private var inString = false
         private var escaped = false
         private var started = false
+        private var disabled = false
 
-        mutating func append(_ chunk: String) -> Bool {
+        mutating func append(_ chunk: String) -> (started: Bool, completed: Bool) {
+            if disabled {
+                return (false, false)
+            }
+            var startedNow = false
             for character in chunk {
                 if !started {
+                    if character.isWhitespace {
+                        continue
+                    }
                     if character == "{" {
                         started = true
+                        startedNow = true
                         depth = 1
                         buffer.append(character)
+                        continue
                     }
+                    disabled = true
                     continue
                 }
 
@@ -73,11 +92,11 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
                 } else if character == "}" {
                     depth -= 1
                     if depth == 0 {
-                        return true
+                        return (startedNow, true)
                     }
                 }
             }
-            return false
+            return (startedNow, false)
         }
     }
 
@@ -157,8 +176,9 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
             stage: "goal_parse"
         ))
 
+        let startedAt = Date()
         do {
-            let output = try await generateJSONResponse(
+            let result = try await generateJSONResponse(
                 container: container,
                 systemPrompt: systemPrompt,
                 userPrompt: userPrompt,
@@ -166,7 +186,9 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
                 maxOutputChars: maxOutputChars,
                 maxTokensOverride: parseMaxTokens
             )
+            let output = result.output
             let parsed = GoalPlanParser.parse(output)
+            let durationMs = max(0, Date().timeIntervalSince(startedAt) * 1000)
             LaikaLogger.logLLMEvent(.response(
                 id: requestId,
                 runId: context.runId,
@@ -180,10 +202,16 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
                 toolCallsCount: nil,
                 summary: parsed.intent.rawValue,
                 error: nil,
-                stage: "goal_parse"
+                durationMs: durationMs,
+                stage: "goal_parse",
+                firstTokenMs: result.firstTokenMs,
+                firstJSONMs: result.firstJSONMs,
+                captureMode: result.captureMode,
+                outputTruncated: result.outputTruncated
             ))
             return parsed
         } catch {
+            let durationMs = max(0, Date().timeIntervalSince(startedAt) * 1000)
             LaikaLogger.logLLMEvent(.response(
                 id: requestId,
                 runId: context.runId,
@@ -197,6 +225,7 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
                 toolCallsCount: nil,
                 summary: nil,
                 error: error.localizedDescription,
+                durationMs: durationMs,
                 stage: "goal_parse"
             ))
             return GoalPlan.unknown
@@ -249,8 +278,9 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
                 stage: "plan"
             ))
 
+            let startedAt = Date()
             do {
-                let output = try await generateJSONResponse(
+                let result = try await generateJSONResponse(
                     container: container,
                     systemPrompt: systemPrompt,
                     userPrompt: userPrompt,
@@ -258,8 +288,10 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
                     maxOutputChars: maxOutputChars,
                     maxTokensOverride: planMaxTokens
                 )
+                let output = result.output
                 lastOutput = output
-                let parsed = try ToolCallParser.parseRequiringJSON(output)
+                let parsed = try LLMCPResponseParser.parse(output)
+                let durationMs = max(0, Date().timeIntervalSince(startedAt) * 1000)
                 LaikaLogger.logLLMEvent(.response(
                     id: requestId,
                     runId: context.runId,
@@ -273,10 +305,16 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
                     toolCallsCount: parsed.toolCalls.count,
                     summary: parsed.summary,
                     error: nil,
-                    stage: "plan"
+                    durationMs: durationMs,
+                    stage: "plan",
+                    firstTokenMs: result.firstTokenMs,
+                    firstJSONMs: result.firstJSONMs,
+                    captureMode: result.captureMode,
+                    outputTruncated: result.outputTruncated
                 ))
                 return parsed
             } catch {
+                let durationMs = max(0, Date().timeIntervalSince(startedAt) * 1000)
                 lastError = error
                 LaikaLogger.logLLMEvent(.response(
                     id: requestId,
@@ -291,13 +329,14 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
                     toolCallsCount: nil,
                     summary: nil,
                     error: error.localizedDescription,
+                    durationMs: durationMs,
                     stage: "plan"
                 ))
             }
         }
 
         if let lastOutput {
-            return try ToolCallParser.parse(lastOutput)
+            return try LLMCPResponseParser.parse(lastOutput)
         }
         throw lastError ?? ModelError.invalidResponse("Plan generation failed.")
     }
@@ -309,7 +348,7 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         attempt: GenerationAttempt,
         maxOutputChars: Int,
         maxTokensOverride: Int? = nil
-    ) async throws -> String {
+    ) async throws -> GenerationResult {
         let tokenLimit = maxTokensOverride ?? maxTokens
         let parameters = GenerateParameters(
             maxTokens: tokenLimit,
@@ -325,19 +364,53 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
             additionalContext: additionalContext
         )
 
+        let startedAt = Date()
+        var firstTokenAt: Date?
+        var firstJSONAt: Date?
         var capture = JSONCapture()
         var output = ""
         for try await chunk in session.streamResponse(to: userPrompt) {
+            if firstTokenAt == nil {
+                firstTokenAt = Date()
+            }
             output.append(chunk)
             if output.count >= maxOutputChars {
-                return output
+                let firstTokenMs = firstTokenAt.map { $0.timeIntervalSince(startedAt) * 1000 }
+                let firstJSONMs = firstJSONAt.map { $0.timeIntervalSince(startedAt) * 1000 }
+                return GenerationResult(
+                    output: output,
+                    firstTokenMs: firstTokenMs,
+                    firstJSONMs: firstJSONMs,
+                    captureMode: "truncated",
+                    outputTruncated: true
+                )
             }
-            if capture.append(chunk) {
-                return capture.buffer
+            let captureEvent = capture.append(chunk)
+            if captureEvent.started && firstJSONAt == nil {
+                firstJSONAt = Date()
+            }
+            if captureEvent.completed {
+                let firstTokenMs = firstTokenAt.map { $0.timeIntervalSince(startedAt) * 1000 }
+                let firstJSONMs = firstJSONAt.map { $0.timeIntervalSince(startedAt) * 1000 }
+                return GenerationResult(
+                    output: capture.buffer,
+                    firstTokenMs: firstTokenMs,
+                    firstJSONMs: firstJSONMs,
+                    captureMode: "json_capture",
+                    outputTruncated: false
+                )
             }
         }
 
-        return output
+        let firstTokenMs = firstTokenAt.map { $0.timeIntervalSince(startedAt) * 1000 }
+        let firstJSONMs = firstJSONAt.map { $0.timeIntervalSince(startedAt) * 1000 }
+        return GenerationResult(
+            output: output,
+            firstTokenMs: firstTokenMs,
+            firstJSONMs: firstJSONMs,
+            captureMode: "full_output",
+            outputTruncated: false
+        )
     }
 
     public func streamText(_ request: StreamRequest) -> AsyncThrowingStream<String, Error> {

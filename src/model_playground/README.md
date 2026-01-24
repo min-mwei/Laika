@@ -5,7 +5,7 @@ Python proof-of-concept that emulates Laika's tool-calling loop with a local Qwe
 - loads a converted Qwen3 MLX model,
 - fetches pages without cookies,
 - extracts sanitized text + element handles,
-- asks the model to emit JSON tool calls (per `docs/llm_tools.md`),
+- asks the model to emit JSON tool calls (per `docs/laika_vocabulary.md`, “Tool vocabulary”),
 - executes tools and re-observes until the model returns a final summary.
 
 ## Setup
@@ -65,7 +65,7 @@ python laika_poc.py \
   --interactive
 ```
 
-Example 2 (from `docs/llm_tools.md`):
+Example 2:
 
 ```text
 User> What is this page about?
@@ -85,7 +85,7 @@ Notes:
 ### Goals
 
 - Emulate Laika's plan/act loop with a local Qwen3 MLX 4-bit model.
-- Preserve the tool-calling contract in `docs/llm_tools.md`.
+- Preserve the tool-calling contract in `docs/laika_vocabulary.md` (“Tool vocabulary”).
 - Keep the model view limited to sanitized text + metadata (no cookies, no raw HTML).
 - Provide a high-detail summary experience with small-model constraints.
 
@@ -117,7 +117,7 @@ Notes:
   - `hn_story` (HN item metadata)
   - `hn_comments` (HN comment list)
 - `ContextPack`: observation + recent tool calls/results + tab summaries.
-- `ToolCall`/`ToolResult`: typed per `docs/llm_tools.md`.
+- `ToolCall`/`ToolResult`: typed per `docs/laika_vocabulary.md` (“Tool vocabulary”).
 
 ### Tool execution
 

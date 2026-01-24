@@ -8,7 +8,7 @@ This repo includes a lightweight automation harness that drives the real Laika p
 - Injects Laika's DOM observer and collects an Observation.
 - Sends `PlanRequest` payloads to `laika-server`.
 - Executes tool calls (observe/navigate/back/forward/refresh/click/type/scroll/select), then re-observes.
-- Prints the final summaries for each goal and can write JSON output.
+- Prints the final assistant response for each goal and can write JSON output.
 
 ## How it works
 
@@ -22,8 +22,8 @@ This repo includes a lightweight automation harness that drives the real Laika p
    - `browser.open_tab` and `browser.navigate` map to `page.goto`.
    - `browser.back`, `browser.forward`, and `browser.refresh` map to Playwright navigation.
    - `browser.click`, `browser.type`, `browser.scroll`, and `browser.select` call `window.LaikaHarness.applyTool` (same handle IDs as the extension).
-6) If the planner requests `content.summarize`, it POSTs to `/summarize` with the full summary context.
-7) Prints the final summary per goal and optionally writes a JSON report with step-by-step details.
+6) When no further actions are returned, it records the assistant response (render AST) as the final output.
+7) Prints the final response per goal and optionally writes a JSON report with step-by-step details.
 
 ## Supported tools
 

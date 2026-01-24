@@ -17,7 +17,6 @@
 		6285AF942F1AFB45004C2F8B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6285AF932F1AFB45004C2F8B /* Assets.xcassets */; };
 		6285AF9B2F1AFB45004C2F8B /* Laika Extension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 6285AF9A2F1AFB45004C2F8B /* Laika Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		6285AFA02F1AFB45004C2F8B /* SafariWebExtensionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6285AF9F2F1AFB45004C2F8B /* SafariWebExtensionHandler.swift */; };
-		7C1A9B2E5D4F1234567890AB /* SummaryStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1A9B2E5D4F1234567890AC /* SummaryStreamManager.swift */; };
 		6285AFB32F1AFB46004C2F8B /* background.js in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAC2F1AFB46004C2F8B /* background.js */; };
 		6285AFB42F1AFB46004C2F8B /* popover.html in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAD2F1AFB46004C2F8B /* popover.html */; };
 		6285AFB52F1AFB46004C2F8B /* tests in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAE2F1AFB46004C2F8B /* tests */; };
@@ -70,7 +69,6 @@
 		061DFCEC9ECF469887896B14 /* Laika.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Laika.entitlements; sourceTree = "<group>"; };
 		6285AF9A2F1AFB45004C2F8B /* Laika Extension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Laika Extension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		6285AF9F2F1AFB45004C2F8B /* SafariWebExtensionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariWebExtensionHandler.swift; sourceTree = "<group>"; };
-		7C1A9B2E5D4F1234567890AC /* SummaryStreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryStreamManager.swift; sourceTree = "<group>"; };
 		6285AFA12F1AFB45004C2F8B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		0796148E82B045A980B4A0FB /* Laika Extension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Laika Extension.entitlements"; sourceTree = "<group>"; };
 		6285AFAC2F1AFB46004C2F8B /* background.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = background.js; path = ../../../extension/background.js; sourceTree = "<group>"; };
@@ -153,7 +151,6 @@
 			children = (
 				6285AFAB2F1AFB46004C2F8B /* Resources */,
 				6285AF9F2F1AFB45004C2F8B /* SafariWebExtensionHandler.swift */,
-				7C1A9B2E5D4F1234567890AC /* SummaryStreamManager.swift */,
 				6285AFA12F1AFB45004C2F8B /* Info.plist */,
 				0796148E82B045A980B4A0FB /* Laika Extension.entitlements */,
 			);
@@ -335,7 +332,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				6285AFA02F1AFB45004C2F8B /* SafariWebExtensionHandler.swift in Sources */,
-				7C1A9B2E5D4F1234567890AB /* SummaryStreamManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -171,9 +171,14 @@ public struct LLMTraceEvent: Codable, Sendable {
     public let promptPreview: String?
     public let outputChars: Int?
     public let outputPreview: String?
+    public let firstTokenMs: Double?
+    public let firstJSONMs: Double?
+    public let captureMode: String?
+    public let outputTruncated: Bool?
     public let toolCallsCount: Int?
     public let summaryPreview: String?
     public let error: String?
+    public let durationMs: Double?
 
     public static func request(
         id: String,
@@ -241,9 +246,14 @@ public struct LLMTraceEvent: Codable, Sendable {
             promptPreview: promptPreview,
             outputChars: nil,
             outputPreview: nil,
+            firstTokenMs: nil,
+            firstJSONMs: nil,
+            captureMode: nil,
+            outputTruncated: nil,
             toolCallsCount: nil,
             summaryPreview: nil,
-            error: nil
+            error: nil,
+            durationMs: nil
         )
     }
 
@@ -260,7 +270,12 @@ public struct LLMTraceEvent: Codable, Sendable {
         toolCallsCount: Int?,
         summary: String?,
         error: String?,
-        stage: String? = "plan"
+        durationMs: Double? = nil,
+        stage: String? = "plan",
+        firstTokenMs: Double? = nil,
+        firstJSONMs: Double? = nil,
+        captureMode: String? = nil,
+        outputTruncated: Bool? = nil
     ) -> LLMTraceEvent {
         let shouldLog = LaikaLogger.shouldLogFullLLM
         let outputPreview = shouldLog ? LaikaLogger.preview(output) : nil
@@ -299,9 +314,14 @@ public struct LLMTraceEvent: Codable, Sendable {
             promptPreview: nil,
             outputChars: output.count,
             outputPreview: outputPreview,
+            firstTokenMs: firstTokenMs,
+            firstJSONMs: firstJSONMs,
+            captureMode: captureMode,
+            outputTruncated: outputTruncated,
             toolCallsCount: toolCallsCount,
             summaryPreview: summaryPreview,
-            error: error
+            error: error,
+            durationMs: durationMs
         )
     }
 }

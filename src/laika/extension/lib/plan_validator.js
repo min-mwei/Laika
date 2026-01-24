@@ -16,8 +16,7 @@
     "browser.forward": true,
     "browser.refresh": true,
     "browser.select": true,
-    "search": true,
-    "content.summarize": true
+    "search": true
   };
 
   function validateToolCall(toolCall) {
@@ -114,16 +113,6 @@
       }
       return null;
     }
-    if (toolCall.name === "content.summarize") {
-      if (typeof args.scope !== "undefined" && typeof args.scope !== "string") {
-        return "summarize.scope must be string";
-      }
-      if (typeof args.handleId !== "undefined" && typeof args.handleId !== "string") {
-        return "summarize.handleId must be string";
-      }
-      return null;
-    }
-
     return "unsupported tool";
   }
 

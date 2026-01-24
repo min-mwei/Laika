@@ -203,19 +203,6 @@ async function callPlan(server, planRequest) {
   return await response.json();
 }
 
-async function callSummarize(server, planRequest) {
-  const response = await fetch(`${server}/summarize`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(planRequest)
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Summarize failed: ${response.status} ${text}`);
-  }
-  return await response.json();
-}
-
 function buildTabs(observation) {
   if (!observation || !observation.url) {
     return [];
@@ -236,28 +223,80 @@ function buildTabs(observation) {
   ];
 }
 
-function buildSummaryContext(observation, runId, step, maxSteps, recentToolCalls, recentToolResults, goalPlan) {
-  if (!observation) {
-    return null;
+function isDocument(doc) {
+  return doc && typeof doc === "object" && doc.type === "doc" && Array.isArray(doc.children);
+}
+
+function renderPlainInline(nodes) {
+  if (!Array.isArray(nodes)) {
+    return "";
   }
-  let origin = "";
-  try {
-    origin = new URL(observation.url).origin;
-  } catch (error) {
-    origin = "";
+  return nodes.map((node) => renderPlainNode(node)).join("").trim();
+}
+
+function renderPlainList(items, ordered) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return "";
   }
-  return {
-    origin: origin,
-    mode: "assist",
-    runId: runId,
-    step: step,
-    maxSteps: maxSteps,
-    observation: observation,
-    recentToolCalls: recentToolCalls.slice(-8),
-    recentToolResults: recentToolResults.slice(-8),
-    tabs: buildTabs(observation),
-    goalPlan: goalPlan || null
-  };
+  const lines = items.map((item, index) => {
+    const content = renderPlainBlock(item);
+    const prefix = ordered ? `${index + 1}. ` : "- ";
+    return `${prefix}${content}`;
+  });
+  return lines.join("\n");
+}
+
+function renderPlainBlock(node) {
+  if (!node || typeof node !== "object") {
+    return "";
+  }
+  switch (node.type) {
+  case "heading":
+    return renderPlainInline(node.children);
+  case "paragraph":
+    return renderPlainInline(node.children);
+  case "list":
+    return renderPlainList(node.items, !!node.ordered);
+  case "list_item":
+    return renderPlainInline(node.children);
+  case "blockquote": {
+    const inner = renderPlainInline(node.children);
+    return inner ? `> ${inner}` : "";
+  }
+  case "code_block":
+    return typeof node.text === "string" ? node.text.trim() : "";
+  case "text":
+    return typeof node.text === "string" ? node.text : "";
+  case "link":
+    return renderPlainInline(node.children);
+  default:
+    return "";
+  }
+}
+
+function renderPlainNode(node) {
+  return renderPlainBlock(node);
+}
+
+function plainTextFromDocument(doc) {
+  if (!isDocument(doc)) {
+    return "";
+  }
+  const parts = doc.children.map((child) => renderPlainBlock(child)).filter(Boolean);
+  return parts.join("\n").trim();
+}
+
+function extractPlanSummary(plan) {
+  if (plan && plan.assistant && isDocument(plan.assistant.render)) {
+    const text = plainTextFromDocument(plan.assistant.render);
+    if (text) {
+      return text;
+    }
+  }
+  if (plan && typeof plan.summary === "string") {
+    return plan.summary;
+  }
+  return "";
 }
 
 function buildToolResult(toolCall, status, payload) {
@@ -544,7 +583,7 @@ async function runGoals(state, goals, options) {
         maxSteps: options.maxSteps
       };
       const plan = await callPlan(options.server, { context, goal });
-      summary = plan.summary || "";
+      summary = extractPlanSummary(plan);
       const goalPlan = plan.goalPlan || null;
       const planActions = Array.isArray(plan.actions) ? plan.actions : [];
       const action = pickNextAction(plan.actions);
@@ -559,24 +598,6 @@ async function runGoals(state, goals, options) {
       };
       goalSteps.push(stepInfo);
       if (!action) {
-        break;
-      }
-      if (action.toolCall && action.toolCall.name === "content.summarize") {
-        const summaryContext = buildSummaryContext(
-          observation,
-          state.runId,
-          step,
-          options.maxSteps,
-          recentToolCalls,
-          recentToolResults,
-          goalPlan
-        );
-        if (!summaryContext) {
-          break;
-        }
-        const summaryResponse = await callSummarize(options.server, { context: summaryContext, goal });
-        summary = summaryResponse.summary || "";
-        stepInfo.summaryResult = summary;
         break;
       }
       if (action.policy && action.policy.decision === "deny") {

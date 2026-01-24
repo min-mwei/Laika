@@ -517,19 +517,67 @@
     return element.getAttribute("role") || element.tagName.toLowerCase();
   }
 
-  function sanitizeHref(href) {
-    if (!href) {
+  var SAFE_QUERY_KEYS = {
+    id: true,
+    item: true,
+    p: true,
+    page: true,
+    q: true,
+    query: true,
+    search: true
+  };
+  var BLOCKED_QUERY_KEY_PATTERN = /(token|auth|session|sid|key|code|pass|secret|signature|sig|jwt|bearer|oauth|utm_|fbclid|gclid|yclid|mc_cid|mc_eid)/i;
+
+  function looksSensitiveValue(value) {
+    if (!value) {
+      return false;
+    }
+    if (value.length >= 40) {
+      return true;
+    }
+    if (/^[A-Za-z0-9\-_]{24,}$/.test(value)) {
+      return true;
+    }
+    if (/^[A-Fa-f0-9]{24,}$/.test(value)) {
+      return true;
+    }
+    return false;
+  }
+
+  function sanitizeURLString(value) {
+    if (!value) {
       return "";
     }
     try {
-      var parsed = new URL(String(href), window.location.href);
+      var parsed = new URL(String(value), window.location.href);
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         return "";
+      }
+      parsed.hash = "";
+      if (parsed.search) {
+        var params = new URLSearchParams(parsed.search);
+        var filtered = new URLSearchParams();
+        params.forEach(function (paramValue, key) {
+          var lowerKey = String(key).toLowerCase();
+          if (BLOCKED_QUERY_KEY_PATTERN.test(lowerKey)) {
+            return;
+          }
+          if (looksSensitiveValue(paramValue) && !SAFE_QUERY_KEYS[lowerKey]) {
+            return;
+          }
+          filtered.append(key, paramValue);
+        });
+        var query = filtered.toString();
+        parsed.search = query ? "?" + query : "";
       }
       return parsed.toString();
     } catch (error) {
       return "";
     }
+  }
+
+  function sanitizeHref(href) {
+    return sanitizeURLString(href);
   }
 
   function getHref(element) {
@@ -1505,7 +1553,7 @@
       seen.add(key);
       var tag = tagName;
       var role = element.getAttribute("role") || "";
-      var handleId = ensureHandle(element) || "";
+      var handleId = ensureHandle(element);
       var quality = textQualityScore(rawText);
       var score = rawText.length * (1 - stats.density) * quality;
       if (tag === "article" || tag === "main") {
@@ -1560,7 +1608,7 @@
       text: budgetStructuredText(primaryCandidate.rawText, maxPrimaryChars),
       linkCount: primaryCandidate.linkCount,
       linkDensity: primaryCandidate.linkDensity,
-      handleId: primaryCandidate.handleId || ""
+      handleId: primaryCandidate.handleId
     };
     var trimmed = selectBlockWindow(orderedBlocks, maxBlocks, primaryCandidate.order);
     var outputBlocks = trimmed.map(function (block) {
@@ -1891,7 +1939,7 @@
             linkCandidates.push({
               title: anchorText,
               url: anchorUrl,
-              handleId: ensureHandle(anchors[i]) || ""
+              handleId: ensureHandle(anchors[i])
             });
           }
         }
@@ -1945,7 +1993,7 @@
                   linkCandidates.push({
                     title: siblingLabel,
                     url: siblingUrl,
-                    handleId: ensureHandle(siblingAnchors[k]) || ""
+                    handleId: ensureHandle(siblingAnchors[k])
                   });
                 }
               }
@@ -1991,6 +2039,7 @@
         }
       }
       var bestHost = hostForURL(url);
+      var isExternal = !!(bestHost && originHost && bestHost !== originHost);
       if (bestHost && originHost && bestHost === originHost) {
         if (bestTextLength <= 12 && textLength <= 80 && linkCandidates.length >= 2) {
           return;
@@ -2000,16 +2049,16 @@
         return;
       }
       var anchorShare = textLength > 0 ? bestTextLength / textLength : 0;
-      if (textLength >= 120 && anchorShare < 0.12) {
+      if (textLength >= 120 && anchorShare < 0.12 && !isExternal) {
         return;
       }
-      if (bestTextLength <= 12 && textLength >= 60 && anchorShare < 0.2 && linkCandidates.length >= 3) {
+      if (bestTextLength <= 12 && textLength >= 60 && anchorShare < 0.2 && linkCandidates.length >= 3 && !isExternal) {
         return;
       }
       if (strongAnchorCount >= 2 && textLength < 500) {
         return;
       }
-      if (stats.density > 0.7 && cleanedText.length < 200 && anchorShare < 0.5) {
+      if (stats.density > 0.7 && cleanedText.length < 200 && anchorShare < 0.5 && !isExternal) {
         return;
       }
       var snippetText = cleanedText;
@@ -2037,7 +2086,7 @@
         tag: tag,
         linkCount: stats.count,
         linkDensity: roundDensity(stats.density),
-        handleId: ensureHandle(bestAnchor) || "",
+        handleId: ensureHandle(bestAnchor),
         links: linkCandidates
       });
     });
@@ -2661,7 +2710,7 @@
         "a[href*=\"profile\"]"
       ], 80);
       if (!isLikelyAuthorLabel(author)) {
-        author = "";
+        author = null;
       }
       if (!author && container.parentElement) {
         var parentAuthor = findMetaText(container.parentElement, [
@@ -2698,7 +2747,7 @@
           ".timestamp"
         ], 80);
       }
-      var score = "";
+      var score = null;
       var scoreElement = container.querySelector("[data-score],[data-vote-count],.score,.points,.likes,.upvotes");
       if (!scoreElement && container.parentElement) {
         scoreElement = container.parentElement.querySelector("[data-score],[data-vote-count],.score,.points,.likes,.upvotes");
@@ -2708,7 +2757,13 @@
         if (!scoreText) {
           scoreText = utils.normalizeWhitespace(scoreElement.getAttribute("data-vote-count") || "");
         }
-        score = scoreText;
+        score = scoreText || null;
+      }
+      if (!author) {
+        author = null;
+      }
+      if (!age) {
+        age = null;
       }
       comments.push({
         text: text,
@@ -2716,7 +2771,7 @@
         age: age,
         score: score,
         depth: extractCommentDepth(container),
-        handleId: ensureHandle(container) || ""
+        handleId: ensureHandle(container)
       });
     }
     return comments;
@@ -2830,7 +2885,7 @@
         }
         var handleId = ensureHandle(element);
         return {
-          handleId: handleId || "",
+          handleId: handleId,
           role: getRole(element),
           label: getLabel(element),
           href: getHref(element),
@@ -2891,7 +2946,7 @@
       debugInfo.timings.totalMs = Math.round(nowMs() - totalStart);
     }
     return {
-      url: window.location.href,
+      url: sanitizeURLString(window.location.href),
       title: document.title || "",
       text: text,
       elements: limited,

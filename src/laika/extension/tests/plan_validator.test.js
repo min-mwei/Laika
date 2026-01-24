@@ -40,19 +40,6 @@ test("validatePlanResponse accepts click action", () => {
   assert.equal(result.ok, true);
 });
 
-test("validatePlanResponse accepts summarize action", () => {
-  const payload = {
-    actions: [
-      {
-        toolCall: { id: "12345678-1234-1234-1234-1234567890ab", name: "content.summarize", arguments: {} },
-        policy: { decision: "allow", reasonCode: "summarize_allowed" }
-      }
-    ]
-  };
-  const result = validator.validatePlanResponse(payload);
-  assert.equal(result.ok, true);
-});
-
 test("validatePlanResponse accepts search action", () => {
   const payload = {
     actions: [

@@ -4,33 +4,20 @@ This note compiles official guidance on programming `Qwen/Qwen3-0.6B` with Trans
 
 ## Quick facts
 
-- Context length: 32,768 tokens (pretraining). Can be extended to 131,072 with YaRN RoPE scaling.
-- Parameters: 0.6B, 28 layers, 16/8 heads (Q/KV), tied embeddings.
+- Context length: 32,768 tokens (pretraining). Can be extended to 131,072 with RoPE scaling (validated with YaRN).
+- Parameters: 0.6B total (0.44B non-embedding), 28 layers, 16 Q heads / 8 KV heads (GQA), tied embeddings.
 - License: Apache-2.0.
-- Languages: 100+ languages and dialects across Qwen3.
-- Transformers: >=4.51.0 required; torch >=2.6 recommended; GPU recommended.
+- Transformers: use the latest version; `transformers<4.51.0` can fail with `KeyError: 'qwen3'`.
 - Default behavior: thinking mode enabled, outputs include a `<think>...</think>` block.
 
-## Basic usage (Transformers)
+## Laika integration note (JSON-only)
 
-### Pipeline (multi-turn)
+Laika’s agent/model contract is **JSON-only** (no Markdown, no code fences, no `<think>`). For Qwen3 this is simplest with:
 
-```python
-from transformers import pipeline
+- `enable_thinking=False` in `tokenizer.apply_chat_template(...)`
+- a strict “single JSON object” system prompt (see `docs/llm_context_protocol.md`)
 
-model_name = "Qwen/Qwen3-0.6B"
-generator = pipeline(
-    "text-generation",
-    model_name,
-    torch_dtype="auto",
-    device_map="auto",
-)
-
-messages = [{"role": "user", "content": "Give me a short intro to LLMs."}]
-messages = generator(messages, max_new_tokens=256)[0]["generated_text"]
-```
-
-### Manual generate (chat template)
+## Basic usage (Transformers) (from the model card)
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -43,23 +30,29 @@ model = AutoModelForCausalLM.from_pretrained(
     device_map="auto",
 )
 
-messages = [{"role": "user", "content": "Explain KV cache in 3 bullets. /no_think"}]
+prompt = "Give me a short introduction to large language model."
+messages = [{"role": "user", "content": prompt}]
 text = tokenizer.apply_chat_template(
     messages,
     tokenize=False,
     add_generation_prompt=True,
-    enable_thinking=False,
+    enable_thinking=True,  # default is True; set False to disable <think>
 )
-inputs = tokenizer([text], return_tensors="pt").to(model.device)
-output = model.generate(
-    **inputs,
-    max_new_tokens=256,
-    do_sample=True,
-    temperature=0.7,
-    top_p=0.8,
-    top_k=20,
-)
-print(tokenizer.decode(output[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True))
+model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+generated_ids = model.generate(**model_inputs, max_new_tokens=512)
+output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
+
+# Split thinking vs final content by rindex'ing the </think> token id (151668).
+try:
+    index = len(output_ids) - output_ids[::-1].index(151668)
+except ValueError:
+    index = 0
+
+thinking_content = tokenizer.decode(output_ids[:index], skip_special_tokens=True).strip("\n")
+content = tokenizer.decode(output_ids[index:], skip_special_tokens=True).strip("\n")
+
+print("thinking content:", thinking_content)
+print("content:", content)
 ```
 
 ## Thinking control
@@ -215,23 +208,18 @@ curl http://localhost:8000/v1/chat/completions \
 - Qwen3 recommends Hermes-style tool use for best function calling quality.
 - Avoid stopword-based tool call templates (like ReAct) with reasoning models because stopwords can appear inside `<think>` content.
 - Tool schema uses JSON Schema. Tool arguments are JSON-formatted strings in tool calls.
-- The Qwen3 tokenizer chat template already includes Hermes tool use, so vLLM can parse tool calls with:
+- The Qwen3 chat template includes a `<tools>...</tools>` block and emits `<tool_call>...</tool_call>` tags when `tools` are provided, so vLLM can parse tool calls with:
 
 ```bash
 vllm serve Qwen/Qwen3-0.6B --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3
 ```
 
-- Qwen-Agent wraps tool calling for Qwen3 and can sit on top of an OpenAI-compatible endpoint. It currently expects `functions` rather than `tools`:
-
-```python
-functions = [tool["function"] for tool in tools]
-```
+Qwen-Agent wraps tool calling for Qwen3 and can sit on top of an OpenAI-compatible endpoint (see the model card’s “Agentic Use” section).
 
 ## Quantization notes
 
-- Qwen3 provides FP8 and AWQ variants (check HF model list for `Qwen/Qwen3-<size>-FP8` and `Qwen/Qwen3-<size>-AWQ`).
-- FP8 requires GPUs with compute capability > 8.9 (Ada Lovelace, Hopper, or newer).
-- Transformers 4.51 has known issues with FP8 across GPUs; workarounds include `CUDA_LAUNCH_BLOCKING=1` or patching `finegrained_fp8.py`.
+- For macOS local inference, MLX/MLX-LM commonly uses 4-bit weights (Laika’s prototype bundles an MLX 4-bit Qwen3 build).
+- For server runtimes, quantization support is runtime-specific (vLLM/SGLang/llama.cpp/Ollama/etc.); prefer the runtime’s recommended quantization path.
 
 ## Long context with YaRN (Transformers)
 

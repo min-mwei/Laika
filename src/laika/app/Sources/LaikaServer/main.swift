@@ -10,10 +10,6 @@ struct ServerConfig {
     let useStatic: Bool
 }
 
-struct SummaryResponse: Codable {
-    let summary: String
-}
-
 func parseArgs() -> ServerConfig {
     var port: UInt16 = 8765
     var modelURL: URL?
@@ -78,31 +74,6 @@ func handleRequest(_ request: HTTPRequest, planService: PlanService) async -> HT
         headers["Content-Type"] = "application/json"
         headers["Content-Length"] = String(data?.count ?? 0)
         return HTTPResponse(statusCode: 200, headers: headers, body: data ?? Data())
-    }
-
-    if request.method == "POST", request.path == "/summarize" {
-        do {
-            let decoder = JSONDecoder()
-            let planRequest = try decoder.decode(PlanRequest.self, from: request.body)
-            let summary = try await planService.summarize(from: planRequest)
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            let data = try encoder.encode(SummaryResponse(summary: summary))
-            var headers = corsHeaders()
-            headers["Content-Type"] = "application/json"
-            headers["Content-Length"] = String(data.count)
-            return HTTPResponse(statusCode: 200, headers: headers, body: data)
-        } catch let error as PlanValidationError {
-            var headers = corsHeaders()
-            headers["Content-Type"] = "application/json"
-            let response = HTTPResponse.json(statusCode: 400, payload: ["error": error.localizedDescription])
-            return HTTPResponse(statusCode: response.statusCode, headers: headers.merging(response.headers) { $1 }, body: response.body)
-        } catch {
-            var headers = corsHeaders()
-            headers["Content-Type"] = "application/json"
-            let response = HTTPResponse.json(statusCode: 500, payload: ["error": error.localizedDescription])
-            return HTTPResponse(statusCode: response.statusCode, headers: headers.merging(response.headers) { $1 }, body: response.body)
-        }
     }
 
     guard request.method == "POST", request.path == "/plan" else {

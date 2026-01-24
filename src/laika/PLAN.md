@@ -9,7 +9,7 @@ Purpose: validate the design with a thin slice that combines a simple agent UI i
 - Local model integration using an MLX 4-bit model (Qwen3-0.6B) built via `src/local_llm_quantizer`.
 - Package the MLX model directory for the initial phase and run inference locally via `mlx-swift`.
 - Redacted context pack only; no cookies or session tokens.
-- Prototype runs in assist-only mode; read-only summaries use `content.summarize`.
+- Prototype runs in assist-only mode; read-only tasks return `assistant.render` in the plan response.
 
 ## Non-goals for this validation
 - Full autopilot, multi-modal inputs, or long-run resume.
@@ -37,13 +37,12 @@ Purpose: validate the design with a thin slice that combines a simple agent UI i
   - prompt contract: tool-only JSON; no free-form actions
   - output validation + retry on invalid JSON
 
-## Summary tool architecture (read-only)
-- Use `content.summarize` for page/topic/comment summaries; keep planning focused on navigation.
+## Summary response pipeline (read-only)
+- Return `assistant.render` for page/topic/comment summaries in the LLMCP response.
 - Build a structured `SummaryInput` from observations (items, primary, blocks, comments, outline).
-- Use a dedicated summary prompt with non-thinking mode and strict formatting rules.
-- Validate grounding against anchors (titles/snippets/comments); fall back to extractive summary when ungrounded.
-- Stream summary tokens to the UI and replace with a fallback when validation fails.
-- Log summary streams as the user-visible final summary (avoid logging tool intro text as the final output).
+- Use strict JSON-only prompting and non-thinking mode for summary-heavy tasks.
+- Validate grounding against anchors (titles/snippets/comments); fall back to a grounded summary when needed.
+- Render the allowlisted AST in the UI (no Markdown/HTML rendering).
 - For low-signal or gated pages, return a limited-content response without speculation.
 
 ## Goal parsing (fast path)

@@ -85,7 +85,7 @@ if (isAddressBarSearch(window.location)) {
 
 ## Laika integration as an LLM tool
 
-Laika already reserves a `search` tool in `docs/llm_tools.md`. The search redirect can be integrated in two layers:
+Laika reserves a `search` tool in `docs/laika_vocabulary.md` (Tool vocabulary). The search redirect can be integrated in two layers:
 
 1. A search tool that opens the search results URL directly (simple and reliable).
 2. An optional redirect layer that rewrites address-bar searches if the user wants Safari to behave like it has a custom engine.

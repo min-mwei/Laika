@@ -44,8 +44,6 @@ public final class PolicyGate: Sendable {
 
     public func decide(for toolCall: ToolCall, context: PolicyContext) -> PolicyResult {
         switch toolCall.name {
-        case .contentSummarize:
-            return PolicyResult(decision: .allow, reasonCode: "summarize_allowed")
         case .browserObserveDom:
             return PolicyResult(decision: .allow, reasonCode: "observe_allowed")
         case .search:
