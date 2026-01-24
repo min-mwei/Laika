@@ -2,6 +2,19 @@ import Foundation
 import LaikaShared
 
 enum LLMCPResponseParser {
+    enum ParseMode: String {
+        case strict
+        case lenient
+        case fallbackNoJSON
+        case fallbackInvalidJSON
+    }
+
+    struct ParseOutcome {
+        let response: ModelResponse
+        let mode: ParseMode
+        let error: String?
+    }
+
     private static func decodeResponse(_ jsonString: String) throws -> LLMCPResponse {
         guard let data = jsonString.data(using: .utf8) else {
             throw ModelError.invalidResponse("Model output could not be encoded as UTF-8.")
@@ -63,17 +76,24 @@ enum LLMCPResponseParser {
     }
 
     static func parse(_ text: String) throws -> ModelResponse {
+        return parseWithOutcome(text).response
+    }
+
+    static func parseWithOutcome(_ text: String) -> ParseOutcome {
         let sanitized = ModelOutputParser.sanitize(text)
         guard let jsonString = extractJSON(from: text) else {
-            return fallbackResponse(from: sanitized)
+            let response = fallbackResponse(from: sanitized)
+            return ParseOutcome(response: response, mode: .fallbackNoJSON, error: "no_json")
         }
         do {
-            return try parseStrict(jsonString)
+            let response = try parseStrict(jsonString)
+            return ParseOutcome(response: response, mode: .strict, error: nil)
         } catch {
             if let parsed = try? parseLenient(jsonString, error: error) {
-                return parsed
+                return ParseOutcome(response: parsed, mode: .lenient, error: error.localizedDescription)
             }
-            return fallbackResponse(from: sanitized)
+            let response = fallbackResponse(from: sanitized)
+            return ParseOutcome(response: response, mode: .fallbackInvalidJSON, error: error.localizedDescription)
         }
     }
 

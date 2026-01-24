@@ -527,6 +527,7 @@
     search: true
   };
   var BLOCKED_QUERY_KEY_PATTERN = /(token|auth|session|sid|key|code|pass|secret|signature|sig|jwt|bearer|oauth|utm_|fbclid|gclid|yclid|mc_cid|mc_eid)/i;
+  var urlRedactionCounter = null;
 
   function looksSensitiveValue(value) {
     if (!value) {
@@ -553,22 +554,37 @@
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         return "";
       }
+      var originalHash = parsed.hash || "";
+      var originalSearch = parsed.search || "";
+      var redacted = false;
+      if (originalHash) {
+        redacted = true;
+      }
       parsed.hash = "";
       if (parsed.search) {
         var params = new URLSearchParams(parsed.search);
         var filtered = new URLSearchParams();
+        var removed = 0;
         params.forEach(function (paramValue, key) {
           var lowerKey = String(key).toLowerCase();
           if (BLOCKED_QUERY_KEY_PATTERN.test(lowerKey)) {
+            removed += 1;
             return;
           }
           if (looksSensitiveValue(paramValue) && !SAFE_QUERY_KEYS[lowerKey]) {
+            removed += 1;
             return;
           }
           filtered.append(key, paramValue);
         });
         var query = filtered.toString();
         parsed.search = query ? "?" + query : "";
+        if (removed > 0 || (originalSearch && query !== params.toString())) {
+          redacted = true;
+        }
+      }
+      if (redacted && urlRedactionCounter) {
+        urlRedactionCounter.count += 1;
       }
       return parsed.toString();
     } catch (error) {
@@ -2792,6 +2808,8 @@
     var debugInfo = debugEnabled
       ? { timings: {}, counts: {}, root: null, textRoot: null, contentRoot: null, listRoot: null, commentRoot: null, signals: [] }
       : null;
+    var localUrlRedaction = { count: 0 };
+    urlRedactionCounter = localUrlRedaction;
     var totalStart = debugEnabled ? nowMs() : 0;
     var root = document.body;
     if (options && options.rootHandleId) {
@@ -2945,8 +2963,16 @@
       debugInfo.counts.commentCount = comments.length;
       debugInfo.timings.totalMs = Math.round(nowMs() - totalStart);
     }
+    var pageUrl = sanitizeURLString(window.location.href);
+    if (localUrlRedaction.count > 0) {
+      signals.push("url_redacted");
+      if (debugInfo) {
+        debugInfo.counts.urlRedacted = localUrlRedaction.count;
+      }
+    }
+    urlRedactionCounter = null;
     return {
-      url: sanitizeURLString(window.location.href),
+      url: pageUrl,
       title: document.title || "",
       text: text,
       elements: limited,

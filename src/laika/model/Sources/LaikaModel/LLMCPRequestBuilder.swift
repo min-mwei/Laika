@@ -4,6 +4,8 @@ import LaikaShared
 enum LLMCPRequestBuilder {
     private enum ObservationBudget {
         static let maxItems = 12
+        static let maxItemsItemFocus = 6
+        static let maxItemsCommentFocus = 4
         static let maxItemSnippetChars = 160
         static let maxOutline = 12
         static let maxComments = 12
@@ -20,6 +22,14 @@ enum LLMCPRequestBuilder {
         static let maxElementLabelChars = 120
         static let maxTitleChars = 140
         static let maxTopDiscussions = 5
+    }
+
+    private enum ContextFocus {
+        case page
+        case item
+        case comments
+        case action
+        case unknown
     }
 
     static func build(context: ContextPack, userGoal: String) -> LLMCPRequest {
@@ -120,20 +130,23 @@ enum LLMCPRequestBuilder {
         goalPlan: GoalPlan,
         hasChunks: Bool
     ) -> [String: JSONValue] {
+        let focus = contextFocus(goalPlan: goalPlan)
         var content: [String: JSONValue] = [
             "doc_type": .string("web.observation.summary.v1"),
             "url": .string(observation.url),
             "title": .string(TextUtils.truncate(TextUtils.normalizeWhitespace(observation.title), maxChars: ObservationBudget.maxTitleChars))
         ]
         var discussionCandidates: [(title: String, url: String, handleId: String?, commentCount: Int)] = []
-        let summaryText = buildSummaryText(
-            observation: observation,
-            maxChars: summaryTextLimit(goalPlan: goalPlan, hasChunks: hasChunks)
-        )
-        if !summaryText.isEmpty && (!isListObservation(observation) || observation.items.isEmpty) {
-            content["text"] = .string(summaryText)
+        if shouldIncludeSummaryText(focus: focus, observation: observation) {
+            let summaryText = buildSummaryText(
+                observation: observation,
+                maxChars: summaryTextLimit(goalPlan: goalPlan, hasChunks: hasChunks)
+            )
+            if !summaryText.isEmpty && (!isListObservation(observation) || observation.items.isEmpty) {
+                content["text"] = .string(summaryText)
+            }
         }
-        if let primary = observation.primary {
+        if shouldIncludePrimary(focus: focus, observation: observation), let primary = observation.primary {
             let primaryText = TextUtils.truncate(
                 TextUtils.normalizePreservingNewlines(primary.text),
                 maxChars: primaryTextLimit(goalPlan: goalPlan, hasChunks: hasChunks)
@@ -150,8 +163,11 @@ enum LLMCPRequestBuilder {
                 content["primary"] = .object(primaryPayload)
             }
         }
-        if !observation.items.isEmpty {
-            let items = observation.items.prefix(ObservationBudget.maxItems).compactMap { item -> JSONValue? in
+        let itemsForFocus = shouldIncludeItems(focus: focus, goalPlan: goalPlan)
+            ? selectItemsForFocus(items: observation.items, goalPlan: goalPlan, focus: focus)
+            : []
+        if !itemsForFocus.isEmpty {
+            let items = itemsForFocus.compactMap { item -> JSONValue? in
                 let title = TextUtils.normalizeWhitespace(item.title)
                 if title.isEmpty {
                     return nil
@@ -182,7 +198,7 @@ enum LLMCPRequestBuilder {
                 content["items"] = .array(items)
             }
         }
-        if isListObservation(observation), !discussionCandidates.isEmpty {
+        if (focus == .page || focus == .unknown), isListObservation(observation), !discussionCandidates.isEmpty {
             let topDiscussions = discussionCandidates
                 .sorted { $0.commentCount > $1.commentCount }
                 .prefix(ObservationBudget.maxTopDiscussions)
@@ -229,7 +245,7 @@ enum LLMCPRequestBuilder {
                 content["comments"] = .array(comments)
             }
         }
-        if !observation.outline.isEmpty {
+        if shouldIncludeOutline(focus: focus), !observation.outline.isEmpty {
             let outline = observation.outline.prefix(ObservationBudget.maxOutline).compactMap { item -> JSONValue? in
                 let text = TextUtils.normalizeWhitespace(item.text)
                 if text.isEmpty {
@@ -246,7 +262,7 @@ enum LLMCPRequestBuilder {
                 content["outline"] = .array(outline)
             }
         }
-        if !observation.signals.isEmpty {
+        if shouldIncludeSignals(focus: focus), !observation.signals.isEmpty {
             content["signals"] = .array(observation.signals.prefix(12).map { .string($0) })
         }
         if shouldIncludeElements(goalPlan: goalPlan), !observation.elements.isEmpty {
@@ -273,7 +289,7 @@ enum LLMCPRequestBuilder {
     }
 
     private static func buildChunkDocuments(observation: Observation, goalPlan: GoalPlan) -> [LLMCPDocument] {
-        if wantsComments(goalPlan: goalPlan) {
+        if wantsComments(goalPlan: goalPlan) || goalPlan.intent == .itemSummary || goalPlan.intent == .action {
             return []
         }
         let sourceText: String
@@ -357,6 +373,107 @@ enum LLMCPRequestBuilder {
 
     private static func wantsComments(goalPlan: GoalPlan) -> Bool {
         return goalPlan.intent == .commentSummary || goalPlan.wantsComments
+    }
+
+    private static func contextFocus(goalPlan: GoalPlan) -> ContextFocus {
+        if wantsComments(goalPlan: goalPlan) {
+            return .comments
+        }
+        switch goalPlan.intent {
+        case .pageSummary:
+            return .page
+        case .itemSummary:
+            return .item
+        case .commentSummary:
+            return .comments
+        case .action:
+            return .action
+        case .unknown:
+            return .unknown
+        }
+    }
+
+    private static func shouldIncludeSummaryText(focus: ContextFocus, observation: Observation) -> Bool {
+        if focus == .comments {
+            return observation.comments.isEmpty
+        }
+        if focus == .item {
+            return observation.primary == nil && observation.items.isEmpty
+        }
+        return true
+    }
+
+    private static func shouldIncludePrimary(focus: ContextFocus, observation: Observation) -> Bool {
+        if focus == .comments {
+            return observation.comments.isEmpty
+        }
+        return true
+    }
+
+    private static func shouldIncludeOutline(focus: ContextFocus) -> Bool {
+        return focus == .page || focus == .unknown
+    }
+
+    private static func shouldIncludeSignals(focus: ContextFocus) -> Bool {
+        return focus != .comments
+    }
+
+    private static func shouldIncludeItems(focus: ContextFocus, goalPlan: GoalPlan) -> Bool {
+        if focus == .comments {
+            return goalPlan.itemIndex != nil || (goalPlan.itemQuery?.isEmpty == false)
+        }
+        return true
+    }
+
+    private static func selectItemsForFocus(
+        items: [ObservedItem],
+        goalPlan: GoalPlan,
+        focus: ContextFocus
+    ) -> [ObservedItem] {
+        guard !items.isEmpty else {
+            return []
+        }
+        let limit: Int
+        switch focus {
+        case .page, .unknown:
+            limit = ObservationBudget.maxItems
+        case .item, .action:
+            limit = ObservationBudget.maxItemsItemFocus
+        case .comments:
+            limit = ObservationBudget.maxItemsCommentFocus
+        }
+        if let index = goalPlan.itemIndex, index > 0, index <= items.count {
+            let start = max(index - 2, 0)
+            let end = min(index + 1, items.count)
+            let slice = Array(items[start..<end])
+            return Array(slice.prefix(limit))
+        }
+        if let query = goalPlan.itemQuery, !query.isEmpty {
+            let normalizedQuery = normalizeForMatch(query)
+            if !normalizedQuery.isEmpty {
+                let matches = items.filter { normalizeForMatch($0.title).contains(normalizedQuery) }
+                if !matches.isEmpty {
+                    return Array(matches.prefix(limit))
+                }
+            }
+        }
+        return Array(items.prefix(limit))
+    }
+
+    private static func normalizeForMatch(_ text: String) -> String {
+        let lower = text.lowercased()
+        var scalars: [UnicodeScalar] = []
+        scalars.reserveCapacity(lower.unicodeScalars.count)
+        for scalar in lower.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                scalars.append(scalar)
+            } else {
+                scalars.append(" ")
+            }
+        }
+        let cleaned = String(String.UnicodeScalarView(scalars))
+        return cleaned.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+            .joined(separator: " ")
     }
 
     private static func shouldIncludeElements(goalPlan: GoalPlan) -> Bool {

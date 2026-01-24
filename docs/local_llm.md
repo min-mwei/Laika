@@ -131,8 +131,8 @@ In MVP, roles (2) and (3) can share one “main” model; roles (1) and (4) may 
 ## Current Qwen3 usage (prototype)
 
 - Model: `Qwen3-0.6B-MLX-4bit` loaded from `src/laika/extension/lib/models/`.
-- Planning: JSON-only LLMCP prompt; `enableThinking` toggles on for long goals. Plan budgets are small (roughly 256-384 tokens) for latency.
-- Goal parsing: uses short budgets (72-128 tokens) to keep intent extraction fast.
+- Planning: JSON-only LLMCP prompt; `enableThinking` is disabled to avoid non-JSON preambles. Plan budgets are small (roughly 256-384 tokens) for latency.
+- Goal parsing: uses short budgets (72-128 tokens) to keep intent extraction fast; intent decomposition is model-driven with only minimal fallback for ordinals/comment hints on parse failure.
 - Summaries: the model returns `assistant.render` directly in the LLMCP response; Agent Core applies grounding checks before returning.
 - Streaming: the prototype UI renders a single response per plan turn (no summary streams).
 

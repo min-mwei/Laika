@@ -247,11 +247,24 @@ Tools:
         let request = LLMCPRequestBuilder.build(context: context, userGoal: goal)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(request),
-              let text = String(data: data, encoding: .utf8) else {
+        do {
+            let data = try encoder.encode(request)
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw ModelError.invalidResponse("Prompt encoding produced non-UTF8 output.")
+            }
+            return text
+        } catch {
+            LaikaLogger.logAgentEvent(
+                type: "llmcp.request_encode_failed",
+                runId: context.runId,
+                step: context.step,
+                maxSteps: context.maxSteps,
+                payload: [
+                    "error": .string(error.localizedDescription)
+                ]
+            )
             return "{}"
         }
-        return text
     }
 
 }

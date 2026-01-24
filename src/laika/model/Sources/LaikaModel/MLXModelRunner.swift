@@ -139,7 +139,7 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         let attempt = GenerationAttempt(
             temperature: 0.2,
             topP: 0.7,
-            enableThinking: shouldEnableThinkingForGoalParse(goal: userGoal)
+            enableThinking: false
         )
         let parseMaxTokens = goalParseMaxTokens(goal: userGoal)
         let maxOutputChars = 8_000
@@ -290,8 +290,10 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
                 )
                 let output = result.output
                 lastOutput = output
-                let parsed = try LLMCPResponseParser.parse(output)
+                let outcome = LLMCPResponseParser.parseWithOutcome(output)
+                let parsed = outcome.response
                 let durationMs = max(0, Date().timeIntervalSince(startedAt) * 1000)
+                logParseOutcome(outcome, context: context, stage: "plan", outputChars: output.count)
                 LaikaLogger.logLLMEvent(.response(
                     id: requestId,
                     runId: context.runId,
@@ -336,7 +338,9 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         }
 
         if let lastOutput {
-            return try LLMCPResponseParser.parse(lastOutput)
+            let outcome = LLMCPResponseParser.parseWithOutcome(lastOutput)
+            logParseOutcome(outcome, context: context, stage: "plan", outputChars: lastOutput.count)
+            return outcome.response
         }
         throw lastError ?? ModelError.invalidResponse("Plan generation failed.")
     }
@@ -449,13 +453,6 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
     }
 
     private func planAttempts(context: ContextPack, userGoal: String) -> [GenerationAttempt] {
-        let goalPlan = context.goalPlan ?? GoalPlan.unknown
-        let useThinking = shouldEnableThinkingForPlan(goalPlan: goalPlan, goal: userGoal)
-        if useThinking {
-            return [
-                .init(temperature: 0.4, topP: 0.85, enableThinking: true)
-            ]
-        }
         return [
             .init(temperature: 0.7, topP: 0.8, enableThinking: false),
             .init(temperature: 0.6, topP: 0.95, enableThinking: false)
@@ -466,10 +463,6 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         let threshold = 140
         let desired = goal.count > threshold ? 128 : 72
         return min(maxTokens, desired)
-    }
-
-    private func shouldEnableThinkingForGoalParse(goal: String) -> Bool {
-        return goal.count > 140
     }
 
     private func planMaxTokens(context: ContextPack, userGoal: String) -> Int {
@@ -488,13 +481,30 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         return min(maxTokens, desired)
     }
 
-    private func shouldEnableThinkingForPlan(goalPlan: GoalPlan, goal: String) -> Bool {
-        if goalPlan.intent == .pageSummary || goalPlan.intent == .itemSummary || goalPlan.intent == .commentSummary {
-            return false
+
+    private func logParseOutcome(
+        _ outcome: LLMCPResponseParser.ParseOutcome,
+        context: ContextPack,
+        stage: String,
+        outputChars: Int
+    ) {
+        guard outcome.mode != .strict else {
+            return
         }
-        if goalPlan.wantsComments {
-            return false
+        var payload: [String: LaikaShared.JSONValue] = [
+            "mode": .string(outcome.mode.rawValue),
+            "stage": .string(stage),
+            "outputChars": .number(Double(outputChars))
+        ]
+        if let error = outcome.error, !error.isEmpty {
+            payload["error"] = .string(LaikaLogger.preview(error, maxChars: 200))
         }
-        return goal.count > 220
+        LaikaLogger.logAgentEvent(
+            type: "llmcp.parse_mode",
+            runId: context.runId,
+            step: context.step,
+            maxSteps: context.maxSteps,
+            payload: payload
+        )
     }
 }
