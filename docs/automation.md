@@ -64,7 +64,7 @@ This repo needs an end-to-end automation path that exercises the real Safari ext
 2) Start scenario
 - UI automation opens Safari and navigates to the harness page.
 - The harness page posts `laika.automation.start` with `{ runId, goals, targetUrl, options, nonce }`.
-- The harness page retries `laika.automation.start` until it receives an ack to avoid content-script load races.
+- The harness page retries `laika.automation.start` until it receives an ack to avoid content-script load races. It also listens for `laika.automation.ready` to start immediately once the bridge is injected.
 - The background opens a new tab to `targetUrl` and runs the agent loop there.
 
 3) Agent run (inside extension)
@@ -86,6 +86,7 @@ This repo needs an end-to-end automation path that exercises the real Safari ext
 
 - Only accept automation messages from localhost origins.
 - Require a per-run nonce from the harness page.
+- Gate automation behind a local config knob (`automationEnabled` in extension storage) so it can be disabled outside of test runs.
 - Never include raw HTML or sensitive data in responses.
 
 ## Automation bridge contract (draft)
@@ -95,13 +96,14 @@ This repo needs an end-to-end automation path that exercises the real Safari ext
   - `laika.automation.status` { runId }
   - `laika.automation.cancel` { runId }
 - Responses (content script -> page):
+  - `laika.automation.ready` { at }
   - `laika.automation.progress` { runId, step, action, observationSummary }
   - `laika.automation.result` { runId, summary, steps[] }
   - `laika.automation.error` { runId, error }
 
 ## Harness instrumentation
 
-- The harness page emits lightweight telemetry events (config loaded, start sent, ack/status/progress) to the local harness server.
+- The harness page emits lightweight telemetry events (config loaded, ready, start sent, ack/status/progress) to the local harness server.
 - On timeout, the harness includes the last telemetry event in the output to highlight where the run stalled.
 
 ## Scenario format (draft)
@@ -124,7 +126,7 @@ Keep existing JSON but allow automation options:
 }
 ```
 
-`resetStorage` defaults to `true` for automation runs; set it to `false` if you need to keep extension storage between scenarios.
+`resetStorage` defaults to `true` for automation runs; it clears automation-scoped keys and in-memory caches (not user settings). Set it to `false` if you need to keep automation state between scenarios.
 
 ## Runner outputs
 
@@ -169,7 +171,7 @@ xcodebuild test \
 ```
 
 The UI test driver reads `/tmp/laika-automation-config.json` if present (env vars can also override it). `run_safari_ui_test.sh` will build + install the app into `~/Applications` by default; pass `--no-build` to skip. The driver expects the Safari extension to be enabled in the active profile and will open the harness page in a normal Safari window.
-Use `--quit-safari` if Safari activation is flaky. The harness emits `error: "timeout"` when no report arrives before `--timeout`.
+Use `--quit-safari` if Safari activation is flaky. Use `--retries`/`--retry-delay` to retry known flaky UI-test bootstrap failures. The harness emits `error: "timeout"` when no report arrives before `--timeout`.
 
 ## Legacy Playwright harness
 

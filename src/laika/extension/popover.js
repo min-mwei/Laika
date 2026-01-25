@@ -1099,8 +1099,12 @@ function buildToolResult(toolCall, toolName, rawResult) {
     if (rawResult.observation.documentId) {
       payload.documentId = rawResult.observation.documentId;
     }
-    if (typeof rawResult.observation.navGeneration === "number") {
-      payload.navGeneration = rawResult.observation.navGeneration;
+    var navigationGeneration = rawResult.observation.navigationGeneration;
+    if (typeof navigationGeneration !== "number") {
+      navigationGeneration = rawResult.observation.navGeneration;
+    }
+    if (typeof navigationGeneration === "number") {
+      payload.navigationGeneration = navigationGeneration;
     }
     if (typeof rawResult.observation.observedAtMs === "number") {
       payload.observedAtMs = rawResult.observation.observedAtMs;

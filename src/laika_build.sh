@@ -17,6 +17,12 @@ SIGN_APP="${SIGN_APP:-1}"
 SIGN_IDENTITY="${SIGN_IDENTITY:-Apple Development}"
 APP_ENTITLEMENTS="${REPO_ROOT}/src/laika/LaikaApp/Laika/Laika/Laika.entitlements"
 EXT_ENTITLEMENTS="${REPO_ROOT}/src/laika/LaikaApp/Laika/Laika Extension/Laika Extension.entitlements"
+APP_BUNDLE_ID="${APP_BUNDLE_ID:-com.laika.Laika}"
+EXT_BUNDLE_ID="${EXT_BUNDLE_ID:-com.laika.Laika.Extension}"
+CLEAN_INSTALLATIONS="${CLEAN_INSTALLATIONS:-1}"
+CLEAN_REGISTRATION="${CLEAN_REGISTRATION:-1}"
+KEEP_BACKUP="${KEEP_BACKUP:-0}"
+DEST_APP="${INSTALL_DIR}/${APP_NAME}"
 
 if ! command -v xcodebuild >/dev/null 2>&1; then
   echo "xcodebuild not found. Install Xcode and try again." >&2
@@ -27,6 +33,44 @@ if [ ! -d "${PROJECT_PATH}" ]; then
   echo "Project not found at ${PROJECT_PATH}" >&2
   exit 1
 fi
+
+clean_installations() {
+  if [ "${CLEAN_INSTALLATIONS}" != "1" ]; then
+    return
+  fi
+  if [ -d "${DEST_APP}" ]; then
+    if [ "${KEEP_BACKUP}" = "1" ]; then
+      BACKUP_APP="${DEST_APP}.bak.$(date +%Y%m%d-%H%M%S)"
+      echo "Backing up existing app to ${BACKUP_APP}"
+      mv "${DEST_APP}" "${BACKUP_APP}"
+    else
+      rm -rf "${DEST_APP}"
+    fi
+  fi
+  for dir in "/Applications" "${HOME}/Applications"; do
+    app_path="${dir}/${APP_NAME}"
+    if [ -d "${app_path}" ] && [ "${app_path}" != "${DEST_APP}" ]; then
+      rm -rf "${app_path}"
+    fi
+  done
+}
+
+clean_registration() {
+  if [ "${CLEAN_REGISTRATION}" != "1" ]; then
+    return
+  fi
+  if command -v pluginkit >/dev/null 2>&1; then
+    pluginkit -r "${EXT_BUNDLE_ID}" >/dev/null 2>&1 || true
+  fi
+  LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  if [ -x "${LSREGISTER}" ] && command -v mdfind >/dev/null 2>&1; then
+    mdfind "kMDItemCFBundleIdentifier == '${APP_BUNDLE_ID}'" | while IFS= read -r app_path; do
+      if [ -n "${app_path}" ]; then
+        "${LSREGISTER}" -u "${app_path}" >/dev/null 2>&1 || true
+      fi
+    done
+  fi
+}
 
 echo "Building ${SCHEME} (${CONFIGURATION}) for ${DESTINATION}"
 echo "Project: ${PROJECT_PATH}"
@@ -63,11 +107,8 @@ fi
 
 mkdir -p "${INSTALL_DIR}"
 DEST_APP="${INSTALL_DIR}/${APP_NAME}"
-if [ -d "${DEST_APP}" ]; then
-  BACKUP_APP="${DEST_APP}.bak.$(date +%Y%m%d-%H%M%S)"
-  echo "Backing up existing app to ${BACKUP_APP}"
-  mv "${DEST_APP}" "${BACKUP_APP}"
-fi
+clean_registration
+clean_installations
 
 cp -R "${APP_PATH}" "${DEST_APP}"
 echo "Installed app to ${DEST_APP}"

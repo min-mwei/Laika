@@ -9,6 +9,10 @@ let package = Package(
     ],
     targets: [
         .target(name: "LaikaShared"),
-        .testTarget(name: "LaikaSharedTests", dependencies: ["LaikaShared"])
+        .testTarget(
+            name: "LaikaSharedTests",
+            dependencies: ["LaikaShared"],
+            resources: [.process("Resources")]
+        )
     ]
 )

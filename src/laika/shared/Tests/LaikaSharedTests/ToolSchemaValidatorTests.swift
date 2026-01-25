@@ -34,6 +34,12 @@ final class ToolSchemaValidatorTests: XCTestCase {
             arguments: ["maxChars": .string("1200")]
         )
         XCTAssertFalse(invalid)
+
+        let nonFinite = ToolSchemaValidator.validateArguments(
+            name: .browserObserveDom,
+            arguments: ["maxChars": .number(.nan)]
+        )
+        XCTAssertFalse(nonFinite)
     }
 
     func testValidateSearchArguments() {
@@ -76,5 +82,13 @@ final class ToolSchemaValidatorTests: XCTestCase {
             arguments: ["expression": .string("1+2"), "precision": .number(2.5)]
         )
         XCTAssertFalse(invalidPrecision)
+    }
+
+    func testRejectsNonFiniteScrollDelta() {
+        let invalid = ToolSchemaValidator.validateArguments(
+            name: .browserScroll,
+            arguments: ["deltaY": .number(.infinity)]
+        )
+        XCTAssertFalse(invalid)
     }
 }

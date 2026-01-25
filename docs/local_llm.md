@@ -6,7 +6,7 @@ Laika’s product stance is **on-device by default**: Safari talks directly to w
 
 Related:
 
-- AIBrowser system boundaries + security posture: `docs/AIBrowser.md`
+- System boundaries + security posture: `docs/LaikaOverview.md`
 
 ---
 

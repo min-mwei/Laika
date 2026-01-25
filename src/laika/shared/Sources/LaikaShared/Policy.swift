@@ -99,7 +99,7 @@ public final class PolicyGate: Sendable {
                 }
             }
         }
-        if Self.keywordRegex.firstMatch(in: trimmed.lowercased(), options: [], range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
+        if Self.keywordRegex.firstMatch(in: trimmed, options: [], range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
             let digitCount = trimmed.filter(\.isNumber).count
             if digitCount >= 4 {
                 return true

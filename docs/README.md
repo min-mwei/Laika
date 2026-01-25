@@ -2,8 +2,8 @@
 
 Quick index for design and research notes.
 
-- `docs/AIBrowser.md`: core architecture + security design for the Safari extension + app; current prototype UI uses a toolbar-toggled, attached sidecar panel in the active tab (with a standalone panel-window fallback when the sidecar can’t attach).
-- `docs/laika_pitch.md`: end-user narrative and scenario library (why Laika, what it does, where it shines).
+- `docs/LaikaOverview.md`: core architecture + security design for the Safari extension + app; current prototype UI uses a toolbar-toggled, attached sidecar panel in the active tab (with a standalone panel-window fallback when the sidecar can’t attach).
+- `docs/Laika_pitch.md`: end-user narrative and scenario library (why Laika, what it does, where it shines).
 - `src/laika/AGENTS.md`: build, run, automation, and test workflows for local development.
 - `docs/laika_vocabulary.md`: canonical action + tool vocabulary (English intent → tool calls).
 - `docs/local_llm.md`: local model runtime and safety/perf guidance.

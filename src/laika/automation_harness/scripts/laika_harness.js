@@ -400,7 +400,9 @@ function buildObservePayload(observation) {
     url: observation.url || "",
     title: observation.title || "",
     documentId: observation.documentId || "",
-    navGeneration: typeof observation.navGeneration === "number" ? observation.navGeneration : null,
+    navigationGeneration: typeof observation.navigationGeneration === "number"
+      ? observation.navigationGeneration
+      : (typeof observation.navGeneration === "number" ? observation.navGeneration : null),
     observedAtMs: typeof observation.observedAtMs === "number" ? observation.observedAtMs : null,
     textChars: (observation.text || "").length,
     elementCount: Array.isArray(observation.elements) ? observation.elements.length : 0,

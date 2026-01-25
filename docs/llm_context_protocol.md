@@ -268,7 +268,7 @@ Tool calls are proposals only. The execution flow is:
 1. Observe: capture page context + element handles.
 2. Plan: model emits an LLMCP response with `assistant.render` and optional `tool_calls`.
 3. Gate: Policy Gate decides allow/ask/deny per tool call.
-4. Act: allowed tools run in the appropriate trusted executor (extension for browser tools; Agent Core for app-level tools).
+4. Act: allowed tools run in the appropriate trusted executor (extension for browser tools; trusted local executors for app-level tools).
 5. Re-observe: capture fresh state after navigation/interaction.
 
 The UI renders `assistant.render` only; there is no summary streaming path.
@@ -304,9 +304,9 @@ Notes:
 - `browser.refresh`: `{}`
 - `search`: `{ "query": string, "engine"?: string, "newTab"?: boolean }`
 
-### App-level primitives (Agent Core)
+### App-level primitives (trusted local executors)
 
-These tools run in trusted app code (Swift) rather than the extension, but follow the same rules: the model only proposes them and Policy Gate mediates allow/ask/deny.
+These tools run in trusted local code (currently the extension background for deterministic compute; Agent Core in Swift when available), but follow the same rules: the model only proposes them and Policy Gate mediates allow/ask/deny. The Swift evaluator is currently reference/test-only, not the execution path.
 
 Planned/primitives to layer the high-level vocabulary on top of:
 
@@ -315,8 +315,9 @@ Planned/primitives to layer the high-level vocabulary on top of:
 - `artifact.share`: `{ "artifactId": string, "format": "markdown"|"text"|"json"|"csv"|"pdf", "filename"?: string, "target"?: "share_sheet"|"clipboard"|"file" }`
 - `integration.invoke`: `{ "integration": string, "operation": string, "payload": object, "idempotencyKey"?: string }`
 - `app.calculate`: `{ "expression": string, "precision"?: number }`
-  - `precision` is optional (integer 0..6). When provided, results are rounded using half-up rounding.
+  - `precision` is optional (integer 0..6). When provided, results are rounded using IEEE-754 double precision (current implementation uses `toFixed`-style rounding and inherits its edge cases).
   - Tool results include `result` (number) and `formatted` (string) when `precision` is provided.
+  - Not intended for currency math; use a Decimal/fixed-point path when correctness is required.
 
 Rules:
 

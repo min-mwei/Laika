@@ -229,7 +229,7 @@ public struct Observation: Codable, Equatable, Sendable {
     public let url: String
     public let title: String
     public let documentId: String?
-    public let navGeneration: Int?
+    public let navigationGeneration: Int?
     public let observedAtMs: Int?
     public let text: String
     public let elements: [ObservedElement]
@@ -244,7 +244,7 @@ public struct Observation: Codable, Equatable, Sendable {
         url: String,
         title: String,
         documentId: String? = nil,
-        navGeneration: Int? = nil,
+        navigationGeneration: Int? = nil,
         observedAtMs: Int? = nil,
         text: String,
         elements: [ObservedElement],
@@ -258,7 +258,7 @@ public struct Observation: Codable, Equatable, Sendable {
         self.url = url
         self.title = title
         self.documentId = documentId
-        self.navGeneration = navGeneration
+        self.navigationGeneration = navigationGeneration
         self.observedAtMs = observedAtMs
         self.text = text
         self.elements = elements
@@ -286,7 +286,7 @@ public struct Observation: Codable, Equatable, Sendable {
             url: url,
             title: title,
             documentId: nil,
-            navGeneration: nil,
+            navigationGeneration: nil,
             observedAtMs: nil,
             text: text,
             elements: elements,
@@ -299,10 +299,16 @@ public struct Observation: Codable, Equatable, Sendable {
         )
     }
 
+    @available(*, deprecated, renamed: "navigationGeneration")
+    public var navGeneration: Int? {
+        navigationGeneration
+    }
+
     private enum CodingKeys: String, CodingKey {
         case url
         case title
         case documentId
+        case navigationGeneration
         case navGeneration
         case observedAtMs
         case text
@@ -320,7 +326,12 @@ public struct Observation: Codable, Equatable, Sendable {
         url = try container.decode(String.self, forKey: .url)
         title = try container.decode(String.self, forKey: .title)
         documentId = try container.decodeIfPresent(String.self, forKey: .documentId)
-        navGeneration = try container.decodeIfPresent(Int.self, forKey: .navGeneration)
+        let primaryGeneration = try container.decodeIfPresent(Int.self, forKey: .navigationGeneration)
+        if let primaryGeneration = primaryGeneration {
+            navigationGeneration = primaryGeneration
+        } else {
+            navigationGeneration = try container.decodeIfPresent(Int.self, forKey: .navGeneration)
+        }
         observedAtMs = try container.decodeIfPresent(Int.self, forKey: .observedAtMs)
         text = try container.decode(String.self, forKey: .text)
         elements = try container.decode([ObservedElement].self, forKey: .elements)
@@ -337,7 +348,7 @@ public struct Observation: Codable, Equatable, Sendable {
         try container.encode(url, forKey: .url)
         try container.encode(title, forKey: .title)
         try container.encodeIfPresent(documentId, forKey: .documentId)
-        try container.encodeIfPresent(navGeneration, forKey: .navGeneration)
+        try container.encodeIfPresent(navigationGeneration, forKey: .navigationGeneration)
         try container.encodeIfPresent(observedAtMs, forKey: .observedAtMs)
         try container.encode(text, forKey: .text)
         try container.encode(elements, forKey: .elements)

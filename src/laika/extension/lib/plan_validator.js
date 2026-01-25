@@ -5,26 +5,62 @@
     return value !== null && typeof value === "object" && !Array.isArray(value);
   }
 
-  var TOOL_NAMES = {
-    "browser.observe_dom": true,
-    "browser.click": true,
-    "browser.type": true,
-    "browser.scroll": true,
-    "browser.open_tab": true,
-    "browser.navigate": true,
-    "browser.back": true,
-    "browser.forward": true,
-    "browser.refresh": true,
-    "browser.select": true,
-    "search": true,
-    "app.calculate": true
+  var TOOL_SCHEMAS = {
+    "browser.observe_dom": {
+      required: {},
+      optional: {
+        maxChars: "number",
+        maxElements: "number",
+        maxBlocks: "number",
+        maxPrimaryChars: "number",
+        maxOutline: "number",
+        maxOutlineChars: "number",
+        maxItems: "number",
+        maxItemChars: "number",
+        maxComments: "number",
+        maxCommentChars: "number",
+        rootHandleId: "string"
+      }
+    },
+    "browser.click": { required: { handleId: "string" }, optional: {} },
+    "browser.type": { required: { handleId: "string", text: "string" }, optional: {} },
+    "browser.scroll": { required: { deltaY: "number" }, optional: {} },
+    "browser.open_tab": { required: { url: "string" }, optional: {} },
+    "browser.navigate": { required: { url: "string" }, optional: {} },
+    "browser.back": { required: {}, optional: {} },
+    "browser.forward": { required: {}, optional: {} },
+    "browser.refresh": { required: {}, optional: {} },
+    "browser.select": { required: { handleId: "string", value: "string" }, optional: {} },
+    "search": { required: { query: "string" }, optional: { engine: "string", newTab: "bool" } },
+    "app.calculate": { required: { expression: "string" }, optional: { precision: "number" } }
   };
+
+  function getAllowedKeys(schema) {
+    if (!schema) {
+      return [];
+    }
+    var keys = [];
+    var required = schema.required || {};
+    var optional = schema.optional || {};
+    for (var key in required) {
+      if (Object.prototype.hasOwnProperty.call(required, key)) {
+        keys.push(key);
+      }
+    }
+    for (var optionalKey in optional) {
+      if (Object.prototype.hasOwnProperty.call(optional, optionalKey)) {
+        keys.push(optionalKey);
+      }
+    }
+    return keys;
+  }
 
   function validateToolCall(toolCall) {
     if (!isObject(toolCall)) {
       return "missing toolCall";
     }
-    if (typeof toolCall.name !== "string" || !TOOL_NAMES[toolCall.name]) {
+    var schema = typeof toolCall.name === "string" ? TOOL_SCHEMAS[toolCall.name] : null;
+    if (typeof toolCall.name !== "string" || !schema) {
       return "unsupported tool name";
     }
     if (typeof toolCall.id !== "string" || toolCall.id.length < 8) {
@@ -33,6 +69,9 @@
     var args = toolCall.arguments || {};
     if (!isObject(args)) {
       return "invalid tool arguments";
+    }
+    function isFiniteNumber(value) {
+      return typeof value === "number" && isFinite(value);
     }
     function hasOnlyKeys(allowed) {
       for (var key in args) {
@@ -44,50 +83,37 @@
     }
 
     if (toolCall.name === "browser.observe_dom") {
-      var allowedKeys = [
-        "maxChars",
-        "maxElements",
-        "maxBlocks",
-        "maxPrimaryChars",
-        "maxOutline",
-        "maxOutlineChars",
-        "maxItems",
-        "maxItemChars",
-        "maxComments",
-        "maxCommentChars",
-        "rootHandleId"
-      ];
-      if (!hasOnlyKeys(allowedKeys)) {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
         return "observe_dom has unknown arguments";
       }
-      if (typeof args.maxChars !== "undefined" && typeof args.maxChars !== "number") {
+      if (typeof args.maxChars !== "undefined" && !isFiniteNumber(args.maxChars)) {
         return "observe_dom.maxChars must be number";
       }
-      if (typeof args.maxElements !== "undefined" && typeof args.maxElements !== "number") {
+      if (typeof args.maxElements !== "undefined" && !isFiniteNumber(args.maxElements)) {
         return "observe_dom.maxElements must be number";
       }
-      if (typeof args.maxBlocks !== "undefined" && typeof args.maxBlocks !== "number") {
+      if (typeof args.maxBlocks !== "undefined" && !isFiniteNumber(args.maxBlocks)) {
         return "observe_dom.maxBlocks must be number";
       }
-      if (typeof args.maxPrimaryChars !== "undefined" && typeof args.maxPrimaryChars !== "number") {
+      if (typeof args.maxPrimaryChars !== "undefined" && !isFiniteNumber(args.maxPrimaryChars)) {
         return "observe_dom.maxPrimaryChars must be number";
       }
-      if (typeof args.maxOutline !== "undefined" && typeof args.maxOutline !== "number") {
+      if (typeof args.maxOutline !== "undefined" && !isFiniteNumber(args.maxOutline)) {
         return "observe_dom.maxOutline must be number";
       }
-      if (typeof args.maxOutlineChars !== "undefined" && typeof args.maxOutlineChars !== "number") {
+      if (typeof args.maxOutlineChars !== "undefined" && !isFiniteNumber(args.maxOutlineChars)) {
         return "observe_dom.maxOutlineChars must be number";
       }
-      if (typeof args.maxItems !== "undefined" && typeof args.maxItems !== "number") {
+      if (typeof args.maxItems !== "undefined" && !isFiniteNumber(args.maxItems)) {
         return "observe_dom.maxItems must be number";
       }
-      if (typeof args.maxItemChars !== "undefined" && typeof args.maxItemChars !== "number") {
+      if (typeof args.maxItemChars !== "undefined" && !isFiniteNumber(args.maxItemChars)) {
         return "observe_dom.maxItemChars must be number";
       }
-      if (typeof args.maxComments !== "undefined" && typeof args.maxComments !== "number") {
+      if (typeof args.maxComments !== "undefined" && !isFiniteNumber(args.maxComments)) {
         return "observe_dom.maxComments must be number";
       }
-      if (typeof args.maxCommentChars !== "undefined" && typeof args.maxCommentChars !== "number") {
+      if (typeof args.maxCommentChars !== "undefined" && !isFiniteNumber(args.maxCommentChars)) {
         return "observe_dom.maxCommentChars must be number";
       }
       if (typeof args.rootHandleId !== "undefined" && typeof args.rootHandleId !== "string") {
@@ -97,13 +123,13 @@
     }
 
     if (toolCall.name === "browser.click") {
-      if (!hasOnlyKeys(["handleId"])) {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
         return "click has unknown arguments";
       }
       return typeof args.handleId === "string" && args.handleId ? null : "click.handleId required";
     }
     if (toolCall.name === "browser.type") {
-      if (!hasOnlyKeys(["handleId", "text"])) {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
         return "type has unknown arguments";
       }
       if (typeof args.handleId !== "string" || !args.handleId) {
@@ -115,7 +141,7 @@
       return null;
     }
     if (toolCall.name === "browser.select") {
-      if (!hasOnlyKeys(["handleId", "value"])) {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
         return "select has unknown arguments";
       }
       if (typeof args.handleId !== "string" || !args.handleId) {
@@ -127,13 +153,13 @@
       return null;
     }
     if (toolCall.name === "browser.scroll") {
-      if (!hasOnlyKeys(["deltaY"])) {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
         return "scroll has unknown arguments";
       }
-      return typeof args.deltaY === "number" ? null : "scroll.deltaY required";
+      return isFiniteNumber(args.deltaY) ? null : "scroll.deltaY required";
     }
     if (toolCall.name === "browser.open_tab" || toolCall.name === "browser.navigate") {
-      if (!hasOnlyKeys(["url"])) {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
         return "url has unknown arguments";
       }
       return typeof args.url === "string" && args.url ? null : "url required";
@@ -142,7 +168,7 @@
       return Object.keys(args).length === 0 ? null : "no arguments allowed";
     }
     if (toolCall.name === "search") {
-      if (!hasOnlyKeys(["query", "engine", "newTab"])) {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
         return "search has unknown arguments";
       }
       if (typeof args.query !== "string" || !args.query) {
@@ -157,7 +183,7 @@
       return null;
     }
     if (toolCall.name === "app.calculate") {
-      if (!hasOnlyKeys(["expression", "precision"])) {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
         return "calculate has unknown arguments";
       }
       if (typeof args.expression !== "string" || !args.expression) {
@@ -209,8 +235,13 @@
     return { ok: true };
   }
 
+  function getToolSchemaSnapshot() {
+    return { tools: TOOL_SCHEMAS };
+  }
+
   var api = {
-    validatePlanResponse: validatePlanResponse
+    validatePlanResponse: validatePlanResponse,
+    getToolSchemaSnapshot: getToolSchemaSnapshot
   };
 
   if (typeof module !== "undefined" && module.exports) {

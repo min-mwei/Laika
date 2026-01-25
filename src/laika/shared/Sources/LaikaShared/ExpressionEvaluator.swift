@@ -23,6 +23,7 @@ public enum ExpressionError: Error, LocalizedError, Sendable {
     }
 }
 
+// Reference evaluator for tests/docs; extension background currently executes app.calculate.
 public enum ExpressionEvaluator {
     public static func evaluate(_ input: String) throws -> Double {
         var parser = Parser(input: input)

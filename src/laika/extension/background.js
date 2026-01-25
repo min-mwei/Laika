@@ -238,9 +238,13 @@ var ToolErrorCode = {
   NO_ACTIVE_TAB: "NO_ACTIVE_TAB",
   NO_TARGET_TAB: "NO_TARGET_TAB",
   NO_CONTEXT: "NO_CONTEXT",
+  TIMEOUT: "TIMEOUT",
   UNSUPPORTED_TOOL: "UNSUPPORTED_TOOL",
   OPEN_TAB_FAILED: "OPEN_TAB_FAILED",
   NAVIGATION_FAILED: "NAVIGATION_FAILED",
+  BACK_FAILED: "BACK_FAILED",
+  FORWARD_FAILED: "FORWARD_FAILED",
+  REFRESH_FAILED: "REFRESH_FAILED",
   RUNTIME_UNAVAILABLE: "RUNTIME_UNAVAILABLE",
   SEARCH_UNAVAILABLE: "SEARCH_UNAVAILABLE",
   SEARCH_FAILED: "SEARCH_FAILED"
@@ -252,6 +256,19 @@ var AUTOMATION_ALLOWED_HOSTS = {
   "localhost": true
 };
 var AUTOMATION_RUNS = {};
+var AUTOMATION_PORTS = {};
+var AUTOMATION_ENABLED_KEY = "automationEnabled";
+var AUTOMATION_ENABLED_DEFAULT = true;
+var automationEnabledCache = null;
+var automationEnabledPromise = null;
+var AUTOMATION_STORAGE_PREFIX = "laika.automation.";
+var TAB_MESSAGE_TIMEOUT_MS = 12000;
+var TAB_READY_TIMEOUT_MS = 4000;
+var TAB_SCRIPTABLE_TIMEOUT_MS = 2500;
+var TAB_INJECTION_DELAY_MS = 250;
+var TAB_PING_TIMEOUT_MS = 2000;
+var TAB_PING_TOTAL_MS = 8000;
+var CONTENT_SCRIPT_FILES = ["lib/text_utils.js", "content_script.js"];
 
 var DEFAULT_SIDECAR_SIDE = "right";
 var DEFAULT_SIDECAR_STICKY = true;
@@ -603,13 +620,283 @@ async function getActiveTab(windowId) {
   }
 }
 
+function sleep(ms) {
+  return new Promise(function (resolve) {
+    setTimeout(resolve, ms);
+  });
+}
+
+function withTimeout(promise, timeoutMs, timeoutCode) {
+  return new Promise(function (resolve, reject) {
+    var done = false;
+    var timer = setTimeout(function () {
+      if (done) {
+        return;
+      }
+      done = true;
+      var error = new Error(timeoutCode || "timeout");
+      error.code = timeoutCode || "timeout";
+      reject(error);
+    }, timeoutMs);
+    promise.then(function (result) {
+      if (done) {
+        return;
+      }
+      done = true;
+      clearTimeout(timer);
+      resolve(result);
+    }).catch(function (error) {
+      if (done) {
+        return;
+      }
+      done = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+async function waitForTabComplete(tabId, timeoutMs) {
+  if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.get || !browser.tabs.onUpdated) {
+    return false;
+  }
+  try {
+    var tab = await browser.tabs.get(tabId);
+    if (tab && tab.status === "complete") {
+      return true;
+    }
+  } catch (error) {
+    return false;
+  }
+  return new Promise(function (resolve) {
+    var done = false;
+    var timer = null;
+    function cleanup() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (browser.tabs && browser.tabs.onUpdated && browser.tabs.onUpdated.removeListener) {
+        browser.tabs.onUpdated.removeListener(handleUpdated);
+      }
+      if (browser.tabs && browser.tabs.onRemoved && browser.tabs.onRemoved.removeListener) {
+        browser.tabs.onRemoved.removeListener(handleRemoved);
+      }
+    }
+    function finish(ok) {
+      if (done) {
+        return;
+      }
+      done = true;
+      cleanup();
+      resolve(ok);
+    }
+    function handleUpdated(updatedTabId, changeInfo) {
+      if (updatedTabId !== tabId || !changeInfo || changeInfo.status !== "complete") {
+        return;
+      }
+      finish(true);
+    }
+    function handleRemoved(removedTabId) {
+      if (removedTabId === tabId) {
+        finish(false);
+      }
+    }
+    if (browser.tabs && browser.tabs.onUpdated && browser.tabs.onUpdated.addListener) {
+      browser.tabs.onUpdated.addListener(handleUpdated);
+    }
+    if (browser.tabs && browser.tabs.onRemoved && browser.tabs.onRemoved.addListener) {
+      browser.tabs.onRemoved.addListener(handleRemoved);
+    }
+    var timeoutValue = typeof timeoutMs === "number" && isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.floor(timeoutMs)
+      : TAB_READY_TIMEOUT_MS;
+    timer = setTimeout(function () {
+      finish(false);
+    }, timeoutValue);
+  });
+}
+
+async function waitForTabScriptable(tabId, timeoutMs) {
+  if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.get) {
+    return false;
+  }
+  try {
+    var tab = await browser.tabs.get(tabId);
+    if (tab && isScriptableUrl(tab.url || "")) {
+      return true;
+    }
+  } catch (error) {
+    return false;
+  }
+  if (!browser.tabs.onUpdated) {
+    return false;
+  }
+  return new Promise(function (resolve) {
+    var done = false;
+    var timer = null;
+    function cleanup() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (browser.tabs && browser.tabs.onUpdated && browser.tabs.onUpdated.removeListener) {
+        browser.tabs.onUpdated.removeListener(handleUpdated);
+      }
+      if (browser.tabs && browser.tabs.onRemoved && browser.tabs.onRemoved.removeListener) {
+        browser.tabs.onRemoved.removeListener(handleRemoved);
+      }
+    }
+    function finish(ok) {
+      if (done) {
+        return;
+      }
+      done = true;
+      cleanup();
+      resolve(ok);
+    }
+    function handleUpdated(updatedTabId, changeInfo, tab) {
+      if (updatedTabId !== tabId) {
+        return;
+      }
+      var nextUrl = "";
+      if (changeInfo && typeof changeInfo.url === "string") {
+        nextUrl = changeInfo.url;
+      } else if (tab && typeof tab.url === "string") {
+        nextUrl = tab.url;
+      }
+      if (isScriptableUrl(nextUrl)) {
+        finish(true);
+      }
+    }
+    function handleRemoved(removedTabId) {
+      if (removedTabId === tabId) {
+        finish(false);
+      }
+    }
+    browser.tabs.onUpdated.addListener(handleUpdated);
+    if (browser.tabs.onRemoved) {
+      browser.tabs.onRemoved.addListener(handleRemoved);
+    }
+    var timeoutValue = typeof timeoutMs === "number" && isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.floor(timeoutMs)
+      : TAB_SCRIPTABLE_TIMEOUT_MS;
+    timer = setTimeout(function () {
+      finish(false);
+    }, timeoutValue);
+  });
+}
+
+async function injectContentScripts(tabId) {
+  if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.get) {
+    return false;
+  }
+  var tab = null;
+  try {
+    tab = await browser.tabs.get(tabId);
+  } catch (error) {
+    return false;
+  }
+  if (!tab || !isScriptableUrl(tab.url || "")) {
+    return false;
+  }
+  try {
+    if (browser.scripting && browser.scripting.executeScript) {
+      await browser.scripting.executeScript({
+        target: { tabId: tabId },
+        files: CONTENT_SCRIPT_FILES
+      });
+    } else if (browser.tabs.executeScript) {
+      for (var i = 0; i < CONTENT_SCRIPT_FILES.length; i += 1) {
+        await browser.tabs.executeScript(tabId, { file: CONTENT_SCRIPT_FILES[i] });
+      }
+    } else {
+      return false;
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function sendTabMessageWithTimeout(tabId, payload, options) {
+  if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.sendMessage) {
+    throw new Error("no_tab_message");
+  }
+  var opts = options && typeof options === "object" ? options : {};
+  var timeoutMs = typeof opts.timeoutMs === "number" && isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+    ? Math.floor(opts.timeoutMs)
+    : TAB_MESSAGE_TIMEOUT_MS;
+  var attempts = typeof opts.attempts === "number" && isFinite(opts.attempts) && opts.attempts > 0
+    ? Math.floor(opts.attempts)
+    : 2;
+  var shouldWaitForReady = opts.waitForReady !== false;
+  var allowInject = opts.allowInject !== false;
+
+  for (var attempt = 1; attempt <= attempts; attempt += 1) {
+    if (shouldWaitForReady) {
+      await waitForTabComplete(tabId, TAB_READY_TIMEOUT_MS);
+      var scriptable = await waitForTabScriptable(tabId, TAB_SCRIPTABLE_TIMEOUT_MS);
+      if (!scriptable) {
+        var readyError = new Error("tab_not_ready");
+        readyError.code = "tab_not_ready";
+        if (attempt < attempts) {
+          await sleep(300);
+          continue;
+        }
+        throw readyError;
+      }
+    }
+    try {
+      return await withTimeout(browser.tabs.sendMessage(tabId, payload), timeoutMs, "message_timeout");
+    } catch (error) {
+      if (allowInject && attempt === 1) {
+        var injected = await injectContentScripts(tabId);
+        if (injected) {
+          await sleep(TAB_INJECTION_DELAY_MS);
+          continue;
+        }
+      }
+      if (attempt < attempts) {
+        await sleep(300);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("message_failed");
+}
+
+async function waitForContentScript(tabId) {
+  var deadline = Date.now() + TAB_PING_TOTAL_MS;
+  while (Date.now() < deadline) {
+    try {
+      var result = await sendTabMessageWithTimeout(
+        tabId,
+        { type: "laika.ping" },
+        { allowInject: true, waitForReady: true, timeoutMs: TAB_PING_TIMEOUT_MS, attempts: 1 }
+      );
+      if (result && result.status === "ok") {
+        return true;
+      }
+    } catch (error) {
+    }
+    await sleep(300);
+  }
+  return false;
+}
+
 async function handleObserve(options, sender, tabOverride) {
   var tabId = await resolveTargetTabId(sender, tabOverride);
   if (!isNumericId(tabId)) {
     return { status: "error", error: ToolErrorCode.NO_ACTIVE_TAB };
   }
   try {
-    var result = await browser.tabs.sendMessage(tabId, { type: "laika.observe", options: options || {} });
+    var result = await sendTabMessageWithTimeout(
+      tabId,
+      { type: "laika.observe", options: options || {} },
+      { allowInject: true, waitForReady: true }
+    );
     if (!result || typeof result.status === "undefined") {
       return { status: "error", error: ToolErrorCode.NO_CONTEXT };
     }
@@ -618,7 +905,7 @@ async function handleObserve(options, sender, tabOverride) {
     }
     return result;
   } catch (error) {
-    return { status: "error", error: ToolErrorCode.NO_CONTEXT };
+    return { status: "error", error: error && error.code === "message_timeout" ? ToolErrorCode.TIMEOUT : ToolErrorCode.NO_CONTEXT };
   }
 }
 
@@ -900,7 +1187,11 @@ async function sendSidecarMessage(type, sideOverride, sender, tabOverride) {
   }
   var side = sideOverride || (await getSidecarSide());
   try {
-    var result = await browser.tabs.sendMessage(tabId, { type: type, side: side });
+    var result = await sendTabMessageWithTimeout(
+      tabId,
+      { type: type, side: side },
+      { allowInject: true }
+    );
     if (result && result.status === "ok") {
       if (type === "laika.sidecar.show" || type === "laika.sidecar.hide" || type === "laika.sidecar.toggle") {
         var windowId = await getTabWindowId(tabId);
@@ -1496,7 +1787,7 @@ async function handleTool(toolName, args, sender, tabOverride) {
       await browser.tabs.goBack(tabId);
       return { status: "ok" };
     } catch (error) {
-      return { status: "error", error: ToolErrorCode.NAVIGATION_FAILED };
+      return { status: "error", error: ToolErrorCode.BACK_FAILED };
     }
   }
   if (toolName === "browser.forward") {
@@ -1507,7 +1798,7 @@ async function handleTool(toolName, args, sender, tabOverride) {
       await browser.tabs.goForward(tabId);
       return { status: "ok" };
     } catch (error) {
-      return { status: "error", error: ToolErrorCode.NAVIGATION_FAILED };
+      return { status: "error", error: ToolErrorCode.FORWARD_FAILED };
     }
   }
   if (toolName === "browser.refresh") {
@@ -1518,13 +1809,17 @@ async function handleTool(toolName, args, sender, tabOverride) {
       await browser.tabs.reload(tabId);
       return { status: "ok" };
     } catch (error) {
-      return { status: "error", error: ToolErrorCode.NAVIGATION_FAILED };
+      return { status: "error", error: ToolErrorCode.REFRESH_FAILED };
     }
   }
   try {
-    return await browser.tabs.sendMessage(tabId, { type: "laika.tool", toolName: toolName, args: args || {} });
+    return await sendTabMessageWithTimeout(
+      tabId,
+      { type: "laika.tool", toolName: toolName, args: args || {} },
+      { allowInject: true, waitForReady: true }
+    );
   } catch (error) {
-    return { status: "error", error: ToolErrorCode.NO_CONTEXT };
+    return { status: "error", error: error && error.code === "message_timeout" ? ToolErrorCode.TIMEOUT : ToolErrorCode.NO_CONTEXT };
   }
 }
 
@@ -1576,6 +1871,30 @@ function isAllowedAutomationOrigin(origin) {
   }
 }
 
+function resolveAutomationEnabled() {
+  if (automationEnabledCache !== null) {
+    return Promise.resolve(automationEnabledCache);
+  }
+  if (!browser.storage || !browser.storage.local || !browser.storage.local.get) {
+    automationEnabledCache = AUTOMATION_ENABLED_DEFAULT;
+    return Promise.resolve(automationEnabledCache);
+  }
+  if (!automationEnabledPromise) {
+    var defaults = {};
+    defaults[AUTOMATION_ENABLED_KEY] = AUTOMATION_ENABLED_DEFAULT;
+    automationEnabledPromise = browser.storage.local.get(defaults).then(function (stored) {
+      automationEnabledCache = stored[AUTOMATION_ENABLED_KEY] !== false;
+      return automationEnabledCache;
+    }).catch(function () {
+      automationEnabledCache = AUTOMATION_ENABLED_DEFAULT;
+      return automationEnabledCache;
+    }).finally(function () {
+      automationEnabledPromise = null;
+    });
+  }
+  return automationEnabledPromise;
+}
+
 function normalizeAutomationReportUrl(reportUrl, origin) {
   if (!reportUrl || typeof reportUrl !== "string") {
     return null;
@@ -1602,13 +1921,21 @@ function getAutomationRun(runId) {
 }
 
 async function resetAutomationState() {
-  if (!browser.storage || !browser.storage.local || !browser.storage.local.clear) {
+  if (!browser.storage || !browser.storage.local) {
     return { status: "error", error: "storage_unavailable" };
   }
-  try {
-    await browser.storage.local.clear();
-  } catch (error) {
-    return { status: "error", error: "storage_clear_failed" };
+  if (browser.storage.local.get && browser.storage.local.remove) {
+    try {
+      var stored = await browser.storage.local.get(null);
+      var keys = Object.keys(stored || {}).filter(function (key) {
+        return key.indexOf(AUTOMATION_STORAGE_PREFIX) === 0;
+      });
+      if (keys.length > 0) {
+        await browser.storage.local.remove(keys);
+      }
+    } catch (error) {
+      return { status: "error", error: "storage_clear_failed" };
+    }
   }
   searchSettingsCache = null;
   searchSettingsLoadPromise = null;
@@ -1630,10 +1957,35 @@ async function sendAutomationMessage(tabId, payload) {
     return false;
   }
   try {
-    await browser.tabs.sendMessage(tabId, payload);
+    await sendTabMessageWithTimeout(
+      tabId,
+      payload,
+      { allowInject: true, waitForReady: false, timeoutMs: 4000, attempts: 1 }
+    );
     return true;
   } catch (error) {
     return false;
+  }
+}
+
+async function cleanupAutomationTabs(runState) {
+  if (!runState || !browser.tabs || !browser.tabs.remove) {
+    return;
+  }
+  var openedTabs = runState.openedTabs || {};
+  var ids = Object.keys(openedTabs).map(function (key) {
+    return parseInt(key, 10);
+  }).filter(function (id) {
+    return isNumericId(id) && id !== runState.reportTabId;
+  });
+  if (!ids.length) {
+    return;
+  }
+  for (var i = 0; i < ids.length; i += 1) {
+    try {
+      await browser.tabs.remove(ids[i]);
+    } catch (error) {
+    }
   }
 }
 
@@ -1656,9 +2008,13 @@ async function postAutomationReport(reportUrl, payload) {
 async function deliverAutomationResult(runState, payload, kind) {
   var delivered = await sendAutomationMessage(runState.reportTabId, payload);
   if (delivered) {
+    await cleanupAutomationTabs(runState);
+    delete AUTOMATION_RUNS[runState.runId];
     return;
   }
   if (!runState.reportUrl) {
+    await cleanupAutomationTabs(runState);
+    delete AUTOMATION_RUNS[runState.runId];
     return;
   }
   var reportPayload = {
@@ -1671,6 +2027,8 @@ async function deliverAutomationResult(runState, payload, kind) {
     reportPayload.error = payload.error;
   }
   await postAutomationReport(runState.reportUrl, reportPayload);
+  await cleanupAutomationTabs(runState);
+  delete AUTOMATION_RUNS[runState.runId];
 }
 
 async function resolveAutomationTargetTabId(targetUrl, sender) {
@@ -1691,11 +2049,15 @@ async function startAutomationRun(message, sender) {
   if (!sender || !sender.tab || !isNumericId(sender.tab.id)) {
     return { status: "error", error: "no_sender_tab" };
   }
-  var origin = message.origin || (sender.url ? sender.url.split("#")[0] : "");
+  var origin = sender.url ? sender.url.split("#")[0] : (message.origin || "");
   try {
     origin = new URL(origin).origin;
   } catch (error) {
-    origin = message.origin || "";
+    origin = sender.url ? sender.url.split("#")[0] : (message.origin || "");
+  }
+  var automationEnabled = await resolveAutomationEnabled();
+  if (!automationEnabled) {
+    return { status: "error", error: "automation_disabled" };
   }
   if (!isAllowedAutomationOrigin(origin)) {
     return { status: "error", error: "origin_not_allowed" };
@@ -1719,8 +2081,12 @@ async function startAutomationRun(message, sender) {
     }
   }
   var runId = message.runId && typeof message.runId === "string" ? message.runId : AgentRunner.generateRunId();
-  if (getAutomationRun(runId)) {
-    return { status: "error", error: "run_exists", runId: runId };
+  var existingRun = getAutomationRun(runId);
+  if (existingRun) {
+    if (!existingRun.status || (existingRun.status !== "completed" && existingRun.status !== "error")) {
+      return { status: "ok", runId: runId };
+    }
+    delete AUTOMATION_RUNS[runId];
   }
 
   var runState = {
@@ -1729,9 +2095,22 @@ async function startAutomationRun(message, sender) {
     startedAt: Date.now(),
     reportTabId: sender.tab.id,
     reportUrl: reportUrl,
-    cancelRequested: false
+    cancelRequested: false,
+    openedTabs: {}
   };
   AUTOMATION_RUNS[runId] = runState;
+  function recordAutomationTab(tabId) {
+    if (!isNumericId(tabId) || tabId === runState.reportTabId) {
+      return;
+    }
+    runState.openedTabs[String(tabId)] = true;
+  }
+  var runTimeoutMs = null;
+  if (message.options && typeof message.options.runTimeoutMs === "number" && isFinite(message.options.runTimeoutMs)) {
+    if (message.options.runTimeoutMs > 0) {
+      runTimeoutMs = Math.floor(message.options.runTimeoutMs);
+    }
+  }
 
   var targetTabId = null;
   if (message.targetUrl) {
@@ -1740,6 +2119,12 @@ async function startAutomationRun(message, sender) {
       runState.status = "error";
       return { status: "error", error: "target_tab_failed" };
     }
+    recordAutomationTab(targetTabId);
+    await waitForContentScript(targetTabId);
+  }
+  var initialObserveSettings = null;
+  if (targetTabId) {
+    initialObserveSettings = { attempts: 14, delayMs: 350, initialDelayMs: 700 };
   }
 
   var ownerWindowId = resolveOwnerWindowId(sender, null);
@@ -1748,7 +2133,14 @@ async function startAutomationRun(message, sender) {
       return handleObserve(options, sender, tabId);
     },
     runTool: function (action, tabId) {
-      return handleTool(action.toolCall.name, action.toolCall.arguments || {}, sender, tabId);
+      return handleTool(action.toolCall.name, action.toolCall.arguments || {}, sender, tabId).then(function (result) {
+        if (action && action.toolCall && (action.toolCall.name === "browser.open_tab" || action.toolCall.name === "search")) {
+          if (result && typeof result.tabId === "number") {
+            recordAutomationTab(result.tabId);
+          }
+        }
+        return result;
+      });
     },
     listTabs: function () {
       return listTabsForWindow(ownerWindowId);
@@ -1783,18 +2175,38 @@ async function startAutomationRun(message, sender) {
     }
   };
 
-  AgentRunner.runAutomationGoals({
+  var runPromise = AgentRunner.runAutomationGoals({
     runId: runId,
     goals: goals,
     maxSteps: message.options && message.options.maxSteps,
     autoApprove: message.options && typeof message.options.autoApprove === "boolean" ? message.options.autoApprove : true,
     observeOptions: message.options && message.options.observeOptions,
+    initialObserveSettings: message.options && message.options.initialObserveSettings
+      ? message.options.initialObserveSettings
+      : initialObserveSettings,
     detail: message.options && !!message.options.detail,
     maxTokens: message.options && message.options.maxTokens,
+    planTimeoutMs: message.options && message.options.planTimeoutMs,
     tabId: targetTabId,
     nativeAppId: NATIVE_APP_ID,
     deps: deps
-  }).then(function (result) {
+  });
+  if (runTimeoutMs) {
+    var basePromise = runPromise;
+    runPromise = new Promise(function (resolve, reject) {
+      var timeoutId = setTimeout(function () {
+        reject(new Error("run_timeout"));
+      }, runTimeoutMs);
+      basePromise.then(function (result) {
+        clearTimeout(timeoutId);
+        resolve(result);
+      }).catch(function (error) {
+        clearTimeout(timeoutId);
+        reject(error);
+      });
+    });
+  }
+  runPromise.then(function (result) {
     runState.status = "completed";
     runState.completedAt = Date.now();
     runState.result = result;
@@ -1808,11 +2220,17 @@ async function startAutomationRun(message, sender) {
     runState.status = "error";
     runState.completedAt = Date.now();
     runState.error = String(error && error.message ? error.message : error);
+    if (error && error.details) {
+      runState.errorDetails = error.details;
+    }
     var payload = {
       type: "laika.automation.error",
       runId: runId,
       error: runState.error
     };
+    if (runState.errorDetails) {
+      payload.errorDetails = runState.errorDetails;
+    }
     deliverAutomationResult(runState, payload, "error");
   });
 
@@ -1899,18 +2317,46 @@ browser.runtime.onMessage.addListener(function (message, sender) {
   return Promise.resolve({ status: "error", error: "unknown_type" });
 });
 
-if (browser.storage && browser.storage.onChanged) {
-  browser.storage.onChanged.addListener(function (changes, areaName) {
-    if (areaName !== "local" || !changes) {
+function registerAutomationPort(port) {
+  if (!port || port.name !== "laika.automation") {
+    return;
+  }
+  var portKey = String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+  AUTOMATION_PORTS[portKey] = port;
+  port.onDisconnect.addListener(function () {
+    delete AUTOMATION_PORTS[portKey];
+  });
+  port.onMessage.addListener(function (message) {
+    if (!message || message.type !== "laika.automation.ping") {
       return;
     }
-    if (changes[SEARCH_SETTINGS_KEY]) {
-      searchSettingsCache = null;
-      searchSettingsLoadPromise = null;
-      logSearch("settings_invalidated", { source: "storage_change" });
+    try {
+      port.postMessage({ type: "laika.automation.pong", at: new Date().toISOString() });
+    } catch (error) {
     }
   });
 }
+
+if (browser.runtime && browser.runtime.onConnect) {
+  browser.runtime.onConnect.addListener(registerAutomationPort);
+}
+
+  if (browser.storage && browser.storage.onChanged) {
+    browser.storage.onChanged.addListener(function (changes, areaName) {
+      if (areaName !== "local" || !changes) {
+        return;
+      }
+      if (changes[SEARCH_SETTINGS_KEY]) {
+        searchSettingsCache = null;
+        searchSettingsLoadPromise = null;
+        logSearch("settings_invalidated", { source: "storage_change" });
+      }
+      if (changes[AUTOMATION_ENABLED_KEY]) {
+        automationEnabledCache = null;
+        automationEnabledPromise = null;
+      }
+    });
+  }
 
 registerActionClick();
 loadSidecarState();

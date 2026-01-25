@@ -74,6 +74,40 @@ test("validatePlanResponse rejects observe_dom with unknown args", () => {
   assert.equal(result.ok, false);
 });
 
+test("validatePlanResponse rejects observe_dom with non-finite numbers", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "browser.observe_dom",
+          arguments: { maxChars: NaN }
+        },
+        policy: { decision: "allow", reasonCode: "observe_allowed" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, false);
+});
+
+test("validatePlanResponse rejects scroll with non-finite delta", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "browser.scroll",
+          arguments: { deltaY: Infinity }
+        },
+        policy: { decision: "allow", reasonCode: "scroll_allowed" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, false);
+});
+
 test("validatePlanResponse accepts search action", () => {
   const payload = {
     actions: [

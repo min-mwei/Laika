@@ -1,6 +1,13 @@
 (function () {
   "use strict";
 
+  if (typeof window !== "undefined") {
+    if (window.__LAIKA_CONTENT_SCRIPT__) {
+      return;
+    }
+    window.__LAIKA_CONTENT_SCRIPT__ = true;
+  }
+
   var utils = window.LaikaTextUtils || {
     normalizeWhitespace: function (text) {
       return String(text || "").replace(/\s+/g, " ").trim();
@@ -43,6 +50,10 @@
   var documentId = null;
   var navGeneration = 0;
   var navChangedAtMs = 0;
+  var lastObservedDocumentId = null;
+  var lastObservedGeneration = null;
+  var overlayCache = { generation: null, overlay: null, checkedAt: 0 };
+  var overlayCacheTtlMs = 750;
 
   function randomId(prefix) {
     var randomPart = Math.random().toString(36).slice(2, 10);
@@ -3166,11 +3177,13 @@
     }
     signals = Array.from(signalSet);
     urlRedactionCounter = null;
+    lastObservedDocumentId = documentId || null;
+    lastObservedGeneration = navGeneration;
     return {
       url: pageUrl,
       title: document.title || "",
       documentId: documentId || "",
-      navGeneration: navGeneration,
+      navigationGeneration: navGeneration,
       observedAtMs: Date.now(),
       text: text,
       elements: limited,
@@ -3235,6 +3248,12 @@
     }
     var found = document.querySelector('[data-laika-handle="' + handleId + '"]');
     if (!found) {
+      if (lastObservedDocumentId && lastObservedDocumentId !== documentId) {
+        return { element: null, error: ToolErrorCode.STALE_HANDLE };
+      }
+      if (typeof lastObservedGeneration === "number" && lastObservedGeneration !== navGeneration) {
+        return { element: null, error: ToolErrorCode.STALE_HANDLE };
+      }
       return { element: null, error: ToolErrorCode.NOT_FOUND };
     }
     handleMap.set(handleId, { element: found, generation: navGeneration, documentId: ensureDocumentId() });
@@ -3266,7 +3285,11 @@
     }
     var style = window.getComputedStyle(element);
     if (style) {
-      if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+      if (style.display === "none" || style.visibility === "hidden") {
+        return false;
+      }
+      var opacity = parseFloat(style.opacity);
+      if (!isNaN(opacity) && opacity <= 0.01) {
         return false;
       }
       if (style.pointerEvents === "none") {
@@ -3277,6 +3300,19 @@
     return rect.width > 0 && rect.height > 0;
   }
 
+  function getOverlayCandidate(root) {
+    var now = nowMs();
+    if (overlayCache.overlay &&
+        overlayCache.generation === navGeneration &&
+        (now - overlayCache.checkedAt) <= overlayCacheTtlMs &&
+        overlayCache.overlay.isConnected) {
+      return overlayCache.overlay;
+    }
+    var overlay = findOverlayCandidate(root, collectRoots(root));
+    overlayCache = { generation: navGeneration, overlay: overlay, checkedAt: now };
+    return overlay;
+  }
+
   function overlayBlocksElement(element) {
     if (!element) {
       return false;
@@ -3285,7 +3321,18 @@
     if (!root) {
       return false;
     }
-    var overlay = findOverlayCandidate(root, collectRoots(root));
+    var rect = element.getBoundingClientRect ? element.getBoundingClientRect() : null;
+    if (rect && rect.width > 0 && rect.height > 0) {
+      var centerX = rect.left + rect.width / 2;
+      var centerY = rect.top + rect.height / 2;
+      if (centerX >= 0 && centerY >= 0 && centerX <= window.innerWidth && centerY <= window.innerHeight) {
+        var hit = document.elementFromPoint(centerX, centerY);
+        if (hit && (hit === element || element.contains(hit))) {
+          return false;
+        }
+      }
+    }
+    var overlay = getOverlayCandidate(root);
     if (!overlay) {
       return false;
     }
@@ -3360,7 +3407,7 @@
         return { status: "error", error: ToolErrorCode.INVALID_ARGUMENTS };
       }
       var deltaY = args.deltaY;
-      window.scrollBy({ top: deltaY, left: 0, behavior: "smooth" });
+      window.scrollBy({ top: deltaY, left: 0, behavior: "auto" });
       return { status: "ok" };
     }
 
@@ -3413,8 +3460,92 @@
     runId: null,
     reportUrl: null,
     startPending: false,
-    startAcked: false
+    startAcked: false,
+    readySent: false,
+    port: null,
+    heartbeatTimer: null,
+    reconnectTimer: null
   };
+
+  function stopAutomationHeartbeat() {
+    if (automationState.heartbeatTimer) {
+      clearInterval(automationState.heartbeatTimer);
+      automationState.heartbeatTimer = null;
+    }
+  }
+
+  function clearAutomationReconnect() {
+    if (automationState.reconnectTimer) {
+      clearTimeout(automationState.reconnectTimer);
+      automationState.reconnectTimer = null;
+    }
+  }
+
+  function startAutomationHeartbeat() {
+    if (automationState.heartbeatTimer || !automationState.port) {
+      return;
+    }
+    automationState.heartbeatTimer = setInterval(function () {
+      if (!automationState.port) {
+        stopAutomationHeartbeat();
+        return;
+      }
+      try {
+        automationState.port.postMessage({ type: "laika.automation.ping", runId: automationState.runId });
+      } catch (error) {
+      }
+    }, 20000);
+  }
+
+  function scheduleAutomationReconnect() {
+    if (automationState.reconnectTimer || (!automationState.startPending && !automationState.startAcked)) {
+      return;
+    }
+    automationState.reconnectTimer = setTimeout(function () {
+      automationState.reconnectTimer = null;
+      if (!automationState.startPending && !automationState.startAcked) {
+        return;
+      }
+      ensureAutomationPort();
+      if (!automationState.port) {
+        scheduleAutomationReconnect();
+      }
+    }, 1000);
+  }
+
+  function ensureAutomationPort() {
+    if (automationState.port || typeof browser === "undefined" || !browser.runtime || !browser.runtime.connect) {
+      return;
+    }
+    try {
+      var port = browser.runtime.connect({ name: "laika.automation" });
+      automationState.port = port;
+      port.onDisconnect.addListener(function () {
+        automationState.port = null;
+        stopAutomationHeartbeat();
+        scheduleAutomationReconnect();
+      });
+      port.onMessage.addListener(function (message) {
+        if (!message || message.type !== "laika.automation.pong") {
+          return;
+        }
+      });
+      startAutomationHeartbeat();
+    } catch (error) {
+    }
+  }
+
+  function resetAutomationPort() {
+    clearAutomationReconnect();
+    stopAutomationHeartbeat();
+    if (automationState.port) {
+      try {
+        automationState.port.disconnect();
+      } catch (error) {
+      }
+      automationState.port = null;
+    }
+  }
 
   function isAllowedAutomationOrigin(origin) {
     if (!origin) {
@@ -3446,6 +3577,30 @@
       message.nonce = automationState.nonce;
     }
     window.postMessage(message, automationState.origin);
+  }
+
+  function announceAutomationReady() {
+    if (automationState.readySent || typeof window === "undefined" || !window.location) {
+      return;
+    }
+    var origin = window.location.origin || "";
+    if (!isAllowedAutomationOrigin(origin)) {
+      return;
+    }
+    automationState.readySent = true;
+    window.postMessage({ type: "laika.automation.ready", at: new Date().toISOString() }, origin);
+  }
+
+  function scheduleAutomationReady() {
+    if (typeof document === "undefined") {
+      announceAutomationReady();
+      return;
+    }
+    if (document.readyState === "complete" || document.readyState === "interactive") {
+      announceAutomationReady();
+      return;
+    }
+    document.addEventListener("DOMContentLoaded", announceAutomationReady);
   }
 
   async function sendAutomationRequest(payload) {
@@ -3487,6 +3642,7 @@
       automationState.startAcked = false;
       automationState.reportUrl = reportUrl;
       setAutomationState(event.origin, nonce, runId, reportUrl);
+      ensureAutomationPort();
       sendAutomationRequest({
         type: "laika.automation.start",
         runId: runId,
@@ -3500,6 +3656,7 @@
       }).then(function (response) {
         automationState.startPending = false;
         if (!response || response.status !== "ok") {
+          resetAutomationPort();
           postAutomationMessage({ type: "laika.automation.error", runId: runId, error: (response && response.error) || "start_failed" });
           return;
         }
@@ -3539,10 +3696,19 @@
       if (!message || !message.type) {
         return Promise.resolve({ status: "error", error: "invalid_message" });
       }
+      if (message.type === "laika.ping") {
+        return Promise.resolve({ status: "ok" });
+      }
       if (message.type === "laika.automation.progress" ||
           message.type === "laika.automation.result" ||
           message.type === "laika.automation.error" ||
           message.type === "laika.automation.status") {
+        if (message.type === "laika.automation.result" ||
+            (message.type === "laika.automation.error" && automationState.startAcked)) {
+          automationState.startPending = false;
+          automationState.startAcked = false;
+          resetAutomationPort();
+        }
         postAutomationMessage(message);
         return Promise.resolve({ status: "ok" });
       }
@@ -3564,6 +3730,8 @@
       return Promise.resolve({ status: "error", error: "unknown_type" });
     });
   }
+
+  scheduleAutomationReady();
 
   if (typeof window !== "undefined" && window.__LAIKA_HARNESS__) {
     if (!window.LaikaHarness) {

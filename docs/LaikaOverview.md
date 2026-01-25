@@ -1,16 +1,18 @@
-# Laika: Secure AI Agent Embedded in Safari (AIBrowser Design Doc)
+# Laika Overview: AI Fortress Embedded in Safari (Design Doc)
 
-Laika is a macOS Safari extension + companion app that embeds a **secure AI agent** in Safari, turning intent into safe actions inside your existing browsing sessions. Safari still talks directly to websites; Laika keeps agent decisioning and safety filtering on-device by default. If you opt into BYO cloud models (OpenAI/Anthropic), Laika sends only redacted context packs—never cookies or session tokens—and keeps Policy Gate enforcement local.
+Laika is an **AI Fortress**: a secure, privacy-first AI agent embedded in your web browser. It starts in **Safari (macOS + iOS)**, with **Chrome (Android)** planned later. Laika understands your intent, does the work, and keeps it private: Safari still talks directly to websites, while Laika keeps agent decisioning + safety filtering on-device by default. If you opt into BYO cloud models (OpenAI/Anthropic), Laika sends only redacted context packs—never cookies or session tokens—and keeps Policy Gate enforcement local.
 
 **What “on-device by default” means**
 
 - Safari talks directly to websites; Laika does not proxy your browsing through a cloud browser.
-- Your live session state (cookies/session tokens) and typed secrets stay on your Mac; Laika doesn’t upload your session to a cloud browser or model provider by default.
+- Your live session state (cookies/session tokens) and typed secrets stay on your device; Laika doesn’t upload your session to a cloud browser or model provider by default.
 - If you enable BYO cloud models, Laika sends only a **redacted context pack** (never cookies/session tokens) and keeps Policy Gate enforcement local.
 
 ## Status
 
 This is a design draft for an MVP. It focuses on security posture, system boundaries, and contracts. Specific implementation details (exact Safari APIs, storage schema, model selection) should be validated with prototypes.
+
+Platform note: the current prototype targets **Safari on macOS** (extension + native components). iOS Safari is a first-class target for the same architecture and constraints; Chrome/Android is planned later.
 
 Prototype UI note: the current build renders an attached, in-page **sidecar panel** inside the active tab, toggled by the toolbar icon. The sidecar is scoped per Safari window and, by default, stays open as you switch tabs within that window on the right; the open/closed state is persisted in extension storage. Settings live in Safari → Settings → Extensions → Laika, where you can switch between sticky/per-tab behavior and left/right placement. If the active tab can’t be scripted, the toolbar opens the same UI as a standalone panel window. Plan requests include a sanitized summary of open tabs in the current window (title + origin only, no query/hash) so the agent can reason about multi-tab context without gaining cross-tab access. References to a “popover” below should be read as “sidecar UI” for the prototype.
 
@@ -31,14 +33,14 @@ Next steps (prototype checklist):
 ## At a glance
 
 - Two execution surfaces: `Isolated` (default) + `My Browser` Connector (explicit opt-in)
-- On-device decisioning (default): planning + safety filtering run on your Mac; optional BYO OpenAI/Anthropic via redacted context packs
+- On-device decisioning (default): planning + safety filtering run locally; optional BYO OpenAI/Anthropic via redacted context packs
 - No cloud browser: automation executes locally (Safari tabs or local Isolated WKWebView); cloud inference is optional and uses redacted context packs
 - Compute placement: **prototype** runs inference in the Safari extension handler (Swift); **target** moves inference to a sandboxed app/XPC worker while the extension stays thin (observe/act + UI + routing)
 - Security moat: tool-only contract + Policy Gate + capability tokens + injection hardening
 - Resumable automation: append-only SQLite run log; pause/resume; no surprise replays
 - Context management: SQLite context store + checkpoints; no general RAG/vector DB
 
-## Why AIBrowser
+## Why AI Fortress
 
 - Websites are interactive workflows: answers are buried behind navigation, filters, pagination, and multi-step forms.
 - The most valuable work happens inside authenticated sessions (research tools, CRMs, finance portals) where you can’t safely “just paste everything into a chatbot”.
@@ -51,7 +53,7 @@ Cloud-executed browsers can be useful, but they are harder to secure and harder 
 
 Laika’s stance is “privacy by architecture”:
 
-- **No cloud browser**: automation executes locally in Safari (or the local Isolated surface), so your trusted sessions and IP stay on your Mac.
+- **No cloud browser**: automation executes locally in Safari (or the local Isolated surface), so your trusted sessions and IP stay on your device.
 - **Cloud models are optional BYO**: when enabled, Laika sends only redacted context packs and never sends cookies/session tokens.
 - **Security is visible in the UX**: Policy Gate reason codes, action previews, retention/redaction defaults, and “what gets sent” summaries are first-class UI.
 
@@ -78,8 +80,8 @@ Laika’s stance is “privacy by architecture”:
 
 ## Terminology (quick glossary)
 
-- **Laika**: the macOS app + Safari extension product.
-- **AIBrowser**: the “agentic browser” capability inside Laika (observe + assist + autopilot).
+- **Laika**: the product (Safari extension + native components; Safari macOS+iOS first, Chrome/Android later).
+- **AI Fortress**: the “agentic browsing” capability inside Laika (observe + assist + autopilot), built around privacy boundaries and a local policy gate.
 - **Agent Orchestrator**: Swift component that runs the plan/execute loop.
 - **Agent Core**: the Swift-side “engine” (Policy Gate + Orchestrator + Storage + Models) that is the source of truth and performs all privileged work (GPU inference, file parsing, encryption).
 - **Tool Router**: Swift component that dispatches validated tool calls to JS/native implementations.
@@ -98,18 +100,22 @@ Laika’s stance is “privacy by architecture”:
 
 ## Example Use Cases
 
-1. **Housing analysis (Zillow / Redfin / listings)**
-   - Compare properties, extract structured attributes, compute tradeoffs, and keep a watchlist.
-2. **Company analysis (SEC/EDGAR)**
-   - Pull filings, summarize risk factors, extract key financial tables, compare quarter-over-quarter changes.
-3. **Medical research**
-   - Search literature, extract evidence with citations, track inclusion/exclusion criteria, and build summaries.
-4. **GitHub code browsing & reading**
-   - Navigate repos, answer questions with file-level grounding, track call graphs, summarize PRs/issues.
-5. **Banking balance analysis**
-   - Read balances and statements, reconcile across accounts, flag anomalies (read-only by default).
-6. **Credit card transaction analysis**
-   - Categorize transactions locally, spot subscriptions, detect duplicates/fraud indicators, produce reports.
+1. **Shopping with constraints (compare + stop at final checkout review)**
+   - Compare total cost (tax/shipping/fees/warranty), extract return/refund terms, and stop before placing the order.
+2. **Subscriptions + refunds (cancel safely)**
+   - Find cancellation paths and renewal dates, cite the exact terms, draft a refund request, and stop before any irreversible submission.
+3. **Trip planning**
+   - Price options, build a shareable itinerary with links, and keep a "what to verify" checklist; ask before booking.
+4. **Medical research (cited brief)**
+   - Search credible sources, extract evidence with citations, and produce a one-page brief + question list.
+5. **Insurance claims (denial -> appeal packet)**
+   - Extract denial reasons, cite policy language, draft an appeal letter, and generate an attachment checklist.
+6. **Banking + credit cards (analysis + dispute packet)**
+   - Reconcile statements, flag anomalies (read-only by default), and create dispute-ready packets with redaction.
+7. **Government + identity forms**
+   - Find requirements, build a checklist, help fill forms up to final review, and stop before submission.
+8. **Vendor due diligence**
+   - Build a trust-center dossier (security/privacy posture) and draft a decision memo with verification questions.
 
 ## Functional Requirements
 
@@ -295,7 +301,7 @@ Summarization data path (current prototype):
 Many workflows don’t need your logged-in sessions; some absolutely do. Laika supports two execution surfaces (“two browsers, one unified experience”):
 
 - **Isolated surface (default)**: an app-owned, sandboxed browsing surface (e.g., WKWebView) with a separate cookie jar and no access to your Safari sessions. Use this for research/extraction and low-risk navigation to reduce account risk.
-- **My Browser surface (explicit opt-in; “Connector”)**: Laika operates inside Safari tabs using your trusted local sessions. This is the “local advantage”: actions come from your Mac’s trusted Safari session and IP, which reduces CAPTCHAs, suspicious “new device” prompts, and re-auth friction on premium/authenticated tools (CRMs, paid research platforms, etc.).
+- **My Browser surface (explicit opt-in; “Connector”)**: Laika operates inside Safari tabs using your trusted local sessions. This is the “local advantage”: actions come from your device’s trusted Safari session and IP, which reduces CAPTCHAs, suspicious “new device” prompts, and re-auth friction on premium/authenticated tools (CRMs, paid research platforms, etc.).
 - **Surface selection**: default to `Isolated`, and escalate to `My Browser` only when the workflow truly needs authenticated access or user-specific state.
 
 When a task requests “My Browser”, Laika should:
@@ -507,7 +513,7 @@ Cross-site carry should be explicit, reviewable, and reversible:
 
 ## Remote Start & Monitoring (optional; roadmap)
 
-Remote start/monitor is a headline use case for modern “browser agent” products: your Mac keeps the trusted local session/IP, while you initiate, watch, and intervene from another device.
+Remote start/monitor is a headline use case for modern “browser agent” products: your primary device keeps the trusted local session/IP, while you initiate, watch, and intervene from another device.
 
 Design constraints (security-first):
 

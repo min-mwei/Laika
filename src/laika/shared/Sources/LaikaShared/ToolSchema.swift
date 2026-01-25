@@ -105,8 +105,8 @@ public enum ToolSchemaValidator {
         switch (value, expected) {
         case (.string, .string):
             return true
-        case (.number, .number):
-            return true
+        case let (.number(number), .number):
+            return number.isFinite
         case (.bool, .bool):
             return true
         default:

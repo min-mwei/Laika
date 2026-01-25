@@ -60,7 +60,7 @@ By default the build script installs to `~/Applications` so Safari can see the e
 
 Follow this loop for any change:
 
-1. Update the relevant design doc (`src/laika/PLAN.md` or `docs/AIBrowser.md`).
+1. Update the relevant design doc (`src/laika/PLAN.md` or `docs/LaikaOverview.md`).
 2. Implement and run local tests.
 3. Run the automation harness scenarios.
 4. Verify the build + logging, then ask for manual Safari testing.

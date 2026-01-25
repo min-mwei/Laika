@@ -142,10 +142,46 @@
     });
   }
 
+  function withTimeout(promise, timeoutMs, timeoutCode) {
+    return new Promise(function (resolve, reject) {
+      var done = false;
+      var timer = setTimeout(function () {
+        if (done) {
+          return;
+        }
+        done = true;
+        var error = new Error(timeoutCode || "timeout");
+        error.code = timeoutCode || "timeout";
+        reject(error);
+      }, timeoutMs);
+      promise.then(function (result) {
+        if (done) {
+          return;
+        }
+        done = true;
+        clearTimeout(timer);
+        resolve(result);
+      }).catch(function (error) {
+        if (done) {
+          return;
+        }
+        done = true;
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+  }
+
+  var DEFAULT_NATIVE_TIMEOUT_MS = 30000;
+
   async function observeWithRetries(observeFn, options, tabId, settings) {
     var attempts = 5;
     var delayMs = 250;
     var initialDelayMs = 0;
+    var lastStatus = null;
+    var lastError = null;
+    var lastObservationSummary = null;
+    var lastTabId = null;
     if (settings && typeof settings === "object") {
       if (typeof settings.attempts === "number" && isFinite(settings.attempts) && settings.attempts > 0) {
         attempts = Math.floor(settings.attempts);
@@ -162,6 +198,14 @@
     }
     for (var i = 0; i < attempts; i += 1) {
       var result = await observeFn(options || DEFAULT_OBSERVE_OPTIONS, tabId);
+      if (result && typeof result.tabId === "number") {
+        lastTabId = result.tabId;
+      }
+      lastStatus = result && typeof result.status === "string" ? result.status : null;
+      lastError = result && result.error ? result.error : lastError;
+      if (result && result.observation) {
+        lastObservationSummary = summarizeObservation(result.observation);
+      }
       if (result && result.status === "ok" && result.observation && !isObservationEmpty(result.observation)) {
         return {
           observation: result.observation,
@@ -170,7 +214,15 @@
       }
       await sleep(delayMs);
     }
-    throw new Error("observe_failed");
+    var error = new Error("observe_failed");
+    error.details = {
+      attempts: attempts,
+      lastStatus: lastStatus,
+      lastError: lastError,
+      lastObservation: lastObservationSummary,
+      lastTabId: lastTabId
+    };
+    throw error;
   }
 
   function buildToolResult(toolCall, toolName, rawResult) {
@@ -199,8 +251,12 @@
       if (rawResult.observation.documentId) {
         payload.documentId = rawResult.observation.documentId;
       }
-      if (typeof rawResult.observation.navGeneration === "number") {
-        payload.navGeneration = rawResult.observation.navGeneration;
+      var navigationGeneration = rawResult.observation.navigationGeneration;
+      if (typeof navigationGeneration !== "number") {
+        navigationGeneration = rawResult.observation.navGeneration;
+      }
+      if (typeof navigationGeneration === "number") {
+        payload.navigationGeneration = navigationGeneration;
       }
       if (typeof rawResult.observation.observedAtMs === "number") {
         payload.observedAtMs = rawResult.observation.observedAtMs;
@@ -265,21 +321,28 @@
     };
   }
 
-  async function sendNativeMessage(payload, nativeAppId) {
+  async function sendNativeMessage(payload, nativeAppId, timeoutMs) {
     if (typeof browser === "undefined" || !browser.runtime || !browser.runtime.sendNativeMessage) {
       throw new Error("native_messaging_unavailable");
     }
-    try {
-      return await browser.runtime.sendNativeMessage(payload);
-    } catch (error) {
-      if (!nativeAppId) {
-        throw error;
-      }
-      return await browser.runtime.sendNativeMessage(nativeAppId, payload);
+    var resolvedTimeout = DEFAULT_NATIVE_TIMEOUT_MS;
+    if (typeof timeoutMs === "number" && isFinite(timeoutMs) && timeoutMs > 0) {
+      resolvedTimeout = Math.floor(timeoutMs);
     }
+    var sendPromise = (async function () {
+      try {
+        return await browser.runtime.sendNativeMessage(payload);
+      } catch (error) {
+        if (!nativeAppId) {
+          throw error;
+        }
+        return await browser.runtime.sendNativeMessage(nativeAppId, payload);
+      }
+    })();
+    return await withTimeout(sendPromise, resolvedTimeout, "native_timeout");
   }
 
-  async function requestPlan(goal, context, maxTokens, nativeAppId) {
+  async function requestPlan(goal, context, maxTokens, nativeAppId, timeoutMs) {
     var origin = "";
     try {
       origin = new URL(context.observation.url).origin;
@@ -304,7 +367,7 @@
         }
       }
     };
-    return await sendNativeMessage(payload, nativeAppId);
+    return await sendNativeMessage(payload, nativeAppId, timeoutMs);
   }
 
   function generateRunId() {
@@ -356,6 +419,9 @@
     var onStatus = typeof deps.onStatus === "function" ? deps.onStatus : null;
     var shouldCancel = typeof deps.shouldCancel === "function" ? deps.shouldCancel : null;
     var maxTokens = config.maxTokens;
+    var planTimeoutMs = typeof config.planTimeoutMs === "number" && isFinite(config.planTimeoutMs) && config.planTimeoutMs > 0
+      ? Math.floor(config.planTimeoutMs)
+      : null;
 
     var tabsContext = listTabsFn ? await listTabsFn() : [];
     var tabIdForPlan = typeof config.tabId === "number" ? config.tabId : null;
@@ -402,7 +468,7 @@
           recentToolResults: recentToolResults.slice(-8),
           tabs: tabsContext
         };
-        var response = await requestPlanFn(goal, context, maxTokens, config.nativeAppId);
+        var response = await requestPlanFn(goal, context, maxTokens, config.nativeAppId, planTimeoutMs);
         if (!response || response.ok !== true) {
           throw new Error("plan_failed");
         }

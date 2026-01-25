@@ -17,7 +17,7 @@ Purpose: implement `docs/laika_vocabulary.md` by finishing a small, robust primi
 - Strict validation in the LLMCP parser; reject unknown tools and extra keys.
 - Standardize tool execution result shape across JS/Swift:
   - ok: `{status:"ok", ...}`
-- error: `{status:"error", error:"<UPPER_SNAKE_CASE_CODE>", ...}`
+  - error: `{status:"error", error:"<UPPER_SNAKE_CASE_CODE>", ...}`
 - Define canonical `signals` and tool `error` codes as shared, versioned enums and enforce them at boundaries (Swift <-> JS) and in docs.
 
 2) `browser.observe_dom` foundations
@@ -32,9 +32,9 @@ Purpose: implement `docs/laika_vocabulary.md` by finishing a small, robust primi
 - Enforce budgets and redaction; never emit raw HTML.
 
 3) Handle semantics + staleness
-- Bind `handleId` to document + nav generation; invalidate on navigation/refresh.
+- Bind `handleId` to document + navigation generation; invalidate on navigation/refresh.
 - Maintain a handle store with role/label hints for resolution.
-- Return stable errors (`stale_handle`, `not_found`, `not_interactable`, `disabled`, `blocked_by_overlay`).
+- Return stable errors (`STALE_HANDLE`, `NOT_FOUND`, `NOT_INTERACTABLE`, `DISABLED`, `BLOCKED_BY_OVERLAY`).
 
 4) DOM action primitives
 - Precondition checks (visible, enabled, correct role/type).

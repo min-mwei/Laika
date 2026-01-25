@@ -11,8 +11,8 @@ Internal Laika docs (tool contract + flows):
 - docs/automation.md
 - src/laika/automation_harness/scripts/scenarios/hn.json
 
-0) AIBrowser interaction patterns + safety posture
-- docs/AIBrowser.md
+0) AI Fortress interaction patterns + safety posture
+- docs/LaikaOverview.md
 
 1) Playwright Actions docs (text input, checkboxes/radios, select options, clicks)
 - https://playwright.dev/docs/input

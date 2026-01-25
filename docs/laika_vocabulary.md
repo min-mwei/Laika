@@ -6,7 +6,7 @@ Users should write normal prompts. Laika may translate that intent into one or m
 
 `Summarize(Entity), Find(Topic, Entity), Search(Query), Share(Artifact), Investigate(Topic, Entity), Create(Artifact), Price(Artifact), Buy(Artifact), Save(Artifact), Invoke(API), Calculate(Expression), Dossier(Topic, Entity)`.
 
-For end-user scenarios and positioning, see `docs/laika_pitch.md`.
+For end-user scenarios and positioning, see `docs/Laika_pitch.md`.
 
 Laika uses a two-layer model:
 
@@ -28,8 +28,8 @@ This doc focuses on the internal layer: a set of verbs that map well to how peop
 
 If you are interested in the underlying tool execution and safety model, see:
 
-- `docs/laika_pitch.md` (product narrative and examples)
-- `docs/AIBrowser.md` (security, permissions, audit, artifacts)
+- `docs/Laika_pitch.md` (product narrative and examples)
+- `docs/LaikaOverview.md` (security, permissions, audit, artifacts)
 - `docs/llm_context_protocol.md` (JSON context protocol and safe rendering contract)
 - `docs/QWen3.md` (Qwen3 programming notes: thinking control, tool calling, deployment)
 
@@ -90,7 +90,7 @@ Notes:
 - `handleId` values must come from the current observation.
 - There is no legacy `content.summarize` or Markdown summary path; summaries are returned as `assistant.render` Documents (the "Summarize" verb is high-level intent, not a tool).
 - Tool schemas live in `docs/llm_context_protocol.md`.
-- Tool schemas are the source of truth; section 4.4 summarizes the browser tool catalog and documents reliability/safety rules (and `docs/AIBrowser.md` goes deeper on `browser.observe_dom`).
+- Tool schemas are the source of truth; section 4.4 summarizes the browser tool catalog and documents reliability/safety rules (and `docs/LaikaOverview.md` goes deeper on `browser.observe_dom`).
 - Primitive error codes and observation `signals` are part of the interface. Treat them as versioned, stable enums with a single source of truth shared across Swift + JS + docs.
 
 ---
@@ -811,7 +811,7 @@ Low-level primitives should be intentionally boring: small, deterministic, and s
   - `comments`: discussion threads (often outside the primary root).
   - `elements`: interactive controls (role + label + handleId) for safe actioning.
   - `signals`: access/visibility hints (paywall/login/overlay/captcha/sparse_text/virtualized_list/etc).
-- Include observation metadata in every result (at minimum: `documentId`, `navigationGeneration`, and `observedAtMs`). Handle validity should be tied to this metadata.
+- Include observation metadata in every result (at minimum: `documentId`, `navigationGeneration`, and `observedAtMs`). Handle validity should be tied to this metadata. (Legacy `navGeneration` is accepted during the transition.)
 - Be aggressively budgeted:
   - Clamp counts and chars (`maxChars`, `maxItems`, `maxBlocks`, ...).
   - Prefer viewport-first extraction; include “tail” coverage only if budget remains.
@@ -828,10 +828,10 @@ Low-level primitives should be intentionally boring: small, deterministic, and s
 
 Handles + staleness (cross-cutting):
 
-- Bind handles to a specific (`documentId`, `navigationGeneration`) and invalidate them on navigation/refresh. If the current page metadata does not match, return `stale_handle` and require a fresh `browser.observe_dom`.
+- Bind handles to a specific (`documentId`, `navigationGeneration`) and invalidate them on navigation/refresh. If the current page metadata does not match, return `STALE_HANDLE` and require a fresh `browser.observe_dom`.
 - Make handle resolution resilient:
   - Keep an internal handle store (handleId -> element reference + fallback selectors/role/label hints).
-  - If resolution fails, return a stable `stale_handle` / `not_found` error and force a fresh `browser.observe_dom`.
+  - If resolution fails, return a stable `STALE_HANDLE` / `NOT_FOUND` error and force a fresh `browser.observe_dom`.
 
 DOM action primitives (`browser.click`, `browser.type`, `browser.select`, `browser.scroll`):
 
@@ -839,25 +839,26 @@ DOM action primitives (`browser.click`, `browser.type`, `browser.select`, `brows
   - Precondition checks: element exists, is connected, is visible/disabled state, is the expected role/type.
   - Perform the action (scroll into view if needed).
   - Postcondition strategy: don’t guess; re-`browser.observe_dom` and let the planner decide next.
-- Keep error codes stable and meaningful (`not_found`, `stale_handle`, `not_interactable`, `blocked_by_overlay`, ...). Models learn the retry strategy from these.
+- Keep overlay detection lightweight (cheap hit test first, cache overlay candidate briefly) to avoid repeated deep scans on large pages.
+- Use instant scrolling (`behavior: "auto"`) for deterministic automation; avoid smooth scrolling for tool execution.
+- Keep error codes stable and meaningful (`NOT_FOUND`, `STALE_HANDLE`, `NOT_INTERACTABLE`, `BLOCKED_BY_OVERLAY`, ...). Models learn the retry strategy from these.
 
 Canonical primitive error codes (v1):
 
 - Tool execution results should use a stable shape: `{ "status": "ok" }` or `{ "status": "error", "error": "<code>" }`.
 - Treat `error` codes as a versioned enum (shared across Swift + JS) so the orchestration layer can respond deterministically.
-- Use lower_snake_case strings for codes (matches the extension tool surface and avoids casing drift).
+- Use UPPER_SNAKE_CASE strings for codes (matches the extension/tool surface and avoids casing drift).
 
 Common codes (v1):
 
-- `invalid_arguments`
-- `missing_url`, `invalid_url`, `missing_query`, `missing_template`
-- `no_active_tab`, `no_target_tab`, `tabs_unavailable`, `no_context`
-- `unsupported_tool`
-- `stale_handle`, `not_found`, `not_interactable`, `disabled`, `blocked_by_overlay`
-- `not_editable`, `not_select`, `missing_value`
-- `search_unavailable`, `search_failed`
-- `open_tab_failed`, `navigate_failed`, `back_failed`, `forward_failed`, `refresh_failed`
-- `permission_denied`, `rate_limited`, `timeout`, `verification_failed`
+- `INVALID_ARGUMENTS`
+- `MISSING_URL`, `INVALID_URL`
+- `NO_ACTIVE_TAB`, `NO_TARGET_TAB`, `NO_CONTEXT`
+- `UNSUPPORTED_TOOL`
+- `STALE_HANDLE`, `NOT_FOUND`, `NOT_INTERACTABLE`, `DISABLED`, `BLOCKED_BY_OVERLAY`
+- `RUNTIME_UNAVAILABLE`
+- `SEARCH_UNAVAILABLE`, `SEARCH_FAILED`
+- `OPEN_TAB_FAILED`, `NAVIGATION_FAILED`, `BACK_FAILED`, `FORWARD_FAILED`, `REFRESH_FAILED`
 
 Navigation primitives (`browser.open_tab`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.refresh`, `search`):
 
@@ -876,19 +877,13 @@ Signals should be designed to be:
 
 Currently emitted (v1):
 
-- `auth_fields`, `auth_gate`
-- `paywall`
-- `overlay_or_dialog`, `consent_overlay`
+- `paywall_or_login`, `consent_modal`, `overlay_blocking`, `captcha_or_robot_check`
 - `age_gate`, `geo_block`, `script_required`
 - `url_redacted`
-
-Reserved / planned (v1+):
-
 - `sparse_text`, `non_text_content`
-- `captcha_or_robot_check`
 - `cross_origin_iframe`, `closed_shadow_root`
 - `virtualized_list`, `infinite_scroll`
-- `pdf_viewer` (or `document_viewer`)
+- `pdf_viewer`
 
 Testing/hardening strategy:
 
@@ -928,7 +923,7 @@ See `docs/dom_heuristics.md` and `docs/llm_context_protocol.md` for the prompt r
 
 ## 5. Example decompositions
 
-These examples show how a plain-English user prompt can map to the internal vocabulary. End-user scenario narratives live in `docs/laika_pitch.md`.
+These examples show how a plain-English user prompt can map to the internal vocabulary. End-user scenario narratives live in `docs/Laika_pitch.md`.
 
 ### Example 1: Refund terms -> checklist + email draft
 

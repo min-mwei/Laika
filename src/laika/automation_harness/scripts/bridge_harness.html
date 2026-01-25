@@ -45,12 +45,17 @@
         var nonce = null;
         var scenario = null;
         var reportUrl = null;
+        var configTimeoutSeconds = null;
         var ackReceived = false;
         var runDone = false;
+        var readyReceived = false;
+        var readyCount = 0;
+        var lastReadyAt = null;
         var startAttempts = 0;
         var startTimer = null;
         var startRetryMs = 750;
         var maxStartAttempts = 120;
+        var startDeadlineAt = null;
 
         function log(message) {
           var line = typeof message === "string" ? message : JSON.stringify(message, null, 2);
@@ -77,19 +82,36 @@
           });
         }
 
+        function isRetryableStartError(error) {
+          return error === "runner_unavailable" ||
+            error === "no_sender_tab" ||
+            error === "message_failed" ||
+            error === "runtime_unavailable" ||
+            error === "reset_failed" ||
+            error === "storage_unavailable" ||
+            error === "storage_clear_failed" ||
+            error === "start_failed";
+        }
+
         function postAutomationStart() {
           if (!scenario || !nonce) {
             return;
           }
           startAttempts += 1;
           sendTelemetry("start_sent", { attempt: startAttempts });
+          var options = scenario.options && typeof scenario.options === "object"
+            ? Object.assign({}, scenario.options)
+            : {};
+          if (configTimeoutSeconds && typeof options.runTimeoutMs !== "number") {
+            options.runTimeoutMs = Math.max(1, configTimeoutSeconds - 30) * 1000;
+          }
           window.postMessage({
             type: "laika.automation.start",
             runId: runId,
             goals: scenario.goals || [],
             goal: scenario.goal || "",
             targetUrl: scenario.url || "",
-            options: scenario.options || {},
+            options: options,
             nonce: nonce,
             reportUrl: reportUrl
           }, pageOrigin);
@@ -100,7 +122,35 @@
             return;
           }
           if (startAttempts >= maxStartAttempts) {
-            setStatus("Waiting for extension...");
+            setStatus("Automation start timed out.");
+            sendTelemetry("start_timeout", { attempts: startAttempts });
+            runDone = true;
+            stopStartRetry();
+            reportResult({
+              runId: runId,
+              scenario: scenario,
+              error: "start_timeout",
+              source: "page",
+              receivedAt: new Date().toISOString()
+            }).catch(function () {
+              log({ event: "report_failed" });
+            });
+            return;
+          }
+          if (startDeadlineAt && Date.now() > startDeadlineAt) {
+            setStatus("Automation start timed out.");
+            sendTelemetry("start_timeout", { attempts: startAttempts });
+            runDone = true;
+            stopStartRetry();
+            reportResult({
+              runId: runId,
+              scenario: scenario,
+              error: "start_timeout",
+              source: "page",
+              receivedAt: new Date().toISOString()
+            }).catch(function () {
+              log({ event: "report_failed" });
+            });
             return;
           }
           postAutomationStart();
@@ -131,6 +181,20 @@
             return;
           }
           if (data.nonce && nonce && data.nonce !== nonce) {
+            return;
+          }
+          if (data.type === "laika.automation.ready") {
+            readyReceived = true;
+            readyCount += 1;
+            lastReadyAt = data.at || new Date().toISOString();
+            setStatus("Extension ready. Starting...");
+            log({ event: "ready", at: lastReadyAt });
+            sendTelemetry("ready", { at: lastReadyAt });
+            if (!ackReceived && !runDone) {
+              stopStartRetry();
+              postAutomationStart();
+              startTimer = window.setTimeout(scheduleStartRetry, startRetryMs);
+            }
             return;
           }
           if (data.type === "laika.automation.ack") {
@@ -170,15 +234,24 @@
             return;
           }
           if (data.type === "laika.automation.error") {
+            if (!ackReceived && isRetryableStartError(data.error || "")) {
+              log({ event: "error_retry", runId: data.runId, error: data.error });
+              sendTelemetry("error_retry", { runId: data.runId, error: data.error });
+              return;
+            }
+            var errorDetails = data.errorDetails && typeof data.errorDetails === "object"
+              ? data.errorDetails
+              : null;
             setStatus("Error: " + (data.error || "unknown"));
-            log({ event: "error", runId: data.runId, error: data.error });
-            sendTelemetry("error", { runId: data.runId, error: data.error });
+            log({ event: "error", runId: data.runId, error: data.error, errorDetails: errorDetails });
+            sendTelemetry("error", { runId: data.runId, error: data.error, errorDetails: errorDetails });
             runDone = true;
             stopStartRetry();
             reportResult({
               runId: data.runId,
               scenario: scenario,
               error: data.error,
+              errorDetails: errorDetails,
               source: "page",
               receivedAt: new Date().toISOString()
             }).catch(function () {
@@ -196,6 +269,11 @@
             runId = config.runId || null;
             nonce = config.nonce || null;
             reportUrl = pageOrigin ? pageOrigin + "/api/report" : null;
+            if (typeof config.timeoutSeconds === "number" && config.timeoutSeconds > 0) {
+              configTimeoutSeconds = config.timeoutSeconds;
+              startDeadlineAt = Date.now() + (config.timeoutSeconds * 1000);
+              maxStartAttempts = Math.max(maxStartAttempts, Math.ceil((config.timeoutSeconds * 1000) / startRetryMs));
+            }
             if (!scenario || !scenario.url) {
               setStatus("Invalid scenario config");
               return;

@@ -1,0 +1,87 @@
+{
+  "tools": {
+    "browser.observe_dom": {
+      "required": {},
+      "optional": {
+        "maxChars": "number",
+        "maxElements": "number",
+        "maxBlocks": "number",
+        "maxPrimaryChars": "number",
+        "maxOutline": "number",
+        "maxOutlineChars": "number",
+        "maxItems": "number",
+        "maxItemChars": "number",
+        "maxComments": "number",
+        "maxCommentChars": "number",
+        "rootHandleId": "string"
+      }
+    },
+    "browser.click": {
+      "required": {
+        "handleId": "string"
+      },
+      "optional": {}
+    },
+    "browser.type": {
+      "required": {
+        "handleId": "string",
+        "text": "string"
+      },
+      "optional": {}
+    },
+    "browser.scroll": {
+      "required": {
+        "deltaY": "number"
+      },
+      "optional": {}
+    },
+    "browser.open_tab": {
+      "required": {
+        "url": "string"
+      },
+      "optional": {}
+    },
+    "browser.navigate": {
+      "required": {
+        "url": "string"
+      },
+      "optional": {}
+    },
+    "browser.back": {
+      "required": {},
+      "optional": {}
+    },
+    "browser.forward": {
+      "required": {},
+      "optional": {}
+    },
+    "browser.refresh": {
+      "required": {},
+      "optional": {}
+    },
+    "browser.select": {
+      "required": {
+        "handleId": "string",
+        "value": "string"
+      },
+      "optional": {}
+    },
+    "search": {
+      "required": {
+        "query": "string"
+      },
+      "optional": {
+        "engine": "string",
+        "newTab": "bool"
+      }
+    },
+    "app.calculate": {
+      "required": {
+        "expression": "string"
+      },
+      "optional": {
+        "precision": "number"
+      }
+    }
+  }
+}

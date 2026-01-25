@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 
 final class LaikaUITests: XCTestCase {
@@ -9,8 +10,12 @@ final class LaikaUITests: XCTestCase {
         static let pollIntervalSeconds: TimeInterval = 0.5
         static let safariLaunchTimeout: TimeInterval = 12
         static let safariLaunchRetries = 3
+        static let safariActivateTimeout: TimeInterval = 6
+        static let safariActivateRetries = 2
         static let safariRetryDelaySeconds: TimeInterval = 0.75
         static let safariQuitTimeout: TimeInterval = 5
+        static let safariWindowTimeout: TimeInterval = 4
+        static let safariFocusDelaySeconds: TimeInterval = 0.2
     }
 
     private func waitForAppState(_ app: XCUIApplication, _ state: XCUIApplication.State, timeout: TimeInterval) -> Bool {
@@ -19,19 +24,96 @@ final class LaikaUITests: XCTestCase {
             if app.state == state {
                 return true
             }
+            if state == .runningForeground && isSafariFrontmost() {
+                return true
+            }
             RunLoop.current.run(until: Date().addingTimeInterval(Defaults.pollIntervalSeconds))
         }
         return false
+    }
+
+    private func waitForWindow(_ app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        return app.windows.firstMatch.waitForExistence(timeout: timeout)
+    }
+
+    private func runningSafariApp() -> NSRunningApplication? {
+        return NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Safari").first
+    }
+
+    private func isSafariFrontmost() -> Bool {
+        return NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.Safari"
+    }
+
+    private func forceActivateSafari() {
+        guard let app = runningSafariApp() else {
+            return
+        }
+        app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        activateSafariViaAppleScript()
+    }
+
+    private func launchSafariViaWorkspace() {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari") else {
+            return
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: configuration, completionHandler: nil)
+    }
+
+    private func activateSafariViaAppleScript() {
+        let script = """
+        tell application "System Events"
+            set frontmost of process "Safari" to true
+        end tell
+        """
+        NSAppleScript(source: script)?.executeAndReturnError(nil)
+    }
+
+    private func activateSafari(_ app: XCUIApplication) -> Bool {
+        if app.state == .runningForeground {
+            return true
+        }
+        if isSafariFrontmost() {
+            return true
+        }
+        for _ in 0..<Defaults.safariActivateRetries {
+            forceActivateSafari()
+            if waitForAppState(app, .runningForeground, timeout: Defaults.safariActivateTimeout) {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(Defaults.safariRetryDelaySeconds))
+        }
+        return app.state == .runningForeground
     }
 
     private func launchSafari(_ app: XCUIApplication, quitFirst: Bool) -> Bool {
         if quitFirst && app.state != .notRunning {
             app.terminate()
             _ = waitForAppState(app, .notRunning, timeout: Defaults.safariQuitTimeout)
+            if runningSafariApp() != nil {
+                runningSafariApp()?.forceTerminate()
+                _ = waitForAppState(app, .notRunning, timeout: Defaults.safariQuitTimeout)
+            }
         }
         for _ in 0..<Defaults.safariLaunchRetries {
-            app.launch()
-            if waitForAppState(app, .runningForeground, timeout: Defaults.safariLaunchTimeout) {
+            if app.state == .runningBackground {
+                if activateSafari(app) {
+                    _ = waitForWindow(app, timeout: Defaults.safariWindowTimeout)
+                    return true
+                }
+            }
+            if app.state == .runningForeground {
+                _ = waitForWindow(app, timeout: Defaults.safariWindowTimeout)
+                return true
+            }
+            if runningSafariApp() != nil {
+                forceActivateSafari()
+            } else {
+                launchSafariViaWorkspace()
+            }
+            if waitForAppState(app, .runningForeground, timeout: Defaults.safariLaunchTimeout) || activateSafari(app) {
+                _ = waitForWindow(app, timeout: Defaults.safariWindowTimeout)
                 return true
             }
             app.terminate()
@@ -87,12 +169,24 @@ final class LaikaUITests: XCTestCase {
         }
 
         let app = XCUIApplication(bundleIdentifier: "com.apple.Safari")
+        defer {
+            if quitSafari {
+                app.terminate()
+                _ = waitForAppState(app, .notRunning, timeout: Defaults.safariQuitTimeout)
+            }
+        }
         if !launchSafari(app, quitFirst: quitSafari) {
             XCTFail("Failed to launch Safari in foreground.")
             return
         }
+        if !activateSafari(app) {
+            XCTFail("Failed to activate Safari in foreground.")
+            return
+        }
+        _ = waitForWindow(app, timeout: Defaults.safariWindowTimeout)
 
         app.typeKey("l", modifierFlags: .command)
+        RunLoop.current.run(until: Date().addingTimeInterval(Defaults.safariFocusDelaySeconds))
         app.typeText(harnessURL)
         app.typeKey(.return, modifierFlags: [])
 

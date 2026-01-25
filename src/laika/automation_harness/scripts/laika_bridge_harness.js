@@ -105,16 +105,41 @@ async function main() {
   let received = false;
   let reported = false;
   let timeoutHandle = null;
+  const telemetryPath = args.outputPath
+    ? (args.outputPath.endsWith(".json")
+      ? args.outputPath.slice(0, -5) + ".telemetry.json"
+      : args.outputPath + ".telemetry.json")
+    : null;
   let telemetry = {
     configLoadedAt: null,
     startSentCount: 0,
     ackCount: 0,
     progressCount: 0,
+    readyCount: 0,
+    readyAt: null,
+    errorRetryCount: 0,
     status: null,
     lastEvent: null,
     lastEventAt: null,
     lastDetail: null
   };
+
+  function writeTelemetrySnapshot() {
+    if (!telemetryPath) {
+      return;
+    }
+    const payload = {
+      runId: runId,
+      scenario: scenario,
+      updatedAt: new Date().toISOString(),
+      telemetry: telemetry
+    };
+    try {
+      fs.writeFileSync(telemetryPath, JSON.stringify(payload, null, 2));
+    } catch (error) {
+      return;
+    }
+  }
 
   function writePayload(payload) {
     if (args.outputPath) {
@@ -152,6 +177,9 @@ async function main() {
       startSentCount: telemetry.startSentCount,
       ackCount: telemetry.ackCount,
       progressCount: telemetry.progressCount,
+      readyCount: telemetry.readyCount,
+      readyAt: telemetry.readyAt,
+      errorRetryCount: telemetry.errorRetryCount,
       status: telemetry.status,
       lastEvent: telemetry.lastEvent,
       lastEventAt: telemetry.lastEventAt,
@@ -159,6 +187,7 @@ async function main() {
     };
     finalPayload.diagnostics = diagnostics;
     writePayload(finalPayload);
+    writeTelemetrySnapshot();
     received = true;
     if (!args.keepOpen) {
       setTimeout(() => {
@@ -189,6 +218,13 @@ async function main() {
       case "progress":
         telemetry.progressCount += 1;
         break;
+      case "ready":
+        telemetry.readyCount += 1;
+        telemetry.readyAt = at;
+        break;
+      case "error_retry":
+        telemetry.errorRetryCount += 1;
+        break;
       case "status":
         if (event.status && typeof event.status === "string") {
           telemetry.status = event.status;
@@ -197,6 +233,7 @@ async function main() {
       default:
         break;
     }
+    writeTelemetrySnapshot();
   }
 
   const server = http.createServer(async (req, res) => {
