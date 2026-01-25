@@ -189,7 +189,7 @@ Tool rules:
 - If you include a tool call, still provide assistant.render that explains what will happen.
 
 Task guidance:
-- input.task.name="web.summarize": summarize only provided documents, ignore UI chrome, treat structural prefixes (H1/H2, "-", ">", Code:) as layout hints. If signals indicate paywall/overlay or visible text is sparse, say only partial content is visible.
+- input.task.name="web.summarize": summarize only provided documents, ignore UI chrome, treat structural prefixes (H1/H2, "-", ">", Code:) as layout hints. If signals indicate paywall/login, consent/overlay, captcha, or sparse text, say only partial content is visible.
 - input.task.name="web.answer": answer using only provided documents. If the user requests an action or the answer needs more context, propose a tool call instead of guessing.
 - Context may include a summary document plus chunked documents (`web.observation.chunk.v1`); read all chunks before answering.
 - For list pages, if items include `comment_count` or `top_discussions`, mention the most-discussed items.
@@ -206,6 +206,7 @@ Tools:
 - browser.forward arguments: {}
 - browser.refresh arguments: {}
 - search arguments: {"query": string, "engine": string?, "newTab": boolean?}
+- app.calculate arguments: {"expression": string, "precision": number?}
 """
     }
 

@@ -105,6 +105,16 @@ async function main() {
   let received = false;
   let reported = false;
   let timeoutHandle = null;
+  let telemetry = {
+    configLoadedAt: null,
+    startSentCount: 0,
+    ackCount: 0,
+    progressCount: 0,
+    status: null,
+    lastEvent: null,
+    lastEventAt: null,
+    lastDetail: null
+  };
 
   function writePayload(payload) {
     if (args.outputPath) {
@@ -134,12 +144,58 @@ async function main() {
     if (!finalPayload.receivedAt) {
       finalPayload.receivedAt = new Date().toISOString();
     }
+    const diagnostics = finalPayload.diagnostics && typeof finalPayload.diagnostics === "object"
+      ? finalPayload.diagnostics
+      : {};
+    diagnostics.harness = {
+      configLoadedAt: telemetry.configLoadedAt,
+      startSentCount: telemetry.startSentCount,
+      ackCount: telemetry.ackCount,
+      progressCount: telemetry.progressCount,
+      status: telemetry.status,
+      lastEvent: telemetry.lastEvent,
+      lastEventAt: telemetry.lastEventAt,
+      lastDetail: telemetry.lastDetail
+    };
+    finalPayload.diagnostics = diagnostics;
     writePayload(finalPayload);
     received = true;
     if (!args.keepOpen) {
       setTimeout(() => {
         server.close();
       }, 200);
+    }
+  }
+
+  function recordTelemetry(event) {
+    if (!event || typeof event.type !== "string") {
+      return;
+    }
+    const now = new Date().toISOString();
+    const at = typeof event.at === "string" ? event.at : now;
+    telemetry.lastEvent = event.type;
+    telemetry.lastEventAt = at;
+    telemetry.lastDetail = event.detail && typeof event.detail === "object" ? event.detail : null;
+    switch (event.type) {
+      case "config_loaded":
+        telemetry.configLoadedAt = at;
+        break;
+      case "start_sent":
+        telemetry.startSentCount += 1;
+        break;
+      case "ack":
+        telemetry.ackCount += 1;
+        break;
+      case "progress":
+        telemetry.progressCount += 1;
+        break;
+      case "status":
+        if (event.status && typeof event.status === "string") {
+          telemetry.status = event.status;
+        }
+        break;
+      default:
+        break;
     }
   }
 
@@ -156,7 +212,20 @@ async function main() {
     }
     if (req.url === "/api/config") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ scenario, runId, nonce }));
+      res.end(JSON.stringify({ scenario, runId, nonce, timeoutSeconds: args.timeoutSeconds }));
+      return;
+    }
+    if (req.url === "/api/telemetry" && req.method === "POST") {
+      const raw = await readBody(req);
+      let payload = null;
+      try {
+        payload = JSON.parse(raw || "{}");
+      } catch (error) {
+        payload = { type: "invalid_json" };
+      }
+      recordTelemetry(payload);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
       return;
     }
     if (req.url === "/api/report" && req.method === "POST") {

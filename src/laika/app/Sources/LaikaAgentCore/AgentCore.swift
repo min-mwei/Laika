@@ -239,17 +239,24 @@ public final class AgentOrchestrator: @unchecked Sendable {
     }
 
     public func resolveGoalPlan(context: ContextPack, userGoal: String) async -> GoalPlan {
-        if let existing = context.goalPlan {
+        let contextSnapshot = context
+        if let existing = contextSnapshot.goalPlan {
             return existing
         }
         do {
-            let parsed = try await model.parseGoalPlan(context: context, userGoal: userGoal)
-            let resolved = applyFallbackGoalPlan(parsed, context: context, userGoal: userGoal)
-            logGoalPlan(parsed: parsed, resolved: resolved, userGoal: userGoal, context: context)
+            let parsed = try await model.parseGoalPlan(context: contextSnapshot, userGoal: userGoal)
+            let resolved = applyFallbackGoalPlan(parsed, context: contextSnapshot, userGoal: userGoal)
+            logGoalPlan(parsed: parsed, resolved: resolved, userGoal: userGoal, context: contextSnapshot)
             return resolved
         } catch {
-            let fallback = applyFallbackGoalPlan(.unknown, context: context, userGoal: userGoal)
-            logGoalPlan(parsed: nil, resolved: fallback, userGoal: userGoal, context: context, sourceOverride: "parse_error")
+            let fallback = applyFallbackGoalPlan(.unknown, context: contextSnapshot, userGoal: userGoal)
+            logGoalPlan(
+                parsed: nil,
+                resolved: fallback,
+                userGoal: userGoal,
+                context: contextSnapshot,
+                sourceOverride: "parse_error"
+            )
             return fallback
         }
     }
@@ -1277,6 +1284,14 @@ public final class AgentOrchestrator: @unchecked Sendable {
                 }
             }
             return "Running a web search."
+        case .appCalculate:
+            if case let .string(expression)? = call.arguments["expression"] {
+                let trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return "Calculating \(trimmed)."
+                }
+            }
+            return "Calculating the requested expression."
         }
     }
 

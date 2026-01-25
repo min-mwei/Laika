@@ -16,7 +16,8 @@
     "browser.forward": true,
     "browser.refresh": true,
     "browser.select": true,
-    "search": true
+    "search": true,
+    "app.calculate": true
   };
 
   function validateToolCall(toolCall) {
@@ -33,8 +34,32 @@
     if (!isObject(args)) {
       return "invalid tool arguments";
     }
+    function hasOnlyKeys(allowed) {
+      for (var key in args) {
+        if (Object.prototype.hasOwnProperty.call(args, key) && allowed.indexOf(key) === -1) {
+          return false;
+        }
+      }
+      return true;
+    }
 
     if (toolCall.name === "browser.observe_dom") {
+      var allowedKeys = [
+        "maxChars",
+        "maxElements",
+        "maxBlocks",
+        "maxPrimaryChars",
+        "maxOutline",
+        "maxOutlineChars",
+        "maxItems",
+        "maxItemChars",
+        "maxComments",
+        "maxCommentChars",
+        "rootHandleId"
+      ];
+      if (!hasOnlyKeys(allowedKeys)) {
+        return "observe_dom has unknown arguments";
+      }
       if (typeof args.maxChars !== "undefined" && typeof args.maxChars !== "number") {
         return "observe_dom.maxChars must be number";
       }
@@ -72,9 +97,15 @@
     }
 
     if (toolCall.name === "browser.click") {
+      if (!hasOnlyKeys(["handleId"])) {
+        return "click has unknown arguments";
+      }
       return typeof args.handleId === "string" && args.handleId ? null : "click.handleId required";
     }
     if (toolCall.name === "browser.type") {
+      if (!hasOnlyKeys(["handleId", "text"])) {
+        return "type has unknown arguments";
+      }
       if (typeof args.handleId !== "string" || !args.handleId) {
         return "type.handleId required";
       }
@@ -84,6 +115,9 @@
       return null;
     }
     if (toolCall.name === "browser.select") {
+      if (!hasOnlyKeys(["handleId", "value"])) {
+        return "select has unknown arguments";
+      }
       if (typeof args.handleId !== "string" || !args.handleId) {
         return "select.handleId required";
       }
@@ -93,15 +127,24 @@
       return null;
     }
     if (toolCall.name === "browser.scroll") {
+      if (!hasOnlyKeys(["deltaY"])) {
+        return "scroll has unknown arguments";
+      }
       return typeof args.deltaY === "number" ? null : "scroll.deltaY required";
     }
     if (toolCall.name === "browser.open_tab" || toolCall.name === "browser.navigate") {
+      if (!hasOnlyKeys(["url"])) {
+        return "url has unknown arguments";
+      }
       return typeof args.url === "string" && args.url ? null : "url required";
     }
     if (toolCall.name === "browser.back" || toolCall.name === "browser.forward" || toolCall.name === "browser.refresh") {
       return Object.keys(args).length === 0 ? null : "no arguments allowed";
     }
     if (toolCall.name === "search") {
+      if (!hasOnlyKeys(["query", "engine", "newTab"])) {
+        return "search has unknown arguments";
+      }
       if (typeof args.query !== "string" || !args.query) {
         return "search.query required";
       }
@@ -110,6 +153,23 @@
       }
       if (typeof args.newTab !== "undefined" && typeof args.newTab !== "boolean") {
         return "search.newTab must be boolean";
+      }
+      return null;
+    }
+    if (toolCall.name === "app.calculate") {
+      if (!hasOnlyKeys(["expression", "precision"])) {
+        return "calculate has unknown arguments";
+      }
+      if (typeof args.expression !== "string" || !args.expression) {
+        return "calculate.expression required";
+      }
+      if (typeof args.precision !== "undefined") {
+        if (typeof args.precision !== "number" || !isFinite(args.precision)) {
+          return "calculate.precision must be number";
+        }
+        if (Math.floor(args.precision) !== args.precision || args.precision < 0 || args.precision > 6) {
+          return "calculate.precision must be integer 0..6";
+        }
       }
       return null;
     }

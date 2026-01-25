@@ -34,12 +34,16 @@ enum LLMCPResponseParser {
     private static func parseStrict(_ jsonString: String) throws -> ModelResponse {
         let decoded = try decodeResponse(jsonString)
         try validateProtocol(decoded)
-        let toolCalls = decoded.toolCalls.compactMap { call -> ToolCall? in
+        var toolCalls: [ToolCall] = []
+        for call in decoded.toolCalls {
             guard let name = ToolName(rawValue: call.name) else {
-                return nil
+                continue
             }
             let normalized = normalizeArguments(for: name, arguments: call.arguments ?? [:])
-            return ToolCall(name: name, arguments: normalized)
+            guard ToolSchemaValidator.validateArguments(name: name, arguments: normalized) else {
+                throw ModelError.invalidResponse("Invalid tool arguments for \(name.rawValue).")
+            }
+            toolCalls.append(ToolCall(name: name, arguments: normalized))
         }
         let assistant = AssistantMessage(
             title: decoded.assistant.title,
@@ -227,6 +231,9 @@ enum LLMCPResponseParser {
             let arguments = (dict["arguments"] as? [String: Any])
                 .flatMap(jsonObject(from:)) ?? [:]
             let normalized = normalizeArguments(for: name, arguments: arguments)
+            guard ToolSchemaValidator.validateArguments(name: name, arguments: normalized) else {
+                return nil
+            }
             return ToolCall(name: name, arguments: normalized)
         }
     }

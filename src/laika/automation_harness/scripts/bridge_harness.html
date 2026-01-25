@@ -40,9 +40,17 @@
 
         var statusEl = document.getElementById("status");
         var logEl = document.getElementById("log");
+        var pageOrigin = window.location.origin || "";
         var runId = null;
         var nonce = null;
         var scenario = null;
+        var reportUrl = null;
+        var ackReceived = false;
+        var runDone = false;
+        var startAttempts = 0;
+        var startTimer = null;
+        var startRetryMs = 750;
+        var maxStartAttempts = 120;
 
         function log(message) {
           var line = typeof message === "string" ? message : JSON.stringify(message, null, 2);
@@ -53,10 +61,28 @@
           statusEl.textContent = text;
         }
 
+        function sendTelemetry(type, detail) {
+          var payload = {
+            type: type,
+            runId: runId,
+            at: new Date().toISOString(),
+            detail: detail || null
+          };
+          fetch("/api/telemetry", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload)
+          }).catch(function () {
+            return null;
+          });
+        }
+
         function postAutomationStart() {
           if (!scenario || !nonce) {
             return;
           }
+          startAttempts += 1;
+          sendTelemetry("start_sent", { attempt: startAttempts });
           window.postMessage({
             type: "laika.automation.start",
             runId: runId,
@@ -64,8 +90,28 @@
             goal: scenario.goal || "",
             targetUrl: scenario.url || "",
             options: scenario.options || {},
-            nonce: nonce
-          }, window.origin);
+            nonce: nonce,
+            reportUrl: reportUrl
+          }, pageOrigin);
+        }
+
+        function scheduleStartRetry() {
+          if (ackReceived || runDone) {
+            return;
+          }
+          if (startAttempts >= maxStartAttempts) {
+            setStatus("Waiting for extension...");
+            return;
+          }
+          postAutomationStart();
+          startTimer = window.setTimeout(scheduleStartRetry, startRetryMs);
+        }
+
+        function stopStartRetry() {
+          if (startTimer) {
+            window.clearTimeout(startTimer);
+            startTimer = null;
+          }
         }
 
         function reportResult(payload) {
@@ -77,7 +123,7 @@
         }
 
         window.addEventListener("message", function (event) {
-          if (!event || event.source !== window || event.origin !== window.origin) {
+          if (!event || event.source !== window || event.origin !== pageOrigin) {
             return;
           }
           var data = event.data || {};
@@ -90,24 +136,33 @@
           if (data.type === "laika.automation.ack") {
             setStatus("Automation started: " + (data.runId || "unknown"));
             log({ event: "ack", runId: data.runId });
+            sendTelemetry("ack", { runId: data.runId });
+            ackReceived = true;
+            stopStartRetry();
             return;
           }
           if (data.type === "laika.automation.status") {
             setStatus("Status: " + (data.status || "unknown"));
             log({ event: "status", status: data.status, runId: data.runId });
+            sendTelemetry("status", { runId: data.runId, status: data.status });
             return;
           }
           if (data.type === "laika.automation.progress") {
             log({ event: "progress", runId: data.runId, goal: data.goal, step: data.step && data.step.step });
+            sendTelemetry("progress", { runId: data.runId, goal: data.goal, step: data.step && data.step.step });
             return;
           }
           if (data.type === "laika.automation.result") {
             setStatus("Completed");
             log({ event: "result", runId: data.runId });
+            sendTelemetry("result", { runId: data.runId });
+            runDone = true;
+            stopStartRetry();
             reportResult({
               runId: data.runId,
               scenario: scenario,
               result: data.result,
+              source: "page",
               receivedAt: new Date().toISOString()
             }).catch(function () {
               log({ event: "report_failed" });
@@ -117,10 +172,14 @@
           if (data.type === "laika.automation.error") {
             setStatus("Error: " + (data.error || "unknown"));
             log({ event: "error", runId: data.runId, error: data.error });
+            sendTelemetry("error", { runId: data.runId, error: data.error });
+            runDone = true;
+            stopStartRetry();
             reportResult({
               runId: data.runId,
               scenario: scenario,
               error: data.error,
+              source: "page",
               receivedAt: new Date().toISOString()
             }).catch(function () {
               log({ event: "report_failed" });
@@ -136,13 +195,15 @@
             scenario = config.scenario || null;
             runId = config.runId || null;
             nonce = config.nonce || null;
+            reportUrl = pageOrigin ? pageOrigin + "/api/report" : null;
             if (!scenario || !scenario.url) {
               setStatus("Invalid scenario config");
               return;
             }
             setStatus("Scenario loaded. Starting...");
             log({ event: "config", scenario: scenario.url, goals: (scenario.goals || []).length });
-            postAutomationStart();
+            sendTelemetry("config_loaded", { scenario: scenario.url });
+            scheduleStartRetry();
           })
           .catch(function (error) {
             setStatus("Failed to load config");

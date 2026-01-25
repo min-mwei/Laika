@@ -64,6 +64,7 @@ This repo needs an end-to-end automation path that exercises the real Safari ext
 2) Start scenario
 - UI automation opens Safari and navigates to the harness page.
 - The harness page posts `laika.automation.start` with `{ runId, goals, targetUrl, options, nonce }`.
+- The harness page retries `laika.automation.start` until it receives an ack to avoid content-script load races.
 - The background opens a new tab to `targetUrl` and runs the agent loop there.
 
 3) Agent run (inside extension)
@@ -78,6 +79,7 @@ This repo needs an end-to-end automation path that exercises the real Safari ext
 4) Results
 - The bridge posts structured results to the page.
 - UI automation collects JSON output and writes a report.
+- If the harness page is suspended or the content script unloads, the background can POST the final result directly to the harness server using a localhost-only `reportUrl` to avoid timeouts.
 - The automation run clears extension local storage by default to avoid state carryover.
 
 ## Bridge gating and safety
@@ -89,13 +91,18 @@ This repo needs an end-to-end automation path that exercises the real Safari ext
 ## Automation bridge contract (draft)
 
 - Requests (page -> content script):
-  - `laika.automation.start` { runId, goals, targetUrl, options, nonce }
+  - `laika.automation.start` { runId, goals, targetUrl, options, nonce, reportUrl }
   - `laika.automation.status` { runId }
   - `laika.automation.cancel` { runId }
 - Responses (content script -> page):
   - `laika.automation.progress` { runId, step, action, observationSummary }
   - `laika.automation.result` { runId, summary, steps[] }
   - `laika.automation.error` { runId, error }
+
+## Harness instrumentation
+
+- The harness page emits lightweight telemetry events (config loaded, start sent, ack/status/progress) to the local harness server.
+- On timeout, the harness includes the last telemetry event in the output to highlight where the run stalled.
 
 ## Scenario format (draft)
 

@@ -297,7 +297,7 @@ struct SummaryInputBuilder {
         var reasons = signals.reasons
         var textParts = [String]()
         if isLowSignalText(body) {
-            reasons.append("low_signal_text")
+            reasons.append(ObservationSignal.sparseText.rawValue)
         }
         if !titleLine.isEmpty {
             textParts.append(titleLine)
@@ -881,7 +881,7 @@ struct SummaryInputBuilder {
         if input.accessLimited {
             return true
         }
-        if input.accessSignals.contains("low_signal_text") {
+        if input.accessSignals.contains(ObservationSignal.sparseText.rawValue) {
             return true
         }
         if input.usedBlocks == 0 && !input.usedPrimary {
@@ -1006,26 +1006,11 @@ struct SummaryInputBuilder {
             return AccessSignals(limited: false, reasons: [])
         }
         let observedSignals = context.observation.signals
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .map { ObservationSignalNormalizer.normalize($0) }
             .filter { !$0.isEmpty }
-        let gateSignals: Set<String> = [
-            "paywall",
-            "auth_gate",
-            "age_gate",
-            "geo_block",
-            "script_required"
-        ]
-        let overlaySignals: Set<String> = [
-            "overlay_or_dialog",
-            "consent_overlay"
-        ]
-        let authSignals: Set<String> = [
-            "auth_fields",
-            "auth_gate"
-        ]
-        let hasGateSignal = observedSignals.contains { gateSignals.contains($0) }
-        let hasOverlaySignal = observedSignals.contains { overlaySignals.contains($0) }
-        let hasAuthSignal = observedSignals.contains { authSignals.contains($0) }
+        let hasGateSignal = observedSignals.contains { ObservationSignalNormalizer.accessLimitSignals.contains($0) }
+        let hasOverlaySignal = observedSignals.contains { $0 == ObservationSignal.overlayBlocking.rawValue || $0 == ObservationSignal.consentModal.rawValue }
+        let hasAuthSignal = observedSignals.contains { $0 == ObservationSignal.paywallOrLogin.rawValue }
         let primaryChars: Int
         if let primary = context.observation.primary, isRelevant(primary: primary) {
             primaryChars = primary.text.count
@@ -1055,14 +1040,14 @@ struct SummaryInputBuilder {
                     reasons.append(signal)
                 }
             }
-            if hasDialog && !reasons.contains("overlay_or_dialog") {
-                reasons.append("overlay_or_dialog")
+            if hasDialog && !reasons.contains(ObservationSignal.overlayBlocking.rawValue) {
+                reasons.append(ObservationSignal.overlayBlocking.rawValue)
             }
-            if hasAuthField && !reasons.contains("auth_fields") {
-                reasons.append("auth_fields")
+            if hasAuthField && !reasons.contains(ObservationSignal.paywallOrLogin.rawValue) {
+                reasons.append(ObservationSignal.paywallOrLogin.rawValue)
             }
             if reasons.isEmpty {
-                reasons.append("low_visible_text")
+                reasons.append(ObservationSignal.sparseText.rawValue)
             }
             return AccessSignals(limited: true, reasons: reasons)
         }

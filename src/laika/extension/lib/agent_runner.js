@@ -196,6 +196,15 @@
     if (toolName === "browser.observe_dom" && rawResult && rawResult.observation) {
       payload.url = rawResult.observation.url || "";
       payload.title = rawResult.observation.title || "";
+      if (rawResult.observation.documentId) {
+        payload.documentId = rawResult.observation.documentId;
+      }
+      if (typeof rawResult.observation.navGeneration === "number") {
+        payload.navGeneration = rawResult.observation.navGeneration;
+      }
+      if (typeof rawResult.observation.observedAtMs === "number") {
+        payload.observedAtMs = rawResult.observation.observedAtMs;
+      }
       payload.textChars = (rawResult.observation.text || "").length;
       payload.elementCount = Array.isArray(rawResult.observation.elements) ? rawResult.observation.elements.length : 0;
       payload.blockCount = Array.isArray(rawResult.observation.blocks) ? rawResult.observation.blocks.length : 0;
@@ -204,6 +213,17 @@
       payload.primaryChars = rawResult.observation.primary && rawResult.observation.primary.text
         ? String(rawResult.observation.primary.text).length
         : 0;
+    }
+    if (toolName === "app.calculate" && rawResult) {
+      if (typeof rawResult.result === "number") {
+        payload.result = rawResult.result;
+      }
+      if (typeof rawResult.precision === "number") {
+        payload.precision = rawResult.precision;
+      }
+      if (typeof rawResult.formatted === "string") {
+        payload.formatted = rawResult.formatted;
+      }
     }
     return {
       toolCallId: toolCall.id,

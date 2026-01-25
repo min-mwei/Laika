@@ -27,4 +27,22 @@ final class PolicyGateTests: XCTestCase {
         XCTAssertEqual(result.decision, .ask)
         XCTAssertEqual(result.reasonCode, "assist_requires_approval")
     }
+
+    func testSensitiveSearchRequiresApproval() {
+        let gate = PolicyGate()
+        let context = PolicyContext(origin: "https://example.com", mode: .assist, fieldKind: .unknown)
+        let call = ToolCall(name: .search, arguments: ["query": .string("contact me at jane.doe@example.com")])
+        let result = gate.decide(for: call, context: context)
+        XCTAssertEqual(result.decision, .ask)
+        XCTAssertEqual(result.reasonCode, "search_sensitive_query")
+    }
+
+    func testNonSensitiveSearchAllowed() {
+        let gate = PolicyGate()
+        let context = PolicyContext(origin: "https://example.com", mode: .assist, fieldKind: .unknown)
+        let call = ToolCall(name: .search, arguments: ["query": .string("best hiking trails near seattle")])
+        let result = gate.decide(for: call, context: context)
+        XCTAssertEqual(result.decision, .allow)
+        XCTAssertEqual(result.reasonCode, "search_allowed")
+    }
 }

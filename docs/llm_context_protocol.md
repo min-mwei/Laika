@@ -315,6 +315,8 @@ Planned/primitives to layer the high-level vocabulary on top of:
 - `artifact.share`: `{ "artifactId": string, "format": "markdown"|"text"|"json"|"csv"|"pdf", "filename"?: string, "target"?: "share_sheet"|"clipboard"|"file" }`
 - `integration.invoke`: `{ "integration": string, "operation": string, "payload": object, "idempotencyKey"?: string }`
 - `app.calculate`: `{ "expression": string, "precision"?: number }`
+  - `precision` is optional (integer 0..6). When provided, results are rounded using half-up rounding.
+  - Tool results include `result` (number) and `formatted` (string) when `precision` is provided.
 
 Rules:
 

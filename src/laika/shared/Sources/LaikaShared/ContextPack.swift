@@ -228,6 +228,9 @@ public struct ObservedPrimaryContent: Codable, Equatable, Sendable {
 public struct Observation: Codable, Equatable, Sendable {
     public let url: String
     public let title: String
+    public let documentId: String?
+    public let navGeneration: Int?
+    public let observedAtMs: Int?
     public let text: String
     public let elements: [ObservedElement]
     public let blocks: [ObservedTextBlock]
@@ -236,6 +239,36 @@ public struct Observation: Codable, Equatable, Sendable {
     public let primary: ObservedPrimaryContent?
     public let comments: [ObservedComment]
     public let signals: [String]
+
+    public init(
+        url: String,
+        title: String,
+        documentId: String? = nil,
+        navGeneration: Int? = nil,
+        observedAtMs: Int? = nil,
+        text: String,
+        elements: [ObservedElement],
+        blocks: [ObservedTextBlock] = [],
+        items: [ObservedItem] = [],
+        outline: [ObservedOutlineItem] = [],
+        primary: ObservedPrimaryContent? = nil,
+        comments: [ObservedComment] = [],
+        signals: [String] = []
+    ) {
+        self.url = url
+        self.title = title
+        self.documentId = documentId
+        self.navGeneration = navGeneration
+        self.observedAtMs = observedAtMs
+        self.text = text
+        self.elements = elements
+        self.blocks = blocks
+        self.items = items
+        self.outline = outline
+        self.primary = primary
+        self.comments = comments
+        self.signals = signals
+    }
 
     public init(
         url: String,
@@ -249,21 +282,29 @@ public struct Observation: Codable, Equatable, Sendable {
         comments: [ObservedComment] = [],
         signals: [String] = []
     ) {
-        self.url = url
-        self.title = title
-        self.text = text
-        self.elements = elements
-        self.blocks = blocks
-        self.items = items
-        self.outline = outline
-        self.primary = primary
-        self.comments = comments
-        self.signals = signals
+        self.init(
+            url: url,
+            title: title,
+            documentId: nil,
+            navGeneration: nil,
+            observedAtMs: nil,
+            text: text,
+            elements: elements,
+            blocks: blocks,
+            items: items,
+            outline: outline,
+            primary: primary,
+            comments: comments,
+            signals: signals
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
         case url
         case title
+        case documentId
+        case navGeneration
+        case observedAtMs
         case text
         case elements
         case blocks
@@ -278,6 +319,9 @@ public struct Observation: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         url = try container.decode(String.self, forKey: .url)
         title = try container.decode(String.self, forKey: .title)
+        documentId = try container.decodeIfPresent(String.self, forKey: .documentId)
+        navGeneration = try container.decodeIfPresent(Int.self, forKey: .navGeneration)
+        observedAtMs = try container.decodeIfPresent(Int.self, forKey: .observedAtMs)
         text = try container.decode(String.self, forKey: .text)
         elements = try container.decode([ObservedElement].self, forKey: .elements)
         blocks = try container.decodeIfPresent([ObservedTextBlock].self, forKey: .blocks) ?? []
@@ -292,6 +336,9 @@ public struct Observation: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(url, forKey: .url)
         try container.encode(title, forKey: .title)
+        try container.encodeIfPresent(documentId, forKey: .documentId)
+        try container.encodeIfPresent(navGeneration, forKey: .navGeneration)
+        try container.encodeIfPresent(observedAtMs, forKey: .observedAtMs)
         try container.encode(text, forKey: .text)
         try container.encode(elements, forKey: .elements)
         try container.encode(blocks, forKey: .blocks)

@@ -4,6 +4,7 @@
 const fs = require("fs");
 const path = require("path");
 const searchTools = require("../../extension/lib/search_tools");
+const calculateTools = require("../../extension/lib/calculate");
 
 // Automation runs get throttled by Google frequently. Default to DuckDuckGo here,
 // while keeping the extension's default engine as Google.
@@ -398,6 +399,9 @@ function buildObservePayload(observation) {
   return {
     url: observation.url || "",
     title: observation.title || "",
+    documentId: observation.documentId || "",
+    navGeneration: typeof observation.navGeneration === "number" ? observation.navGeneration : null,
+    observedAtMs: typeof observation.observedAtMs === "number" ? observation.observedAtMs : null,
     textChars: (observation.text || "").length,
     elementCount: Array.isArray(observation.elements) ? observation.elements.length : 0,
     blockCount: Array.isArray(observation.blocks) ? observation.blocks.length : 0,
@@ -538,6 +542,31 @@ async function executeTool(page, toolCall, observeOptions, navTimeoutMs, observe
     const observed = await observeWithRetry(page, observeOptions, observeDelayMs);
     observation = observed.observation;
     retryCount = observed.retryCount;
+  } else if (name === "app.calculate") {
+    if (!calculateTools || typeof calculateTools.evaluateExpression !== "function") {
+      result = { status: "error", error: "calculator_unavailable" };
+    } else if (typeof args.expression !== "string" || !args.expression) {
+      result = { status: "error", error: "missing_expression" };
+    } else {
+      const precision = calculateTools.normalizePrecision(args.precision);
+      if (!precision || !precision.ok) {
+        result = { status: "error", error: "invalid_precision" };
+      } else {
+        const evaluated = calculateTools.evaluateExpression(args.expression);
+        if (!evaluated || !evaluated.ok) {
+          result = { status: "error", error: evaluated && evaluated.error ? evaluated.error : "invalid_expression" };
+        } else {
+          const formatted = calculateTools.formatValue(evaluated.value, precision.value);
+          result = { status: "ok", result: formatted.result };
+          if (precision.value !== null && typeof precision.value !== "undefined") {
+            result.precision = precision.value;
+          }
+          if (formatted.formatted) {
+            result.formatted = formatted.formatted;
+          }
+        }
+      }
+    }
   } else {
     const urlBefore = page.url();
     result = await applyTool(page, name, args);
@@ -622,7 +651,13 @@ async function runGoals(state, goals, options) {
               finalUrl: executed.result && executed.result.finalUrl ? executed.result.finalUrl : "",
               engine: executed.result && executed.result.engine ? executed.result.engine : ""
             }
-          : {});
+          : (action.toolCall.name === "app.calculate"
+            ? {
+                result: executed.result && typeof executed.result.result === "number" ? executed.result.result : null,
+                precision: executed.result && typeof executed.result.precision === "number" ? executed.result.precision : null,
+                formatted: executed.result && typeof executed.result.formatted === "string" ? executed.result.formatted : null
+              }
+            : {}));
       recentToolResults.push(buildToolResult(action.toolCall, executed.result.status || "ok", payload));
       stepInfo.toolResult = executed.result;
       stepInfo.nextObservation = summarizeObservation(executed.observation);

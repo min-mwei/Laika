@@ -3,6 +3,7 @@
 var SearchTools = null;
 var PlanValidator = null;
 var AgentRunner = null;
+var CalculateTools = null;
 var SEARCH_TOOLS_INIT = { imported: false, usedFallback: false, importError: "" };
 try {
   if (typeof importScripts === "function") {
@@ -36,6 +37,15 @@ try {
 }
 if (typeof self !== "undefined" && self.LaikaAgentRunner) {
   AgentRunner = self.LaikaAgentRunner;
+}
+try {
+  if (typeof importScripts === "function") {
+    importScripts("lib/calculate.js");
+  }
+} catch (error) {
+}
+if (typeof self !== "undefined" && self.LaikaCalculate) {
+  CalculateTools = self.LaikaCalculate;
 }
 if (!SearchTools) {
   SEARCH_TOOLS_INIT.usedFallback = true;
@@ -217,7 +227,23 @@ var ALLOWED_TOOLS = {
   "browser.forward": true,
   "browser.refresh": true,
   "browser.select": true,
-  "search": true
+  "search": true,
+  "app.calculate": true
+};
+
+var ToolErrorCode = {
+  INVALID_ARGUMENTS: "INVALID_ARGUMENTS",
+  MISSING_URL: "MISSING_URL",
+  INVALID_URL: "INVALID_URL",
+  NO_ACTIVE_TAB: "NO_ACTIVE_TAB",
+  NO_TARGET_TAB: "NO_TARGET_TAB",
+  NO_CONTEXT: "NO_CONTEXT",
+  UNSUPPORTED_TOOL: "UNSUPPORTED_TOOL",
+  OPEN_TAB_FAILED: "OPEN_TAB_FAILED",
+  NAVIGATION_FAILED: "NAVIGATION_FAILED",
+  RUNTIME_UNAVAILABLE: "RUNTIME_UNAVAILABLE",
+  SEARCH_UNAVAILABLE: "SEARCH_UNAVAILABLE",
+  SEARCH_FAILED: "SEARCH_FAILED"
 };
 
 var NATIVE_APP_ID = "com.laika.Laika";
@@ -580,30 +606,30 @@ async function getActiveTab(windowId) {
 async function handleObserve(options, sender, tabOverride) {
   var tabId = await resolveTargetTabId(sender, tabOverride);
   if (!isNumericId(tabId)) {
-    return { status: "error", error: "no_active_tab" };
+    return { status: "error", error: ToolErrorCode.NO_ACTIVE_TAB };
   }
   try {
     var result = await browser.tabs.sendMessage(tabId, { type: "laika.observe", options: options || {} });
     if (!result || typeof result.status === "undefined") {
-      return { status: "error", error: "no_context" };
+      return { status: "error", error: ToolErrorCode.NO_CONTEXT };
     }
     if (result && typeof result === "object") {
       result.tabId = tabId;
     }
     return result;
   } catch (error) {
-    return { status: "error", error: "no_context" };
+    return { status: "error", error: ToolErrorCode.NO_CONTEXT };
   }
 }
 
 async function handleSearchTool(args, sender, tabOverride) {
   if (!SearchTools || typeof SearchTools.buildSearchUrl !== "function") {
-    logSearch("error", { stage: "init", error: "search_unavailable" });
-    return { status: "error", error: "search_unavailable" };
+    logSearch("error", { stage: "init", error: ToolErrorCode.SEARCH_UNAVAILABLE });
+    return { status: "error", error: ToolErrorCode.SEARCH_UNAVAILABLE };
   }
   if (!args || typeof args.query !== "string") {
-    logSearch("error", { stage: "validate", error: "missing_query" });
-    return { status: "error", error: "missing_query" };
+    logSearch("error", { stage: "validate", error: ToolErrorCode.INVALID_ARGUMENTS });
+    return { status: "error", error: ToolErrorCode.INVALID_ARGUMENTS };
   }
   var settings = await loadSearchSettings();
   var engine = typeof args.engine === "string" ? args.engine : "";
@@ -618,13 +644,13 @@ async function handleSearchTool(args, sender, tabOverride) {
   });
   var built = SearchTools.buildSearchUrl(args.query, engine, settings);
   if (!built || built.error) {
-    logSearch("error", { stage: "build", error: built && built.error ? built.error : "search_failed" });
-    return { status: "error", error: built && built.error ? built.error : "search_failed" };
+    logSearch("error", { stage: "build", error: ToolErrorCode.SEARCH_FAILED });
+    return { status: "error", error: ToolErrorCode.SEARCH_FAILED };
   }
   var safeUrl = sanitizeOpenUrl(built.url);
   if (!safeUrl) {
-    logSearch("error", { stage: "sanitize", error: "invalid_url", url: built.url });
-    return { status: "error", error: "invalid_url" };
+    logSearch("error", { stage: "sanitize", error: ToolErrorCode.INVALID_URL, url: built.url });
+    return { status: "error", error: ToolErrorCode.INVALID_URL };
   }
   var urlDetails = urlInfo(safeUrl);
   logSearch("built_url", { url: budgetText(safeUrl, 280) });
@@ -638,8 +664,8 @@ async function handleSearchTool(args, sender, tabOverride) {
   var openInNewTab = typeof args.newTab === "boolean" ? args.newTab : true;
   if (openInNewTab) {
     if (!browser.tabs || !browser.tabs.create) {
-      logSearch("error", { stage: "open_tab", error: "tabs_unavailable" });
-      return { status: "error", error: "tabs_unavailable" };
+      logSearch("error", { stage: "open_tab", error: ToolErrorCode.RUNTIME_UNAVAILABLE });
+      return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
     }
     var targetWindowId = await getTabWindowId(tabOverride);
     if (!isNumericId(targetWindowId)) {
@@ -682,10 +708,10 @@ async function handleSearchTool(args, sender, tabOverride) {
       }
       logSearch("error", {
         stage: "open_tab",
-        error: "open_tab_failed",
+        error: ToolErrorCode.OPEN_TAB_FAILED,
         message: String(error && error.message ? error.message : error).slice(0, 200)
       });
-      return { status: "error", error: "open_tab_failed" };
+      return { status: "error", error: ToolErrorCode.OPEN_TAB_FAILED };
     }
   }
 
@@ -694,18 +720,18 @@ async function handleSearchTool(args, sender, tabOverride) {
     if (await tabExists(tabOverride)) {
       tabId = tabOverride;
     } else {
-      return { status: "error", error: "no_target_tab" };
+      return { status: "error", error: ToolErrorCode.NO_TARGET_TAB };
     }
   } else {
     tabId = await resolveTargetTabId(sender, null);
   }
   if (!isNumericId(tabId)) {
-    logSearch("error", { stage: "navigate", error: "no_active_tab" });
-    return { status: "error", error: "no_active_tab" };
+    logSearch("error", { stage: "navigate", error: ToolErrorCode.NO_ACTIVE_TAB });
+    return { status: "error", error: ToolErrorCode.NO_ACTIVE_TAB };
   }
   if (!browser.tabs || !browser.tabs.update) {
-    logSearch("error", { stage: "navigate", error: "tabs_unavailable" });
-    return { status: "error", error: "tabs_unavailable" };
+    logSearch("error", { stage: "navigate", error: ToolErrorCode.RUNTIME_UNAVAILABLE });
+    return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
   }
   try {
     await browser.tabs.update(tabId, { url: safeUrl });
@@ -714,10 +740,10 @@ async function handleSearchTool(args, sender, tabOverride) {
   } catch (error) {
     logSearch("error", {
       stage: "navigate",
-      error: "navigate_failed",
+      error: ToolErrorCode.NAVIGATION_FAILED,
       message: String(error && error.message ? error.message : error).slice(0, 200)
     });
-    return { status: "error", error: "navigate_failed" };
+    return { status: "error", error: ToolErrorCode.NAVIGATION_FAILED };
   }
 }
 
@@ -1332,7 +1358,7 @@ async function closePanelWindow(sender, ownerWindowOverride) {
 
 async function handleTool(toolName, args, sender, tabOverride) {
   if (!ALLOWED_TOOLS[toolName]) {
-    return { status: "error", error: "unsupported_tool" };
+    return { status: "error", error: ToolErrorCode.UNSUPPORTED_TOOL };
   }
   if (toolName === "browser.observe_dom") {
     function clampInt(value, min, max) {
@@ -1368,14 +1394,43 @@ async function handleTool(toolName, args, sender, tabOverride) {
   if (toolName === "search") {
     return handleSearchTool(args || {}, sender, tabOverride);
   }
+  if (toolName === "app.calculate") {
+    if (!CalculateTools || typeof CalculateTools.evaluateExpression !== "function") {
+      return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
+    }
+    if (!args || typeof args.expression !== "string") {
+      return { status: "error", error: ToolErrorCode.INVALID_ARGUMENTS };
+    }
+    var precision = CalculateTools.normalizePrecision
+      ? CalculateTools.normalizePrecision(args.precision)
+      : { ok: true, value: null };
+    if (!precision || precision.ok !== true) {
+      return { status: "error", error: ToolErrorCode.INVALID_ARGUMENTS };
+    }
+    var evaluation = CalculateTools.evaluateExpression(args.expression);
+    if (!evaluation || evaluation.ok !== true) {
+      return { status: "error", error: ToolErrorCode.INVALID_ARGUMENTS };
+    }
+    var formatted = CalculateTools.formatValue
+      ? CalculateTools.formatValue(evaluation.value, precision.value)
+      : { result: evaluation.value, formatted: null };
+    var payload = { status: "ok", result: formatted.result };
+    if (precision.value !== null && typeof precision.value !== "undefined") {
+      payload.precision = precision.value;
+    }
+    if (formatted.formatted) {
+      payload.formatted = formatted.formatted;
+    }
+    return payload;
+  }
   if (toolName === "browser.open_tab") {
     if (args && args.url) {
       var safeUrl = sanitizeOpenUrl(args.url);
       if (!safeUrl) {
-        return { status: "error", error: "invalid_url" };
+        return { status: "error", error: ToolErrorCode.INVALID_URL };
       }
       if (!browser.tabs || !browser.tabs.create) {
-        return { status: "error", error: "tabs_unavailable" };
+        return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
       }
       var targetWindowId = await getTabWindowId(tabOverride);
       if (!isNumericId(targetWindowId)) {
@@ -1396,10 +1451,10 @@ async function handleTool(toolName, args, sender, tabOverride) {
           } catch (innerError) {
           }
         }
-        return { status: "error", error: "open_tab_failed" };
+        return { status: "error", error: ToolErrorCode.OPEN_TAB_FAILED };
       }
     }
-    return { status: "error", error: "missing_url" };
+    return { status: "error", error: ToolErrorCode.MISSING_URL };
   }
 
   var tabId = null;
@@ -1407,69 +1462,69 @@ async function handleTool(toolName, args, sender, tabOverride) {
     if (await tabExists(tabOverride)) {
       tabId = tabOverride;
     } else {
-      return { status: "error", error: "no_target_tab" };
+      return { status: "error", error: ToolErrorCode.NO_TARGET_TAB };
     }
   } else {
     tabId = await resolveTargetTabId(sender, null);
   }
   if (!isNumericId(tabId)) {
-    return { status: "error", error: "no_active_tab" };
+    return { status: "error", error: ToolErrorCode.NO_ACTIVE_TAB };
   }
   if (toolName === "browser.navigate") {
     if (!args || !args.url) {
-      return { status: "error", error: "missing_url" };
+      return { status: "error", error: ToolErrorCode.MISSING_URL };
     }
     var navigateUrl = sanitizeOpenUrl(args.url);
     if (!navigateUrl) {
-      return { status: "error", error: "invalid_url" };
+      return { status: "error", error: ToolErrorCode.INVALID_URL };
     }
     if (!browser.tabs || !browser.tabs.update) {
-      return { status: "error", error: "tabs_unavailable" };
+      return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
     }
     try {
       await browser.tabs.update(tabId, { url: navigateUrl });
       return { status: "ok" };
     } catch (error) {
-      return { status: "error", error: "navigate_failed" };
+      return { status: "error", error: ToolErrorCode.NAVIGATION_FAILED };
     }
   }
   if (toolName === "browser.back") {
     if (!browser.tabs || !browser.tabs.goBack) {
-      return { status: "error", error: "tabs_unavailable" };
+      return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
     }
     try {
       await browser.tabs.goBack(tabId);
       return { status: "ok" };
     } catch (error) {
-      return { status: "error", error: "back_failed" };
+      return { status: "error", error: ToolErrorCode.NAVIGATION_FAILED };
     }
   }
   if (toolName === "browser.forward") {
     if (!browser.tabs || !browser.tabs.goForward) {
-      return { status: "error", error: "tabs_unavailable" };
+      return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
     }
     try {
       await browser.tabs.goForward(tabId);
       return { status: "ok" };
     } catch (error) {
-      return { status: "error", error: "forward_failed" };
+      return { status: "error", error: ToolErrorCode.NAVIGATION_FAILED };
     }
   }
   if (toolName === "browser.refresh") {
     if (!browser.tabs || !browser.tabs.reload) {
-      return { status: "error", error: "tabs_unavailable" };
+      return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
     }
     try {
       await browser.tabs.reload(tabId);
       return { status: "ok" };
     } catch (error) {
-      return { status: "error", error: "refresh_failed" };
+      return { status: "error", error: ToolErrorCode.NAVIGATION_FAILED };
     }
   }
   try {
     return await browser.tabs.sendMessage(tabId, { type: "laika.tool", toolName: toolName, args: args || {} });
   } catch (error) {
-    return { status: "error", error: "no_context" };
+    return { status: "error", error: ToolErrorCode.NO_CONTEXT };
   }
 }
 
@@ -1521,6 +1576,27 @@ function isAllowedAutomationOrigin(origin) {
   }
 }
 
+function normalizeAutomationReportUrl(reportUrl, origin) {
+  if (!reportUrl || typeof reportUrl !== "string") {
+    return null;
+  }
+  try {
+    var parsed = new URL(reportUrl);
+    if (!isAllowedAutomationOrigin(parsed.origin)) {
+      return null;
+    }
+    if (origin && parsed.origin !== origin) {
+      return null;
+    }
+    if (parsed.pathname !== "/api/report") {
+      return null;
+    }
+    return parsed.toString();
+  } catch (error) {
+    return null;
+  }
+}
+
 function getAutomationRun(runId) {
   return runId && AUTOMATION_RUNS[runId] ? AUTOMATION_RUNS[runId] : null;
 }
@@ -1549,14 +1625,52 @@ async function resetAutomationState() {
   return { status: "ok" };
 }
 
-function sendAutomationMessage(tabId, payload) {
+async function sendAutomationMessage(tabId, payload) {
   if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.sendMessage) {
-    return;
+    return false;
   }
   try {
-    browser.tabs.sendMessage(tabId, payload);
+    await browser.tabs.sendMessage(tabId, payload);
+    return true;
   } catch (error) {
+    return false;
   }
+}
+
+async function postAutomationReport(reportUrl, payload) {
+  if (!reportUrl || typeof fetch !== "function") {
+    return false;
+  }
+  try {
+    await fetch(reportUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function deliverAutomationResult(runState, payload, kind) {
+  var delivered = await sendAutomationMessage(runState.reportTabId, payload);
+  if (delivered) {
+    return;
+  }
+  if (!runState.reportUrl) {
+    return;
+  }
+  var reportPayload = {
+    runId: runState.runId,
+    source: "background"
+  };
+  if (kind === "result") {
+    reportPayload.result = payload.result;
+  } else if (kind === "error") {
+    reportPayload.error = payload.error;
+  }
+  await postAutomationReport(runState.reportUrl, reportPayload);
 }
 
 async function resolveAutomationTargetTabId(targetUrl, sender) {
@@ -1589,6 +1703,7 @@ async function startAutomationRun(message, sender) {
   if (!message.nonce || typeof message.nonce !== "string") {
     return { status: "error", error: "missing_nonce" };
   }
+  var reportUrl = normalizeAutomationReportUrl(message.reportUrl, origin);
   var goals = Array.isArray(message.goals) ? message.goals : (message.goal ? [message.goal] : []);
   if (!goals.length) {
     return { status: "error", error: "missing_goals" };
@@ -1613,6 +1728,7 @@ async function startAutomationRun(message, sender) {
     status: "starting",
     startedAt: Date.now(),
     reportTabId: sender.tab.id,
+    reportUrl: reportUrl,
     cancelRequested: false
   };
   AUTOMATION_RUNS[runId] = runState;
@@ -1682,20 +1798,22 @@ async function startAutomationRun(message, sender) {
     runState.status = "completed";
     runState.completedAt = Date.now();
     runState.result = result;
-    sendAutomationMessage(runState.reportTabId, {
+    var payload = {
       type: "laika.automation.result",
       runId: runId,
       result: result
-    });
+    };
+    deliverAutomationResult(runState, payload, "result");
   }).catch(function (error) {
     runState.status = "error";
     runState.completedAt = Date.now();
     runState.error = String(error && error.message ? error.message : error);
-    sendAutomationMessage(runState.reportTabId, {
+    var payload = {
       type: "laika.automation.error",
       runId: runId,
       error: runState.error
-    });
+    };
+    deliverAutomationResult(runState, payload, "error");
   });
 
   return { status: "ok", runId: runId };

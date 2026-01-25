@@ -17,7 +17,7 @@ Purpose: implement `docs/laika_vocabulary.md` by finishing a small, robust primi
 - Strict validation in the LLMCP parser; reject unknown tools and extra keys.
 - Standardize tool execution result shape across JS/Swift:
   - ok: `{status:"ok", ...}`
-  - error: `{status:"error", error:"<lower_snake_case_code>", ...}`
+- error: `{status:"error", error:"<UPPER_SNAKE_CASE_CODE>", ...}`
 - Define canonical `signals` and tool `error` codes as shared, versioned enums and enforce them at boundaries (Swift <-> JS) and in docs.
 
 2) `browser.observe_dom` foundations
@@ -25,9 +25,9 @@ Purpose: implement `docs/laika_vocabulary.md` by finishing a small, robust primi
 - Add observation metadata (`documentId`, `navigationGeneration`, `observedAtMs`).
 - Traverse open shadow DOM and same-origin iframes; emit signals for closed/cross-origin frames.
 - Support scoped re-observe via `rootHandleId` ("zoom in") without changing output shape.
-- Define/emit a stable `signals` set (v1 emitted + v1+ reserved) and enforce the canonical names:
-  - v1 emitted: auth_fields/auth_gate/paywall/overlay_or_dialog/consent_overlay/age_gate/geo_block/script_required/url_redacted
-  - v1+ reserved: sparse_text/non_text_content/captcha_or_robot_check/cross_origin_iframe/closed_shadow_root/virtualized_list/infinite_scroll/pdf_viewer
+- Define/emit a stable `signals` set and enforce the canonical names:
+  - paywall_or_login/consent_modal/overlay_blocking/captcha_or_robot_check/age_gate/geo_block/script_required/url_redacted
+  - sparse_text/non_text_content/cross_origin_iframe/closed_shadow_root/virtualized_list/infinite_scroll/pdf_viewer
 - Propagate observation metadata into the shared `Observation` / `ContextPack` types and tie handle validity to (`documentId`, `navigationGeneration`).
 - Enforce budgets and redaction; never emit raw HTML.
 

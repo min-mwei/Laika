@@ -11,6 +11,84 @@
     }
   };
 
+  var ToolErrorCode = {
+    INVALID_ARGUMENTS: "INVALID_ARGUMENTS",
+    NO_CONTEXT: "NO_CONTEXT",
+    UNSUPPORTED_TOOL: "UNSUPPORTED_TOOL",
+    STALE_HANDLE: "STALE_HANDLE",
+    NOT_FOUND: "NOT_FOUND",
+    NOT_INTERACTABLE: "NOT_INTERACTABLE",
+    DISABLED: "DISABLED",
+    BLOCKED_BY_OVERLAY: "BLOCKED_BY_OVERLAY"
+  };
+
+  var ObservationSignal = {
+    PAYWALL_OR_LOGIN: "paywall_or_login",
+    CONSENT_MODAL: "consent_modal",
+    CAPTCHA_OR_ROBOT_CHECK: "captcha_or_robot_check",
+    OVERLAY_BLOCKING: "overlay_blocking",
+    SPARSE_TEXT: "sparse_text",
+    NON_TEXT_CONTENT: "non_text_content",
+    CROSS_ORIGIN_IFRAME: "cross_origin_iframe",
+    CLOSED_SHADOW_ROOT: "closed_shadow_root",
+    VIRTUALIZED_LIST: "virtualized_list",
+    INFINITE_SCROLL: "infinite_scroll",
+    PDF_VIEWER: "pdf_viewer",
+    URL_REDACTED: "url_redacted",
+    AGE_GATE: "age_gate",
+    GEO_BLOCK: "geo_block",
+    SCRIPT_REQUIRED: "script_required"
+  };
+
+  var documentId = null;
+  var navGeneration = 0;
+  var navChangedAtMs = 0;
+
+  function randomId(prefix) {
+    var randomPart = Math.random().toString(36).slice(2, 10);
+    var timePart = Date.now().toString(36);
+    return (prefix || "id") + "-" + timePart + "-" + randomPart;
+  }
+
+  function ensureDocumentId() {
+    if (!documentId) {
+      documentId = randomId("doc");
+    }
+    return documentId;
+  }
+
+  function markNavigation() {
+    navGeneration += 1;
+    navChangedAtMs = Date.now();
+  }
+
+  function initNavigationTracking() {
+    if (typeof window === "undefined" || !window.history) {
+      return;
+    }
+    try {
+      var originalPush = window.history.pushState;
+      var originalReplace = window.history.replaceState;
+      if (originalPush) {
+        window.history.pushState = function () {
+          markNavigation();
+          return originalPush.apply(this, arguments);
+        };
+      }
+      if (originalReplace) {
+        window.history.replaceState = function () {
+          markNavigation();
+          return originalReplace.apply(this, arguments);
+        };
+      }
+    } catch (error) {
+    }
+    window.addEventListener("popstate", markNavigation);
+    window.addEventListener("hashchange", markNavigation);
+  }
+
+  initNavigationTracking();
+
   var handleCounter = 0;
   var handleMap = new Map();
   var SIDECAR_ID = "laika-sidecar";
@@ -156,6 +234,15 @@
     "turn off ad blocker",
     "disable adblock",
     "ad blocker"
+  ];
+  var ROBOT_CHECK_KEYWORDS = [
+    "verify that you are not a robot",
+    "are you a robot",
+    "captcha",
+    "robot check",
+    "human verification",
+    "please verify",
+    "unusual traffic"
   ];
   var BLOCK_CHILD_SELECTORS = [
     "p",
@@ -386,7 +473,24 @@
     return false;
   }
 
-  function collectRoots(root) {
+  function isLikelyShadowHost(element) {
+    if (!element || !element.tagName) {
+      return false;
+    }
+    var tagName = element.tagName.toLowerCase();
+    if (tagName.indexOf("-") === -1) {
+      return false;
+    }
+    if (element.shadowRoot) {
+      return false;
+    }
+    if (element.childElementCount > 0) {
+      return false;
+    }
+    return true;
+  }
+
+  function collectRoots(root, signalState) {
     var roots = [];
     var seen = new Set();
     function visit(node) {
@@ -403,6 +507,22 @@
       while (current) {
         if (current.shadowRoot && current.shadowRoot.mode === "open") {
           visit(current.shadowRoot);
+        } else if (signalState && isLikelyShadowHost(current)) {
+          signalState.closedShadowRoot = true;
+        }
+        if (current.tagName && current.tagName.toLowerCase() === "iframe") {
+          try {
+            var frameDoc = current.contentDocument;
+            if (frameDoc && frameDoc.documentElement) {
+              visit(frameDoc);
+            } else if (signalState) {
+              signalState.crossOriginIframe = true;
+            }
+          } catch (error) {
+            if (signalState) {
+              signalState.crossOriginIframe = true;
+            }
+          }
         }
         current = walker.nextNode();
       }
@@ -434,12 +554,15 @@
     }
     var existing = element.getAttribute("data-laika-handle");
     if (existing) {
+      if (!handleMap.has(existing)) {
+        handleMap.set(existing, { element: element, generation: navGeneration, documentId: ensureDocumentId() });
+      }
       return existing;
     }
     handleCounter += 1;
     var handle = "laika-" + handleCounter;
     element.setAttribute("data-laika-handle", handle);
-    handleMap.set(handle, element);
+    handleMap.set(handle, { element: element, generation: navGeneration, documentId: ensureDocumentId() });
     return handle;
   }
 
@@ -971,11 +1094,11 @@
     }
     var authField = baseRoot.querySelector("input[type=\"password\"],input[type=\"email\"]");
     if (authField) {
-      addSignal("auth_fields");
+      addSignal(ObservationSignal.PAYWALL_OR_LOGIN);
     }
     var overlay = findOverlayCandidate(baseRoot, rootRoots);
     if (overlay) {
-      addSignal("overlay_or_dialog");
+      addSignal(ObservationSignal.OVERLAY_BLOCKING);
     }
     var overlayText = overlay ? extractSignalText(overlay, 900) : "";
     var searchText = overlayText;
@@ -987,7 +1110,7 @@
     }
     var gateElement = baseRoot.querySelector("[data-paywall],[class*=\"paywall\"],[id*=\"paywall\"],[class*=\"gateway\"],[id*=\"gateway\"]");
     if (gateElement) {
-      addSignal("paywall");
+      addSignal(ObservationSignal.PAYWALL_OR_LOGIN);
     }
     var lower = searchText.toLowerCase();
     if (!lower) {
@@ -997,28 +1120,74 @@
       containsAnyKeyword(lower, PAYWALL_KEYWORDS_STRONG) ||
       (!!overlay && containsAnyKeyword(lower, PAYWALL_KEYWORDS_WEAK));
     if (paywallHit) {
-      addSignal("paywall");
+      addSignal(ObservationSignal.PAYWALL_OR_LOGIN);
     }
     var authHit =
       containsAnyKeyword(lower, AUTH_GATE_KEYWORDS_STRONG) ||
       (!!overlay && containsAnyKeyword(lower, AUTH_GATE_KEYWORDS_WEAK));
     if (authHit) {
-      addSignal("auth_gate");
+      addSignal(ObservationSignal.PAYWALL_OR_LOGIN);
     }
     var consentHit = containsAnyKeyword(lower, CONSENT_KEYWORDS);
     if (consentHit && overlay) {
-      addSignal("consent_overlay");
+      addSignal(ObservationSignal.CONSENT_MODAL);
     }
     if (containsAnyKeyword(lower, AGE_GATE_KEYWORDS)) {
-      addSignal("age_gate");
+      addSignal(ObservationSignal.AGE_GATE);
     }
     if (containsAnyKeyword(lower, GEO_BLOCK_KEYWORDS)) {
-      addSignal("geo_block");
+      addSignal(ObservationSignal.GEO_BLOCK);
     }
     if (containsAnyKeyword(lower, SCRIPT_BLOCK_KEYWORDS)) {
-      addSignal("script_required");
+      addSignal(ObservationSignal.SCRIPT_REQUIRED);
+    }
+    if (containsAnyKeyword(lower, ROBOT_CHECK_KEYWORDS)) {
+      addSignal(ObservationSignal.CAPTCHA_OR_ROBOT_CHECK);
     }
     return signals;
+  }
+
+  function hasNonTextContent(root) {
+    var base = root || document;
+    if (!base || !base.querySelector) {
+      return false;
+    }
+    return !!base.querySelector("canvas,video,svg,img");
+  }
+
+  function isPdfViewerDocument() {
+    var contentType = document.contentType || "";
+    if (contentType && contentType.toLowerCase().indexOf("pdf") >= 0) {
+      return true;
+    }
+    if (document.querySelector("embed[type=\"application/pdf\"],object[type=\"application/pdf\"]")) {
+      return true;
+    }
+    return false;
+  }
+
+  function isLikelyVirtualizedList(node) {
+    if (!node || !node.getAttribute) {
+      return false;
+    }
+    var className = typeof node.className === "string" ? node.className.toLowerCase() : "";
+    if (className.indexOf("virtual") >= 0 || className.indexOf("infinite") >= 0) {
+      return true;
+    }
+    if (node.getAttribute("data-virtualized") === "true") {
+      return true;
+    }
+    if (node.getAttribute("aria-rowcount")) {
+      return true;
+    }
+    return false;
+  }
+
+  function isInfiniteScrollContainer(node) {
+    if (!node || !node.scrollHeight || !node.clientHeight) {
+      return false;
+    }
+    return node.scrollHeight > node.clientHeight * 3;
   }
 
   function applySidecarPlacement(container, side) {
@@ -2827,61 +2996,70 @@
         bodyTextLength: document.body && document.body.textContent ? document.body.textContent.length : 0
       };
     }
+    ensureDocumentId();
     var rootsStart = debugEnabled ? nowMs() : 0;
-    var rootRoots = collectRoots(root || document);
+    var signalState = { crossOriginIframe: false, closedShadowRoot: false };
+    var rootRoots = collectRoots(root || document, signalState);
     if (debugInfo) {
       debugInfo.timings.collectRootsMs = Math.round(nowMs() - rootsStart);
       debugInfo.counts.rootCount = rootRoots.length;
     }
     var signalsStart = debugEnabled ? nowMs() : 0;
     var signals = collectAccessSignals(root, rootRoots);
+    if (signalState.crossOriginIframe) {
+      signals.push(ObservationSignal.CROSS_ORIGIN_IFRAME);
+    }
+    if (signalState.closedShadowRoot) {
+      signals.push(ObservationSignal.CLOSED_SHADOW_ROOT);
+    }
     if (debugInfo) {
       debugInfo.timings.collectSignalsMs = Math.round(nowMs() - signalsStart);
       debugInfo.signals = signals;
     }
     var textRoot = root;
     var searchRoot = null;
+    var listRoot = null;
+    var contentRoot = null;
     if (!options || !options.rootHandleId) {
       searchRoot = selectSearchRoot(root, rootRoots, debugInfo);
       if (searchRoot) {
         textRoot = searchRoot;
       } else {
-      var contentStart = debugEnabled ? nowMs() : 0;
-      var contentRoot = pickContentRoot(root, rootRoots, debugInfo);
-      if (debugInfo) {
-        debugInfo.timings.pickContentRootMs = Math.round(nowMs() - contentStart);
-      }
-      var listRoot = null;
-      if (!contentRoot) {
-        listRoot = selectListRoot(root, rootRoots, debugInfo);
-        if (listRoot) {
-          contentRoot = listRoot;
+        var contentStart = debugEnabled ? nowMs() : 0;
+        contentRoot = pickContentRoot(root, rootRoots, debugInfo);
+        if (debugInfo) {
+          debugInfo.timings.pickContentRootMs = Math.round(nowMs() - contentStart);
         }
-      }
-      var shouldCheckCommentRoot = !contentRoot || hasCommentLabel(contentRoot);
-      if (!shouldCheckCommentRoot && contentRoot) {
-        var contentLength = (contentRoot.textContent || "").length;
-        if (contentLength > 0 && contentLength < 4000) {
-          var rootLength = (root.textContent || "").length;
-          var share = rootLength > 0 ? contentLength / rootLength : 1;
-          if (share < 0.2) {
-            shouldCheckCommentRoot = true;
+        if (!contentRoot) {
+          listRoot = selectListRoot(root, rootRoots, debugInfo);
+          if (listRoot) {
+            contentRoot = listRoot;
           }
         }
-      }
-      if (shouldCheckCommentRoot && !listRoot) {
-        var commentStart = debugEnabled ? nowMs() : 0;
-        var commentRoot = pickCommentRoot(root, rootRoots, debugInfo);
-        if (debugInfo) {
-          debugInfo.timings.pickCommentRootMs = Math.round(nowMs() - commentStart);
+        var shouldCheckCommentRoot = !contentRoot || hasCommentLabel(contentRoot);
+        if (!shouldCheckCommentRoot && contentRoot) {
+          var contentLength = (contentRoot.textContent || "").length;
+          if (contentLength > 0 && contentLength < 4000) {
+            var rootLength = (root.textContent || "").length;
+            var share = rootLength > 0 ? contentLength / rootLength : 1;
+            if (share < 0.2) {
+              shouldCheckCommentRoot = true;
+            }
+          }
         }
-        if (commentRoot) {
-          contentRoot = commentRoot;
+        if (shouldCheckCommentRoot && !listRoot) {
+          var commentStart = debugEnabled ? nowMs() : 0;
+          var commentRoot = pickCommentRoot(root, rootRoots, debugInfo);
+          if (debugInfo) {
+            debugInfo.timings.pickCommentRootMs = Math.round(nowMs() - commentStart);
+          }
+          if (commentRoot) {
+            contentRoot = commentRoot;
+          }
         }
-      }
-      if (contentRoot) {
-        textRoot = contentRoot;
-      }
+        if (contentRoot) {
+          textRoot = contentRoot;
+        }
       }
     }
     if (debugInfo) {
@@ -2964,16 +3142,36 @@
       debugInfo.timings.totalMs = Math.round(nowMs() - totalStart);
     }
     var pageUrl = sanitizeURLString(window.location.href);
+    var signalSet = new Set(signals);
     if (localUrlRedaction.count > 0) {
-      signals.push("url_redacted");
+      signalSet.add(ObservationSignal.URL_REDACTED);
       if (debugInfo) {
         debugInfo.counts.urlRedacted = localUrlRedaction.count;
       }
     }
+    if (text.length < 180) {
+      signalSet.add(ObservationSignal.SPARSE_TEXT);
+    }
+    if (text.length < 80 && hasNonTextContent(root)) {
+      signalSet.add(ObservationSignal.NON_TEXT_CONTENT);
+    }
+    if (isPdfViewerDocument()) {
+      signalSet.add(ObservationSignal.PDF_VIEWER);
+    }
+    if (listRoot && isLikelyVirtualizedList(listRoot)) {
+      signalSet.add(ObservationSignal.VIRTUALIZED_LIST);
+    }
+    if (listRoot && isInfiniteScrollContainer(listRoot)) {
+      signalSet.add(ObservationSignal.INFINITE_SCROLL);
+    }
+    signals = Array.from(signalSet);
     urlRedactionCounter = null;
     return {
       url: pageUrl,
       title: document.title || "",
+      documentId: documentId || "",
+      navGeneration: navGeneration,
+      observedAtMs: Date.now(),
       text: text,
       elements: limited,
       blocks: blocks,
@@ -2984,6 +3182,16 @@
       signals: signals,
       debug: debugInfo
     };
+  }
+
+  function observeDomWithStatus(options) {
+    if (options && options.rootHandleId) {
+      var resolved = resolveHandle(options.rootHandleId);
+      if (resolved.error) {
+        return { status: "error", error: resolved.error };
+      }
+    }
+    return { status: "ok", observation: observeDom(options || {}) };
   }
 
   function highlightElement(element) {
@@ -3007,72 +3215,177 @@
     highlight.style.height = rect.height + "px";
   }
 
-  function findElement(handleId) {
+  function resolveHandle(handleId) {
     if (!handleId) {
-      return null;
+      return { element: null, error: ToolErrorCode.INVALID_ARGUMENTS };
     }
     var cached = handleMap.get(handleId);
     if (cached) {
-      return cached;
+      var cachedElement = cached.element || cached;
+      if (cached.documentId && cached.documentId !== documentId) {
+        return { element: null, error: ToolErrorCode.STALE_HANDLE };
+      }
+      if (typeof cached.generation === "number" && cached.generation !== navGeneration) {
+        return { element: null, error: ToolErrorCode.STALE_HANDLE };
+      }
+      if (!cachedElement || !cachedElement.isConnected) {
+        return { element: null, error: ToolErrorCode.NOT_FOUND };
+      }
+      return { element: cachedElement };
     }
-    return document.querySelector('[data-laika-handle="' + handleId + '"]');
+    var found = document.querySelector('[data-laika-handle="' + handleId + '"]');
+    if (!found) {
+      return { element: null, error: ToolErrorCode.NOT_FOUND };
+    }
+    handleMap.set(handleId, { element: found, generation: navGeneration, documentId: ensureDocumentId() });
+    return { element: found };
+  }
+
+  function findElement(handleId) {
+    var resolved = resolveHandle(handleId);
+    return resolved.element || null;
+  }
+
+  function isElementDisabled(element) {
+    if (!element) {
+      return false;
+    }
+    if (element.disabled || element.getAttribute("disabled") !== null) {
+      return true;
+    }
+    var ariaDisabled = element.getAttribute("aria-disabled");
+    if (ariaDisabled && ariaDisabled.toLowerCase() === "true") {
+      return true;
+    }
+    return false;
+  }
+
+  function isElementVisible(element) {
+    if (!element || !element.getBoundingClientRect) {
+      return false;
+    }
+    var style = window.getComputedStyle(element);
+    if (style) {
+      if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+        return false;
+      }
+      if (style.pointerEvents === "none") {
+        return false;
+      }
+    }
+    var rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function overlayBlocksElement(element) {
+    if (!element) {
+      return false;
+    }
+    var root = document.body || document.documentElement;
+    if (!root) {
+      return false;
+    }
+    var overlay = findOverlayCandidate(root, collectRoots(root));
+    if (!overlay) {
+      return false;
+    }
+    if (overlay.contains(element)) {
+      return false;
+    }
+    return true;
   }
 
   function applyTool(toolName, args) {
     if (toolName === "browser.click") {
-      var target = findElement(args.handleId);
-      if (target) {
-        target.scrollIntoView({ block: "center" });
-        highlightElement(target);
-        target.click();
-        return { status: "ok" };
+      var resolvedClick = resolveHandle(args.handleId);
+      if (resolvedClick.error) {
+        return { status: "error", error: resolvedClick.error };
       }
-      return { status: "error", error: "not_found" };
+      var target = resolvedClick.element;
+      if (overlayBlocksElement(target)) {
+        return { status: "error", error: ToolErrorCode.BLOCKED_BY_OVERLAY };
+      }
+      if (!isElementVisible(target)) {
+        return { status: "error", error: ToolErrorCode.NOT_INTERACTABLE };
+      }
+      if (isElementDisabled(target)) {
+        return { status: "error", error: ToolErrorCode.DISABLED };
+      }
+      target.scrollIntoView({ block: "center" });
+      highlightElement(target);
+      target.click();
+      return { status: "ok" };
     }
 
     if (toolName === "browser.type") {
-      var input = findElement(args.handleId);
-      if (input) {
-        var tagName = input.tagName ? input.tagName.toLowerCase() : "";
-        var isEditable = tagName === "input" || tagName === "textarea" || !!input.isContentEditable;
-        if (!isEditable) {
-          return { status: "error", error: "not_editable" };
-        }
-        input.scrollIntoView({ block: "center" });
-        highlightElement(input);
-        input.focus();
-        var text = args.text || "";
-        if (input.isContentEditable) {
-          input.textContent = text;
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-        } else {
-          input.value = text;
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-          input.dispatchEvent(new Event("change", { bubbles: true }));
-        }
-        return { status: "ok" };
+      if (!args || typeof args.text !== "string") {
+        return { status: "error", error: ToolErrorCode.INVALID_ARGUMENTS };
       }
-      return { status: "error", error: "not_found" };
+      var resolvedInput = resolveHandle(args.handleId);
+      if (resolvedInput.error) {
+        return { status: "error", error: resolvedInput.error };
+      }
+      var input = resolvedInput.element;
+      if (overlayBlocksElement(input)) {
+        return { status: "error", error: ToolErrorCode.BLOCKED_BY_OVERLAY };
+      }
+      var tagName = input.tagName ? input.tagName.toLowerCase() : "";
+      var isEditable = tagName === "input" || tagName === "textarea" || !!input.isContentEditable;
+      if (!isEditable) {
+        return { status: "error", error: ToolErrorCode.NOT_INTERACTABLE };
+      }
+      if (isElementDisabled(input)) {
+        return { status: "error", error: ToolErrorCode.DISABLED };
+      }
+      if (!isElementVisible(input)) {
+        return { status: "error", error: ToolErrorCode.NOT_INTERACTABLE };
+      }
+      input.scrollIntoView({ block: "center" });
+      highlightElement(input);
+      input.focus();
+      var text = args.text || "";
+      if (input.isContentEditable) {
+        input.textContent = text;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      } else {
+        input.value = text;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return { status: "ok" };
     }
 
     if (toolName === "browser.scroll") {
-      var deltaY = typeof args.deltaY === "number" ? args.deltaY : 0;
+      if (!args || typeof args.deltaY !== "number" || !isFinite(args.deltaY)) {
+        return { status: "error", error: ToolErrorCode.INVALID_ARGUMENTS };
+      }
+      var deltaY = args.deltaY;
       window.scrollBy({ top: deltaY, left: 0, behavior: "smooth" });
       return { status: "ok" };
     }
 
     if (toolName === "browser.select") {
-      var selectEl = findElement(args.handleId);
-      if (!selectEl) {
-        return { status: "error", error: "not_found" };
+      if (!args || typeof args.value !== "string" || !args.value) {
+        return { status: "error", error: ToolErrorCode.INVALID_ARGUMENTS };
+      }
+      var resolvedSelect = resolveHandle(args.handleId);
+      if (resolvedSelect.error) {
+        return { status: "error", error: resolvedSelect.error };
+      }
+      var selectEl = resolvedSelect.element;
+      if (overlayBlocksElement(selectEl)) {
+        return { status: "error", error: ToolErrorCode.BLOCKED_BY_OVERLAY };
       }
       if (selectEl.tagName && selectEl.tagName.toLowerCase() !== "select") {
-        return { status: "error", error: "not_select" };
+        return { status: "error", error: ToolErrorCode.NOT_INTERACTABLE };
+      }
+      if (isElementDisabled(selectEl)) {
+        return { status: "error", error: ToolErrorCode.DISABLED };
+      }
+      if (!isElementVisible(selectEl)) {
+        return { status: "error", error: ToolErrorCode.NOT_INTERACTABLE };
       }
       var value = typeof args.value === "string" ? args.value : "";
-      if (!value) {
-        return { status: "error", error: "missing_value" };
-      }
       var options = Array.from(selectEl.options || []);
       var matched = options.find(function (option) {
         return option.value === value || option.label === value || option.text === value;
@@ -3087,7 +3400,7 @@
       return { status: "ok" };
     }
 
-    return { status: "error", error: "unsupported_tool" };
+    return { status: "error", error: ToolErrorCode.UNSUPPORTED_TOOL };
   }
 
   var AUTOMATION_ALLOWED_HOSTS = {
@@ -3097,7 +3410,10 @@
   var automationState = {
     origin: null,
     nonce: null,
-    runId: null
+    runId: null,
+    reportUrl: null,
+    startPending: false,
+    startAcked: false
   };
 
   function isAllowedAutomationOrigin(origin) {
@@ -3112,10 +3428,13 @@
     }
   }
 
-  function setAutomationState(origin, nonce, runId) {
+  function setAutomationState(origin, nonce, runId, reportUrl) {
     automationState.origin = origin;
     automationState.nonce = nonce;
     automationState.runId = runId;
+    if (reportUrl) {
+      automationState.reportUrl = reportUrl;
+    }
   }
 
   function postAutomationMessage(payload) {
@@ -3157,7 +3476,17 @@
         return;
       }
       var runId = typeof payload.runId === "string" && payload.runId ? payload.runId : null;
-      setAutomationState(event.origin, nonce, runId);
+      var reportUrl = typeof payload.reportUrl === "string" && payload.reportUrl ? payload.reportUrl : null;
+      if (automationState.runId && automationState.nonce === nonce && automationState.runId === runId) {
+        if (automationState.startAcked) {
+          postAutomationMessage({ type: "laika.automation.ack", runId: automationState.runId, status: "ok" });
+        }
+        return;
+      }
+      automationState.startPending = true;
+      automationState.startAcked = false;
+      automationState.reportUrl = reportUrl;
+      setAutomationState(event.origin, nonce, runId, reportUrl);
       sendAutomationRequest({
         type: "laika.automation.start",
         runId: runId,
@@ -3166,15 +3495,18 @@
         options: payload.options || {},
         targetUrl: payload.targetUrl || "",
         origin: event.origin,
-        nonce: nonce
+        nonce: nonce,
+        reportUrl: reportUrl
       }).then(function (response) {
+        automationState.startPending = false;
         if (!response || response.status !== "ok") {
           postAutomationMessage({ type: "laika.automation.error", runId: runId, error: (response && response.error) || "start_failed" });
           return;
         }
         if (response && response.runId) {
-          setAutomationState(event.origin, nonce, response.runId);
+          setAutomationState(event.origin, nonce, response.runId, reportUrl);
         }
+        automationState.startAcked = true;
         postAutomationMessage({ type: "laika.automation.ack", runId: response.runId || runId, status: "ok" });
       });
       return;
@@ -3215,7 +3547,7 @@
         return Promise.resolve({ status: "ok" });
       }
       if (message.type === "laika.observe") {
-        return Promise.resolve({ status: "ok", observation: observeDom(message.options || {}) });
+        return Promise.resolve(observeDomWithStatus(message.options || {}));
       }
       if (message.type === "laika.tool") {
         return Promise.resolve(applyTool(message.toolName, message.args || {}));
