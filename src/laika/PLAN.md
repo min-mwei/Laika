@@ -79,7 +79,7 @@ Purpose: implement `docs/laika_vocabulary.md` by finishing a small, robust primi
 - Deterministic `Calculate` is available for higher-level workflows.
 - Harness passes fixture-based primitive scenarios with consistent logs; live-web smoke runs are clean when enabled.
 
-## Phase 1 status (current)
+## Phase 1 status (complete)
 - [x] Tool schemas are unified across shared + extension + docs, and invalid tool calls are rejected.
 - [x] Observation metadata/signals + handle staleness are enforced in JS and shared types.
 - [x] DOM actions sanitize/validate inputs; search/navigation are gated and URL-sanitized.
@@ -87,6 +87,9 @@ Purpose: implement `docs/laika_vocabulary.md` by finishing a small, robust primi
 - [x] Sensitive-field detection gates `browser.type`/`browser.select` for credential/payment/personal-id fields.
 - [x] Automation harness includes preflight, default fixtures, opt-in live smoke tests, failure artifacts, aligned timeouts, and keepalive/beacon reporting.
 - [x] Automation enable is restored after test runs, and Safari quits gracefully before forced termination.
+
+## Phase 1 completion notes
+- Fixtures suite passing for hn/bbc/sec_nvda; live-web smoke scenarios remain opt-in.
 
 ## Phase 2 - High-level vocabulary layer (Summarize/Find/Search/Investigate)
 

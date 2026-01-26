@@ -55,6 +55,29 @@ final class LLMCPResponseParserTests: XCTestCase {
         XCTAssertTrue(parsed.toolCalls.isEmpty)
     }
 
+    func testRejectsMixedToolCallsWithUnknown() throws {
+        let output = """
+        {
+          "protocol": { "name": "laika.llmcp", "version": 1 },
+          "id": "resp-2a",
+          "type": "response",
+          "created_at": "2026-01-24T12:34:57.123Z",
+          "conversation": { "id": "conv-2a", "turn": 1 },
+          "sender": { "role": "assistant" },
+          "in_reply_to": { "request_id": "req-2a" },
+          "assistant": {
+            "render": { "type": "doc", "children": [] }
+          },
+          "tool_calls": [
+            { "name": "browser.click", "arguments": { "handleId": "laika-1" } },
+            { "name": "browser.unknown", "arguments": {} }
+          ]
+        }
+        """
+        let parsed = try LLMCPResponseParser.parse(output)
+        XCTAssertTrue(parsed.toolCalls.isEmpty)
+    }
+
     func testRejectsInvalidToolArguments() throws {
         let output = """
         {

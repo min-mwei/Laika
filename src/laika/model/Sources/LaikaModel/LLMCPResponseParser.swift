@@ -37,7 +37,7 @@ enum LLMCPResponseParser {
         var toolCalls: [ToolCall] = []
         for call in decoded.toolCalls {
             guard let name = ToolName(rawValue: call.name) else {
-                continue
+                throw ModelError.invalidResponse("Unknown tool name: \(call.name).")
             }
             let normalized = normalizeArguments(for: name, arguments: call.arguments ?? [:])
             guard ToolSchemaValidator.validateArguments(name: name, arguments: normalized) else {
@@ -114,7 +114,8 @@ enum LLMCPResponseParser {
         let protocolName = protocolInfo?["name"] as? String
         let messageType = root["type"] as? String
         let shouldAcceptToolCalls = protocolName == "laika.llmcp" && messageType == "response"
-        let toolCalls = shouldAcceptToolCalls ? parseToolCalls(from: root) : []
+        let toolParse = shouldAcceptToolCalls ? parseToolCalls(from: root) : ToolCallParseResult()
+        let toolCalls = (toolParse.hasUnknownTool || toolParse.hasInvalidTool) ? [] : toolParse.toolCalls
         let assistantInfo = root["assistant"] as? [String: Any] ?? [:]
         let title = assistantInfo["title"] as? String
         let renderDocument = renderDocument(from: assistantInfo["render"])
@@ -218,24 +219,49 @@ enum LLMCPResponseParser {
         return lowercased.contains("\"protocol\"") && lowercased.contains("\"type\"")
     }
 
-    private static func parseToolCalls(from root: [String: Any]) -> [ToolCall] {
+    private struct ToolCallParseResult {
+        let toolCalls: [ToolCall]
+        let hasUnknownTool: Bool
+        let hasInvalidTool: Bool
+
+        init(toolCalls: [ToolCall] = [], hasUnknownTool: Bool = false, hasInvalidTool: Bool = false) {
+            self.toolCalls = toolCalls
+            self.hasUnknownTool = hasUnknownTool
+            self.hasInvalidTool = hasInvalidTool
+        }
+    }
+
+    private static func parseToolCalls(from root: [String: Any]) -> ToolCallParseResult {
         let rawCalls = (root["tool_calls"] as? [Any])
             ?? (root["toolCalls"] as? [Any])
             ?? []
-        return rawCalls.compactMap { raw in
+        var toolCalls: [ToolCall] = []
+        var hasUnknownTool = false
+        var hasInvalidTool = false
+        for raw in rawCalls {
             guard let dict = raw as? [String: Any],
-                  let nameRaw = dict["name"] as? String,
-                  let name = ToolName(rawValue: nameRaw) else {
-                return nil
+                  let nameRaw = dict["name"] as? String else {
+                hasInvalidTool = true
+                continue
+            }
+            guard let name = ToolName(rawValue: nameRaw) else {
+                hasUnknownTool = true
+                continue
             }
             let arguments = (dict["arguments"] as? [String: Any])
                 .flatMap(jsonObject(from:)) ?? [:]
             let normalized = normalizeArguments(for: name, arguments: arguments)
             guard ToolSchemaValidator.validateArguments(name: name, arguments: normalized) else {
-                return nil
+                hasInvalidTool = true
+                continue
             }
-            return ToolCall(name: name, arguments: normalized)
+            toolCalls.append(ToolCall(name: name, arguments: normalized))
         }
+        return ToolCallParseResult(
+            toolCalls: toolCalls,
+            hasUnknownTool: hasUnknownTool,
+            hasInvalidTool: hasInvalidTool
+        )
     }
 
     private static func parseCitations(from value: Any?) -> [LLMCPCitation] {
