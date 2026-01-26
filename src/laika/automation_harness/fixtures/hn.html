@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Hacker News Fixture</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        font-family: "Georgia", "Times New Roman", serif;
+        background: #f7f4ef;
+        color: #1b1b1b;
+      }
+      header {
+        background: #ff6600;
+        color: #1b1b1b;
+        padding: 16px 24px;
+        font-weight: bold;
+        letter-spacing: 0.5px;
+      }
+      main {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .lede {
+        font-size: 18px;
+        line-height: 1.5;
+        margin-bottom: 20px;
+      }
+      .story-list {
+        display: grid;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .story {
+        background: #ffffff;
+        border-radius: 10px;
+        padding: 16px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+      }
+      .story h2 {
+        margin: 0 0 8px;
+        font-size: 20px;
+      }
+      .story p {
+        margin: 0;
+        color: #4a4a4a;
+      }
+      .comments {
+        background: #ffffff;
+        border-radius: 10px;
+        padding: 16px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
+      }
+      .comments h2 {
+        margin: 0 0 12px;
+        font-size: 18px;
+      }
+      .comment {
+        margin-bottom: 10px;
+        font-size: 14px;
+        color: #3d3d3d;
+      }
+      .comment:last-child {
+        margin-bottom: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <header>Hacker News</header>
+    <main>
+      <p class="lede">
+        Hacker News is a community feed that highlights new technology stories and thoughtful discussion.
+      </p>
+      <section class="story-list" aria-label="Top stories">
+        <article class="story">
+          <h2>Local Models Reshape Developer Workflows</h2>
+          <p>Teams are moving from cloud APIs to on-device models to keep iteration fast and private.</p>
+        </article>
+        <article class="story">
+          <h2>Structured Logs Make Debugging Less Painful</h2>
+          <p>Engineers compare plain text logging with structured JSON logs for incident response.</p>
+        </article>
+        <article class="story">
+          <h2>Small Agents, Big Impact</h2>
+          <p>Lightweight automation agents are starting to handle routine web chores reliably.</p>
+        </article>
+      </section>
+      <section class="comments" aria-label="Comments">
+        <h2>Comments on: Local Models Reshape Developer Workflows</h2>
+        <div class="comment">Readers debate whether local models are accurate enough for production use.</div>
+        <div class="comment">Several comments emphasize the benefit of keeping sensitive data on-device.</div>
+        <div class="comment">One thread argues that tooling is catching up quickly for local inference.</div>
+      </section>
+    </main>
+  </body>
+</html>

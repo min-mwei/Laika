@@ -75,11 +75,18 @@ cd src/laika/automation_harness
 scripts/run_safari_ui_test.sh --scenario scripts/scenarios/hn.json --output /tmp/laika-hn.json
 ```
 
-Run the full UI harness suite (HN/BBC/WSJ):
+Run the full UI harness suite (HN/BBC/SEC):
 
 ```bash
 cd src/laika/automation_harness
 scripts/run_all_safari_ui_tests.sh --output-dir /tmp/laika-automation
+```
+
+Optional live-web smoke suite:
+
+```bash
+cd src/laika/automation_harness
+scripts/run_all_safari_ui_tests.sh --output-dir /tmp/laika-automation --include-live
 ```
 
 Legacy Playwright harness (DOM-only). Start the local plan server:
@@ -89,17 +96,18 @@ cd src/laika/app
 swift run LaikaServer --port 8765 --model-dir ../extension/lib/models/Qwen3-0.6B-MLX-4bit
 ```
 
-Run scenarios (HN/BBC/WSJ):
+Run scenarios (HN/BBC live + SEC):
 
 ```bash
 cd src/laika/automation_harness
-node scripts/laika_harness.js --scenario scripts/scenarios/hn.json --output /tmp/laika-hn.json
-node scripts/laika_harness.js --scenario scripts/scenarios/bbc.json --output /tmp/laika-bbc.json
-node scripts/laika_harness.js --scenario scripts/scenarios/wsj.json --output /tmp/laika-wsj.json
+node scripts/laika_harness.js --scenario scripts/scenarios/hn_live.json --output /tmp/laika-hn.json
+node scripts/laika_harness.js --scenario scripts/scenarios/bbc_live.json --output /tmp/laika-bbc.json
+node scripts/laika_harness.js --scenario scripts/scenarios/sec_nvda.json --output /tmp/laika-sec_nvda.json
 ```
 
 ## Notes
 
 - Safari UI harness uses native messaging (no local HTTP server required); the Playwright harness uses `LaikaServer`.
+- Default HN/BBC scenarios use local fixtures; live-web smoke scenarios are `hn_live.json` and `bbc_live.json`.
 - MLX Swift LM requires macOS 14+ (Apple Silicon).
 - Local logs are written under the sandbox container when running in Safari: `~/Library/Containers/com.laika.Laika.Extension/Data/Laika/logs/llm.jsonl` (host app: `~/Library/Containers/com.laika.Laika/Data/Laika/logs/llm.jsonl`). Non-sandboxed CLI/server runs default to `~/Laika/logs/llm.jsonl` and can be overridden with `LAIKA_HOME=/path`. Full prompt/output previews are enabled by default; set `LAIKA_LOG_FULL_LLM=0` to disable.

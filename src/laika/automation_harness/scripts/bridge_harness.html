@@ -56,6 +56,10 @@
         var startRetryMs = 750;
         var maxStartAttempts = 120;
         var startDeadlineAt = null;
+        var enableAttempts = 0;
+        var enableAcked = false;
+        var runTimeoutBufferSeconds = 30;
+        var minRunTimeoutBufferSeconds = 5;
 
         function log(message) {
           var line = typeof message === "string" ? message : JSON.stringify(message, null, 2);
@@ -90,7 +94,21 @@
             error === "reset_failed" ||
             error === "storage_unavailable" ||
             error === "storage_clear_failed" ||
+            error === "automation_disabled" ||
             error === "start_failed";
+        }
+
+        function postAutomationEnable() {
+          if (!nonce || enableAcked) {
+            return;
+          }
+          enableAttempts += 1;
+          sendTelemetry("enable_sent", { attempt: enableAttempts });
+          window.postMessage({
+            type: "laika.automation.enable",
+            runId: runId,
+            nonce: nonce
+          }, pageOrigin);
         }
 
         function postAutomationStart() {
@@ -102,8 +120,14 @@
           var options = scenario.options && typeof scenario.options === "object"
             ? Object.assign({}, scenario.options)
             : {};
-          if (configTimeoutSeconds && typeof options.runTimeoutMs !== "number") {
-            options.runTimeoutMs = Math.max(1, configTimeoutSeconds - 30) * 1000;
+          if (configTimeoutSeconds) {
+            var maxRunTimeoutMs = Math.max(1, (configTimeoutSeconds - minRunTimeoutBufferSeconds) * 1000);
+            if (typeof options.runTimeoutMs !== "number") {
+              options.runTimeoutMs = Math.max(1, (configTimeoutSeconds - runTimeoutBufferSeconds) * 1000);
+            }
+            if (typeof options.runTimeoutMs === "number" && options.runTimeoutMs > maxRunTimeoutMs) {
+              options.runTimeoutMs = maxRunTimeoutMs;
+            }
           }
           window.postMessage({
             type: "laika.automation.start",
@@ -121,6 +145,7 @@
           if (ackReceived || runDone) {
             return;
           }
+          postAutomationEnable();
           if (startAttempts >= maxStartAttempts) {
             setStatus("Automation start timed out.");
             sendTelemetry("start_timeout", { attempts: startAttempts });
@@ -190,11 +215,19 @@
             setStatus("Extension ready. Starting...");
             log({ event: "ready", at: lastReadyAt });
             sendTelemetry("ready", { at: lastReadyAt });
+            postAutomationEnable();
             if (!ackReceived && !runDone) {
               stopStartRetry();
               postAutomationStart();
               startTimer = window.setTimeout(scheduleStartRetry, startRetryMs);
             }
+            return;
+          }
+          if (data.type === "laika.automation.enabled") {
+            var enabledOk = data.status === "ok";
+            enableAcked = enabledOk || enableAcked;
+            log({ event: "enabled", status: data.status, error: data.error });
+            sendTelemetry("enabled", { status: data.status, error: data.error });
             return;
           }
           if (data.type === "laika.automation.ack") {

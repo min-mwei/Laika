@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Laika Daily Journal</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Times New Roman", serif;
+        background: #f6f2ea;
+        color: #1d1b16;
+      }
+      header {
+        background: #1d1b16;
+        color: #f8f1e2;
+        padding: 24px 32px;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        font-size: 18px;
+      }
+      main {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 32px;
+      }
+      .lede {
+        font-size: 20px;
+        line-height: 1.5;
+        margin-bottom: 24px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 24px;
+      }
+      article {
+        background: #ffffff;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(29, 27, 22, 0.12);
+      }
+      h2 {
+        margin: 0 0 16px;
+        font-size: 24px;
+      }
+      h3 {
+        margin: 0 0 8px;
+        font-size: 20px;
+      }
+      p {
+        margin: 0;
+        color: #4a3f33;
+        line-height: 1.5;
+      }
+      footer {
+        margin-top: 32px;
+        font-size: 14px;
+        color: #6b5a45;
+      }
+    </style>
+  </head>
+  <body>
+    <header>Laika Daily Journal</header>
+    <main>
+      <p class="lede">
+        The Laika Daily Journal is a mock news landing page used to validate automation runs without
+        relying on live websites.
+      </p>
+      <h2>Top Headlines</h2>
+      <div class="grid">
+        <article>
+          <h3>Launch Pad: Small Labs Adopt On-Device Agents</h3>
+          <p>New research teams are prioritizing local inference to keep workflows private and fast.</p>
+        </article>
+        <article>
+          <h3>Market Watch: Storage Costs Slide for the Third Quarter</h3>
+          <p>Data centers are renegotiating long-term contracts after supply catches up with demand.</p>
+        </article>
+        <article>
+          <h3>Design Desk: Interfaces Lean into Warm, Print-Inspired Layouts</h3>
+          <p>Product teams are borrowing the confidence of editorial layouts to improve clarity.</p>
+        </article>
+        <article>
+          <h3>On the Ground: City Transit Adds Real-Time Crowd Signals</h3>
+          <p>Commuters can now see crowding and delay forecasts before boarding.</p>
+        </article>
+      </div>
+      <footer>Last updated: 08:00 AM ET - Fixture content for Laika automation.</footer>
+    </main>
+  </body>
+</html>

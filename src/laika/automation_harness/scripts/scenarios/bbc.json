@@ -1,5 +1,5 @@
 {
-  "url": "https://www.bbc.com",
+  "url": "http://127.0.0.1:8766/fixtures/bbc.html",
   "goals": [
     "What is this page about?",
     "Tell me about the first headline."

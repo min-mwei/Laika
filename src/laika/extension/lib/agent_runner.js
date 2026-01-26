@@ -180,6 +180,7 @@
     var initialDelayMs = 0;
     var lastStatus = null;
     var lastError = null;
+    var lastErrorDetails = null;
     var lastObservationSummary = null;
     var lastTabId = null;
     if (settings && typeof settings === "object") {
@@ -203,6 +204,7 @@
       }
       lastStatus = result && typeof result.status === "string" ? result.status : null;
       lastError = result && result.error ? result.error : lastError;
+      lastErrorDetails = result && result.errorDetails ? result.errorDetails : lastErrorDetails;
       if (result && result.observation) {
         lastObservationSummary = summarizeObservation(result.observation);
       }
@@ -219,6 +221,7 @@
       attempts: attempts,
       lastStatus: lastStatus,
       lastError: lastError,
+      lastErrorDetails: lastErrorDetails,
       lastObservation: lastObservationSummary,
       lastTabId: lastTabId
     };
@@ -423,137 +426,169 @@
       ? Math.floor(config.planTimeoutMs)
       : null;
 
-    var tabsContext = listTabsFn ? await listTabsFn() : [];
-    var tabIdForPlan = typeof config.tabId === "number" ? config.tabId : null;
-    if (onStatus) {
-      onStatus("observing");
+    var lastStatus = null;
+    var lastStep = null;
+    var lastToolCall = null;
+    var lastGoalIndex = null;
+    var lastGoal = null;
+
+    function noteStatus(status) {
+      if (typeof status === "string" && status) {
+        lastStatus = status;
+      }
+      if (onStatus) {
+        onStatus(status);
+      }
     }
-    var firstObservation = await observeWithRetries(deps.observe, observeOptions, tabIdForPlan, config.initialObserveSettings);
-    var lastObservation = firstObservation.observation;
-    if (typeof firstObservation.tabId === "number") {
-      tabIdForPlan = firstObservation.tabId;
-    }
 
-    var results = [];
-    for (var goalIndex = 0; goalIndex < goals.length; goalIndex += 1) {
-      var goal = goals[goalIndex];
-      var steps = [];
-      var recentToolCalls = [];
-      var recentToolResults = [];
-      var summary = "";
-
-      for (var step = 1; step <= maxSteps; step += 1) {
-        if (shouldCancel && shouldCancel()) {
-          if (onStatus) {
-            onStatus("cancelled");
-          }
-          return {
-            runId: runId,
-            goals: goals,
-            results: results,
-            cancelled: true
-          };
-        }
-
-        if (onStatus) {
-          onStatus("planning");
-        }
-        var context = {
-          mode: config.mode || "assist",
-          runId: runId,
-          step: step,
-          maxSteps: maxSteps,
-          observation: lastObservation,
-          recentToolCalls: recentToolCalls.slice(-8),
-          recentToolResults: recentToolResults.slice(-8),
-          tabs: tabsContext
-        };
-        var response = await requestPlanFn(goal, context, maxTokens, config.nativeAppId, planTimeoutMs);
-        if (!response || response.ok !== true) {
-          throw new Error("plan_failed");
-        }
-        var plan = response.plan;
-        if (validatePlanFn) {
-          var validation = validatePlanFn(plan);
-          if (!validation.ok) {
-            throw new Error("invalid_plan: " + validation.error);
-          }
-        }
-        summary = extractPlanSummary(plan);
-        var action = pickNextAction(plan.actions);
-        var stepInfo = {
-          step: step,
-          summary: summary,
-          action: action ? action.toolCall : null,
-          policy: action ? action.policy : null,
-          goalPlan: plan.goalPlan || null,
-          planActions: Array.isArray(plan.actions) ? plan.actions : [],
-          observation: summarizeObservation(lastObservation)
-        };
-        steps.push(stepInfo);
-        if (onStep) {
-          onStep(stepInfo, { goalIndex: goalIndex, goal: goal });
-        }
-        if (!action) {
-          break;
-        }
-        if (action.policy && action.policy.decision === "deny") {
-          break;
-        }
-        if (step === maxSteps) {
-          break;
-        }
-        if (action.policy && action.policy.decision === "ask" && !autoApprove) {
-          break;
-        }
-
-        if (onStatus) {
-          onStatus("running_action");
-        }
-        var toolResult = await deps.runTool(action, tabIdForPlan);
-        recentToolCalls.push(action.toolCall);
-        recentToolResults.push(buildToolResult(action.toolCall, action.toolCall.name, toolResult));
-
-        if (toolResult && typeof toolResult.tabId === "number") {
-          tabIdForPlan = toolResult.tabId;
-        } else if (action.toolCall.name === "search" || action.toolCall.name === "browser.open_tab" || action.toolCall.name === "browser.navigate") {
-          tabIdForPlan = null;
-        }
-
-        if (action.toolCall.name === "browser.observe_dom" && toolResult && toolResult.observation) {
-          lastObservation = toolResult.observation;
-          if (typeof toolResult.tabId === "number") {
-            tabIdForPlan = toolResult.tabId;
-          }
-        } else {
-          if (onStatus) {
-            onStatus("observing");
-          }
-          tabsContext = listTabsFn ? await listTabsFn() : tabsContext;
-          var observeSettings = null;
-          if (action.toolCall.name === "search" || action.toolCall.name === "browser.open_tab" || action.toolCall.name === "browser.navigate") {
-            observeSettings = { attempts: 14, delayMs: 350, initialDelayMs: 700 };
-          }
-          var updated = await observeWithRetries(deps.observe, observeOptions, tabIdForPlan, observeSettings);
-          lastObservation = updated.observation;
-          if (typeof updated.tabId === "number") {
-            tabIdForPlan = updated.tabId;
-          }
-        }
-
-        stepInfo.toolResult = toolResult;
-        stepInfo.nextObservation = summarizeObservation(lastObservation);
+    try {
+      var tabsContext = listTabsFn ? await listTabsFn() : [];
+      var tabIdForPlan = typeof config.tabId === "number" ? config.tabId : null;
+      noteStatus("observing");
+      var firstObservation = await observeWithRetries(deps.observe, observeOptions, tabIdForPlan, config.initialObserveSettings);
+      var lastObservation = firstObservation.observation;
+      if (typeof firstObservation.tabId === "number") {
+        tabIdForPlan = firstObservation.tabId;
       }
 
-      results.push({ goal: goal, summary: summary, steps: steps });
-    }
+      var results = [];
+      for (var goalIndex = 0; goalIndex < goals.length; goalIndex += 1) {
+        var goal = goals[goalIndex];
+        var steps = [];
+        var recentToolCalls = [];
+        var recentToolResults = [];
+        var summary = "";
+        lastGoalIndex = goalIndex;
+        lastGoal = goal;
 
-    return {
-      runId: runId,
-      goals: goals,
-      results: results,
-      cancelled: false
-    };
+        for (var step = 1; step <= maxSteps; step += 1) {
+          lastStep = step;
+          if (shouldCancel && shouldCancel()) {
+            noteStatus("cancelled");
+            return {
+              runId: runId,
+              goals: goals,
+              results: results,
+              cancelled: true
+            };
+          }
+
+          noteStatus("planning");
+          var context = {
+            mode: config.mode || "assist",
+            runId: runId,
+            step: step,
+            maxSteps: maxSteps,
+            observation: lastObservation,
+            recentToolCalls: recentToolCalls.slice(-8),
+            recentToolResults: recentToolResults.slice(-8),
+            tabs: tabsContext
+          };
+          var response = await requestPlanFn(goal, context, maxTokens, config.nativeAppId, planTimeoutMs);
+          if (!response || response.ok !== true) {
+            throw new Error("plan_failed");
+          }
+          var plan = response.plan;
+          if (validatePlanFn) {
+            var validation = validatePlanFn(plan);
+            if (!validation.ok) {
+              throw new Error("invalid_plan: " + validation.error);
+            }
+          }
+          summary = extractPlanSummary(plan);
+          var action = pickNextAction(plan.actions);
+          lastToolCall = action && action.toolCall ? action.toolCall.name : null;
+          var stepInfo = {
+            step: step,
+            summary: summary,
+            action: action ? action.toolCall : null,
+            policy: action ? action.policy : null,
+            goalPlan: plan.goalPlan || null,
+            planActions: Array.isArray(plan.actions) ? plan.actions : [],
+            observation: summarizeObservation(lastObservation)
+          };
+          steps.push(stepInfo);
+          if (onStep) {
+            onStep(stepInfo, { goalIndex: goalIndex, goal: goal });
+          }
+          if (!action) {
+            break;
+          }
+          if (action.policy && action.policy.decision === "deny") {
+            break;
+          }
+          if (step === maxSteps) {
+            break;
+          }
+          if (action.policy && action.policy.decision === "ask" && !autoApprove) {
+            break;
+          }
+
+          noteStatus("running_action");
+          var toolResult = await deps.runTool(action, tabIdForPlan);
+          recentToolCalls.push(action.toolCall);
+          recentToolResults.push(buildToolResult(action.toolCall, action.toolCall.name, toolResult));
+
+          if (toolResult && typeof toolResult.tabId === "number") {
+            tabIdForPlan = toolResult.tabId;
+          } else if (action.toolCall.name === "search" || action.toolCall.name === "browser.open_tab" || action.toolCall.name === "browser.navigate") {
+            tabIdForPlan = null;
+          }
+
+          if (action.toolCall.name === "browser.observe_dom" && toolResult && toolResult.observation) {
+            lastObservation = toolResult.observation;
+            if (typeof toolResult.tabId === "number") {
+              tabIdForPlan = toolResult.tabId;
+            }
+          } else {
+            noteStatus("observing");
+            tabsContext = listTabsFn ? await listTabsFn() : tabsContext;
+            var observeSettings = null;
+            if (action.toolCall.name === "search" || action.toolCall.name === "browser.open_tab" || action.toolCall.name === "browser.navigate") {
+              observeSettings = { attempts: 14, delayMs: 350, initialDelayMs: 700 };
+            }
+            var updated = await observeWithRetries(deps.observe, observeOptions, tabIdForPlan, observeSettings);
+            lastObservation = updated.observation;
+            if (typeof updated.tabId === "number") {
+              tabIdForPlan = updated.tabId;
+            }
+          }
+
+          stepInfo.toolResult = toolResult;
+          stepInfo.nextObservation = summarizeObservation(lastObservation);
+        }
+
+        results.push({ goal: goal, summary: summary, steps: steps });
+      }
+
+      return {
+        runId: runId,
+        goals: goals,
+        results: results,
+        cancelled: false
+      };
+    } catch (error) {
+      if (error && typeof error === "object") {
+        var details = error.details && typeof error.details === "object" ? Object.assign({}, error.details) : {};
+        if (details.lastStatus === undefined && lastStatus) {
+          details.lastStatus = lastStatus;
+        }
+        if (details.lastStep === undefined && typeof lastStep === "number") {
+          details.lastStep = lastStep;
+        }
+        if (details.lastToolCall === undefined && lastToolCall) {
+          details.lastToolCall = lastToolCall;
+        }
+        if (details.lastGoalIndex === undefined && typeof lastGoalIndex === "number") {
+          details.lastGoalIndex = lastGoalIndex;
+        }
+        if (details.lastGoal === undefined && lastGoal) {
+          details.lastGoal = lastGoal;
+        }
+        error.details = details;
+      }
+      throw error;
+    }
   }
 
   var api = {

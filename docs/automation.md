@@ -53,6 +53,7 @@ This repo needs an end-to-end automation path that exercises the real Safari ext
 
 6) Fixture site (optional but recommended)
 - Local static pages to avoid network flakiness and make regression snapshots stable.
+  - The harness server serves `automation_harness/fixtures` at `/fixtures/*` (for example: `http://127.0.0.1:8766/fixtures/news.html`).
 
 ### High-level flow
 
@@ -87,24 +88,41 @@ This repo needs an end-to-end automation path that exercises the real Safari ext
 - Only accept automation messages from localhost origins.
 - Require a per-run nonce from the harness page.
 - Gate automation behind a local config knob (`automationEnabled` in extension storage) so it can be disabled outside of test runs.
+- Automation is disabled by default; the harness sends `laika.automation.enable` to turn it on for test runs.
 - Never include raw HTML or sensitive data in responses.
 
 ## Automation bridge contract (draft)
 
 - Requests (page -> content script):
+  - `laika.automation.enable` { runId, nonce }
   - `laika.automation.start` { runId, goals, targetUrl, options, nonce, reportUrl }
   - `laika.automation.status` { runId }
   - `laika.automation.cancel` { runId }
 - Responses (content script -> page):
   - `laika.automation.ready` { at }
+  - `laika.automation.enabled` { runId, status, error }
   - `laika.automation.progress` { runId, step, action, observationSummary }
   - `laika.automation.result` { runId, summary, steps[] }
   - `laika.automation.error` { runId, error }
+
+## Robustness notes (current behavior)
+
+- The bridge accepts repeated `laika.automation.start` retries with the same runId/nonce after a failure; harness retry loops are idempotent until an ack arrives.
+- The UI test driver prefers XCUI keystrokes for window creation and URL navigation; AppleScript is used only as a fallback and logs Automation permission hints when blocked.
+- The UI test driver performs a bridge-ready preflight (polling `/api/health`) and captures screenshots/UI hierarchy dumps on key failures.
+- Automation runs close tabs opened during the run (including the harness tab) after reporting results; shell runners can quit Safari for clean isolation.
 
 ## Harness instrumentation
 
 - The harness page emits lightweight telemetry events (config loaded, ready, start sent, ack/status/progress) to the local harness server.
 - On timeout, the harness includes the last telemetry event in the output to highlight where the run stalled.
+- The harness server exposes `/api/health` to report the latest telemetry snapshot (used for preflight checks).
+
+## Timeout alignment
+
+- Agent run timeout (`options.runTimeoutMs`) is clamped below the harness timeout.
+- Harness timeout is configured a few seconds below the UI test timeout.
+- Default buffers keep `runTimeoutMs < harnessTimeout < uiTestTimeout`.
 
 ## Scenario format (draft)
 
@@ -128,6 +146,9 @@ Keep existing JSON but allow automation options:
 
 `resetStorage` defaults to `true` for automation runs; it clears automation-scoped keys and in-memory caches (not user settings). Set it to `false` if you need to keep automation state between scenarios.
 
+Default scenarios (`hn.json`, `bbc.json`, `sec_nvda.json`) use local fixtures where possible to reduce flakiness.
+Live-web smoke scenarios are suffixed with `_live.json` and are opt-in.
+
 ## Runner outputs
 
 - JSON file with:
@@ -141,14 +162,21 @@ Keep existing JSON but allow automation options:
 ```bash
 # Start the harness + run the Safari UI test driver
 cd src/laika/automation_harness
-scripts/run_safari_ui_test.sh --scenario scripts/scenarios/hn.json --output /tmp/laika-hn.json
+scripts/run_safari_ui_test.sh --scenario scripts/scenarios/hn.json --output /tmp/laika-hn.json --quit-safari
 ```
 
-Run the full UI harness suite (HN/BBC/WSJ):
+Run the full UI harness suite (HN/BBC/SEC):
 
 ```bash
 cd src/laika/automation_harness
 scripts/run_all_safari_ui_tests.sh --output-dir /tmp/laika-automation
+```
+
+Optional live-web smoke tests:
+
+```bash
+cd src/laika/automation_harness
+scripts/run_all_safari_ui_tests.sh --output-dir /tmp/laika-automation --include-live
 ```
 
 Manual two-step flow (if you want to run the server and UI test separately):
@@ -171,7 +199,7 @@ xcodebuild test \
 ```
 
 The UI test driver reads `/tmp/laika-automation-config.json` if present (env vars can also override it). `run_safari_ui_test.sh` will build + install the app into `~/Applications` by default; pass `--no-build` to skip. The driver expects the Safari extension to be enabled in the active profile and will open the harness page in a normal Safari window.
-Use `--quit-safari` if Safari activation is flaky. Use `--retries`/`--retry-delay` to retry known flaky UI-test bootstrap failures. The harness emits `error: "timeout"` when no report arrives before `--timeout`.
+Use `--no-quit-safari` to keep Safari open between runs. Use `--retries`/`--retry-delay` to retry known flaky UI-test bootstrap failures. The harness emits `error: "timeout"` when no report arrives before `--timeout`.
 
 ## Legacy Playwright harness
 

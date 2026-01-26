@@ -3622,6 +3622,31 @@
       return;
     }
     var payload = event.data || {};
+    if (payload.type === "laika.automation.enable") {
+      var enableNonce = typeof payload.nonce === "string" && payload.nonce.length >= 8 ? payload.nonce : null;
+      if (!enableNonce) {
+        if (typeof window !== "undefined") {
+          window.postMessage({ type: "laika.automation.enabled", status: "error", error: "missing_nonce" }, event.origin);
+        }
+        return;
+      }
+      var enableRunId = typeof payload.runId === "string" && payload.runId ? payload.runId : automationState.runId;
+      setAutomationState(event.origin, enableNonce, enableRunId, automationState.reportUrl);
+      ensureAutomationPort();
+      sendAutomationRequest({
+        type: "laika.automation.enable",
+        origin: event.origin,
+        nonce: enableNonce
+      }).then(function (response) {
+        postAutomationMessage({
+          type: "laika.automation.enabled",
+          runId: enableRunId,
+          status: response && response.status ? response.status : "error",
+          error: response && response.error ? response.error : undefined
+        });
+      });
+      return;
+    }
     if (payload.type === "laika.automation.start") {
       var nonce = typeof payload.nonce === "string" && payload.nonce.length >= 8 ? payload.nonce : null;
       if (!nonce) {
@@ -3635,8 +3660,11 @@
       if (automationState.runId && automationState.nonce === nonce && automationState.runId === runId) {
         if (automationState.startAcked) {
           postAutomationMessage({ type: "laika.automation.ack", runId: automationState.runId, status: "ok" });
+          return;
         }
-        return;
+        if (automationState.startPending) {
+          return;
+        }
       }
       automationState.startPending = true;
       automationState.startAcked = false;

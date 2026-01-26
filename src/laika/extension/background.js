@@ -258,7 +258,7 @@ var AUTOMATION_ALLOWED_HOSTS = {
 var AUTOMATION_RUNS = {};
 var AUTOMATION_PORTS = {};
 var AUTOMATION_ENABLED_KEY = "automationEnabled";
-var AUTOMATION_ENABLED_DEFAULT = true;
+var AUTOMATION_ENABLED_DEFAULT = false;
 var automationEnabledCache = null;
 var automationEnabledPromise = null;
 var AUTOMATION_STORAGE_PREFIX = "laika.automation.";
@@ -662,7 +662,7 @@ async function waitForTabComplete(tabId, timeoutMs) {
   }
   try {
     var tab = await browser.tabs.get(tabId);
-    if (tab && tab.status === "complete") {
+    if (tab && (!tab.status || tab.status === "complete")) {
       return true;
     }
   } catch (error) {
@@ -721,70 +721,31 @@ async function waitForTabScriptable(tabId, timeoutMs) {
   if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.get) {
     return false;
   }
-  try {
-    var tab = await browser.tabs.get(tabId);
-    if (tab && isScriptableUrl(tab.url || "")) {
+  var timeoutValue = typeof timeoutMs === "number" && isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : TAB_SCRIPTABLE_TIMEOUT_MS;
+  var deadline = Date.now() + timeoutValue;
+  while (Date.now() < deadline) {
+    var tab = null;
+    try {
+      tab = await browser.tabs.get(tabId);
+    } catch (error) {
+      return false;
+    }
+    var url = "";
+    if (tab) {
+      if (typeof tab.url === "string" && tab.url) {
+        url = tab.url;
+      } else if (typeof tab.pendingUrl === "string" && tab.pendingUrl) {
+        url = tab.pendingUrl;
+      }
+    }
+    if (isScriptableUrl(url)) {
       return true;
     }
-  } catch (error) {
-    return false;
+    await sleep(200);
   }
-  if (!browser.tabs.onUpdated) {
-    return false;
-  }
-  return new Promise(function (resolve) {
-    var done = false;
-    var timer = null;
-    function cleanup() {
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      if (browser.tabs && browser.tabs.onUpdated && browser.tabs.onUpdated.removeListener) {
-        browser.tabs.onUpdated.removeListener(handleUpdated);
-      }
-      if (browser.tabs && browser.tabs.onRemoved && browser.tabs.onRemoved.removeListener) {
-        browser.tabs.onRemoved.removeListener(handleRemoved);
-      }
-    }
-    function finish(ok) {
-      if (done) {
-        return;
-      }
-      done = true;
-      cleanup();
-      resolve(ok);
-    }
-    function handleUpdated(updatedTabId, changeInfo, tab) {
-      if (updatedTabId !== tabId) {
-        return;
-      }
-      var nextUrl = "";
-      if (changeInfo && typeof changeInfo.url === "string") {
-        nextUrl = changeInfo.url;
-      } else if (tab && typeof tab.url === "string") {
-        nextUrl = tab.url;
-      }
-      if (isScriptableUrl(nextUrl)) {
-        finish(true);
-      }
-    }
-    function handleRemoved(removedTabId) {
-      if (removedTabId === tabId) {
-        finish(false);
-      }
-    }
-    browser.tabs.onUpdated.addListener(handleUpdated);
-    if (browser.tabs.onRemoved) {
-      browser.tabs.onRemoved.addListener(handleRemoved);
-    }
-    var timeoutValue = typeof timeoutMs === "number" && isFinite(timeoutMs) && timeoutMs > 0
-      ? Math.floor(timeoutMs)
-      : TAB_SCRIPTABLE_TIMEOUT_MS;
-    timer = setTimeout(function () {
-      finish(false);
-    }, timeoutValue);
-  });
+  return false;
 }
 
 async function injectContentScripts(tabId) {
@@ -832,10 +793,11 @@ async function sendTabMessageWithTimeout(tabId, payload, options) {
     : 2;
   var shouldWaitForReady = opts.waitForReady !== false;
   var allowInject = opts.allowInject !== false;
+  var didInject = false;
 
   for (var attempt = 1; attempt <= attempts; attempt += 1) {
     if (shouldWaitForReady) {
-      await waitForTabComplete(tabId, TAB_READY_TIMEOUT_MS);
+      var ready = await waitForTabComplete(tabId, TAB_READY_TIMEOUT_MS);
       var scriptable = await waitForTabScriptable(tabId, TAB_SCRIPTABLE_TIMEOUT_MS);
       if (!scriptable) {
         var readyError = new Error("tab_not_ready");
@@ -846,13 +808,23 @@ async function sendTabMessageWithTimeout(tabId, payload, options) {
         }
         throw readyError;
       }
+      if (!ready) {
+        await sleep(200);
+      }
     }
     try {
-      return await withTimeout(browser.tabs.sendMessage(tabId, payload), timeoutMs, "message_timeout");
+      var response = await withTimeout(browser.tabs.sendMessage(tabId, payload), timeoutMs, "message_timeout");
+      if (!response) {
+        var responseError = new Error("no_response");
+        responseError.code = "no_response";
+        throw responseError;
+      }
+      return response;
     } catch (error) {
-      if (allowInject && attempt === 1) {
+      if (allowInject && !didInject) {
         var injected = await injectContentScripts(tabId);
         if (injected) {
+          didInject = true;
           await sleep(TAB_INJECTION_DELAY_MS);
           continue;
         }
@@ -870,11 +842,20 @@ async function sendTabMessageWithTimeout(tabId, payload, options) {
 async function waitForContentScript(tabId) {
   var deadline = Date.now() + TAB_PING_TOTAL_MS;
   while (Date.now() < deadline) {
+    if (browser.tabs && browser.tabs.get) {
+      try {
+        var tab = await browser.tabs.get(tabId);
+        if (tab) {
+          await focusTab(tab);
+        }
+      } catch (error) {
+      }
+    }
     try {
       var result = await sendTabMessageWithTimeout(
         tabId,
         { type: "laika.ping" },
-        { allowInject: true, waitForReady: true, timeoutMs: TAB_PING_TIMEOUT_MS, attempts: 1 }
+        { allowInject: true, waitForReady: true, timeoutMs: TAB_PING_TIMEOUT_MS, attempts: 2 }
       );
       if (result && result.status === "ok") {
         return true;
@@ -886,10 +867,66 @@ async function waitForContentScript(tabId) {
   return false;
 }
 
-async function handleObserve(options, sender, tabOverride) {
+async function handleObserve(options, sender, tabOverride, ensureFocused) {
   var tabId = await resolveTargetTabId(sender, tabOverride);
   if (!isNumericId(tabId)) {
     return { status: "error", error: ToolErrorCode.NO_ACTIVE_TAB };
+  }
+  var senderUrl = sender && sender.tab ? (sender.tab.url || sender.url || "") : (sender && sender.url ? sender.url : "");
+  var isAutomationSender = isAutomationHarnessUrl(senderUrl);
+  var tabSnapshot = null;
+  if (browser.tabs && browser.tabs.get) {
+    try {
+      tabSnapshot = await browser.tabs.get(tabId);
+    } catch (error) {
+      tabSnapshot = null;
+    }
+  }
+  if (tabSnapshot && tabSnapshot.url && browser.permissions && browser.permissions.contains) {
+    try {
+      var origin = new URL(tabSnapshot.url).origin;
+      var allowed = await browser.permissions.contains({ origins: [origin + "/*"] });
+      if (!allowed) {
+        return {
+          status: "error",
+          error: ToolErrorCode.NO_CONTEXT,
+          tabId: tabId,
+          errorDetails: { code: "host_permission_missing", url: tabSnapshot.url }
+        };
+      }
+    } catch (error) {
+    }
+  }
+  if (ensureFocused && browser.tabs && browser.tabs.get) {
+    try {
+      var tab = await browser.tabs.get(tabId);
+      if (tab) {
+        await focusTab(tab);
+      }
+    } catch (error) {
+    }
+  }
+  var ready = await waitForContentScript(tabId);
+  if (!ready) {
+    if (isAutomationSender && browser.tabs && browser.tabs.reload) {
+      try {
+        await browser.tabs.reload(tabId);
+      } catch (error) {
+      }
+      ready = await waitForContentScript(tabId);
+    }
+  }
+  if (!ready) {
+    return {
+      status: "error",
+      error: ToolErrorCode.NO_CONTEXT,
+      tabId: tabId,
+      errorDetails: {
+        code: "no_content_script",
+        url: tabSnapshot && tabSnapshot.url ? tabSnapshot.url : null,
+        status: tabSnapshot && tabSnapshot.status ? tabSnapshot.status : null
+      }
+    };
   }
   try {
     var result = await sendTabMessageWithTimeout(
@@ -898,14 +935,42 @@ async function handleObserve(options, sender, tabOverride) {
       { allowInject: true, waitForReady: true }
     );
     if (!result || typeof result.status === "undefined") {
-      return { status: "error", error: ToolErrorCode.NO_CONTEXT };
+      return {
+        status: "error",
+        error: ToolErrorCode.NO_CONTEXT,
+        tabId: tabId,
+        errorDetails: { code: "no_response" }
+      };
     }
     if (result && typeof result === "object") {
       result.tabId = tabId;
     }
     return result;
   } catch (error) {
-    return { status: "error", error: error && error.code === "message_timeout" ? ToolErrorCode.TIMEOUT : ToolErrorCode.NO_CONTEXT };
+    if (error && error.code === "no_response") {
+      var ready = await waitForContentScript(tabId);
+      if (ready) {
+        try {
+          var retry = await sendTabMessageWithTimeout(
+            tabId,
+            { type: "laika.observe", options: options || {} },
+            { allowInject: true, waitForReady: true }
+          );
+          if (retry && typeof retry.status !== "undefined") {
+            retry.tabId = tabId;
+            return retry;
+          }
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
+    }
+    return {
+      status: "error",
+      error: error && error.code === "message_timeout" ? ToolErrorCode.TIMEOUT : ToolErrorCode.NO_CONTEXT,
+      tabId: tabId,
+      errorDetails: { code: error && error.code ? error.code : null }
+    };
   }
 }
 
@@ -1680,7 +1745,7 @@ async function handleTool(toolName, args, sender, tabOverride) {
     if (args && typeof args.rootHandleId === "string" && args.rootHandleId) {
       options.rootHandleId = args.rootHandleId;
     }
-    return handleObserve(options, sender, tabOverride);
+    return handleObserve(options, sender, tabOverride, false);
   }
   if (toolName === "search") {
     return handleSearchTool(args || {}, sender, tabOverride);
@@ -1871,6 +1936,16 @@ function isAllowedAutomationOrigin(origin) {
   }
 }
 
+function resolveAutomationOrigin(sender, message) {
+  var origin = sender && sender.url ? sender.url.split("#")[0] : (message && message.origin ? message.origin : "");
+  try {
+    origin = new URL(origin).origin;
+  } catch (error) {
+    origin = sender && sender.url ? sender.url.split("#")[0] : (message && message.origin ? message.origin : "");
+  }
+  return origin;
+}
+
 function resolveAutomationEnabled() {
   if (automationEnabledCache !== null) {
     return Promise.resolve(automationEnabledCache);
@@ -1895,6 +1970,33 @@ function resolveAutomationEnabled() {
   return automationEnabledPromise;
 }
 
+function setAutomationEnabled(enabled) {
+  var nextValue = enabled === true;
+  automationEnabledCache = nextValue;
+  if (!browser.storage || !browser.storage.local || !browser.storage.local.set) {
+    return Promise.resolve({ status: "error", error: "storage_unavailable" });
+  }
+  var payload = {};
+  payload[AUTOMATION_ENABLED_KEY] = nextValue;
+  return browser.storage.local.set(payload).then(function () {
+    return { status: "ok", enabled: nextValue };
+  }).catch(function () {
+    return { status: "error", error: "storage_set_failed" };
+  });
+}
+
+function enableAutomationForOrigin(origin) {
+  if (!isAllowedAutomationOrigin(origin)) {
+    return Promise.resolve({ status: "error", error: "origin_not_allowed" });
+  }
+  return resolveAutomationEnabled().then(function (enabled) {
+    if (enabled) {
+      return { status: "ok", enabled: true, alreadyEnabled: true };
+    }
+    return setAutomationEnabled(true);
+  });
+}
+
 function normalizeAutomationReportUrl(reportUrl, origin) {
   if (!reportUrl || typeof reportUrl !== "string") {
     return null;
@@ -1913,6 +2015,21 @@ function normalizeAutomationReportUrl(reportUrl, origin) {
     return parsed.toString();
   } catch (error) {
     return null;
+  }
+}
+
+function isAutomationHarnessUrl(url) {
+  if (!url || typeof url !== "string") {
+    return false;
+  }
+  try {
+    var parsed = new URL(url);
+    if (!isAllowedAutomationOrigin(parsed.origin)) {
+      return false;
+    }
+    return parsed.pathname.indexOf("harness.html") !== -1;
+  } catch (error) {
+    return false;
   }
 }
 
@@ -1989,6 +2106,22 @@ async function cleanupAutomationTabs(runState) {
   }
 }
 
+async function closeAutomationReportTab(runState) {
+  if (!runState || !browser.tabs || !browser.tabs.get || !browser.tabs.remove) {
+    return;
+  }
+  if (!isNumericId(runState.reportTabId)) {
+    return;
+  }
+  try {
+    var tab = await browser.tabs.get(runState.reportTabId);
+    if (tab && isAutomationHarnessUrl(tab.url || "")) {
+      await browser.tabs.remove(runState.reportTabId);
+    }
+  } catch (error) {
+  }
+}
+
 async function postAutomationReport(reportUrl, payload) {
   if (!reportUrl || typeof fetch !== "function") {
     return false;
@@ -2009,11 +2142,13 @@ async function deliverAutomationResult(runState, payload, kind) {
   var delivered = await sendAutomationMessage(runState.reportTabId, payload);
   if (delivered) {
     await cleanupAutomationTabs(runState);
+    await closeAutomationReportTab(runState);
     delete AUTOMATION_RUNS[runState.runId];
     return;
   }
   if (!runState.reportUrl) {
     await cleanupAutomationTabs(runState);
+    await closeAutomationReportTab(runState);
     delete AUTOMATION_RUNS[runState.runId];
     return;
   }
@@ -2025,15 +2160,26 @@ async function deliverAutomationResult(runState, payload, kind) {
     reportPayload.result = payload.result;
   } else if (kind === "error") {
     reportPayload.error = payload.error;
+    if (runState.errorDetails) {
+      reportPayload.errorDetails = runState.errorDetails;
+    }
   }
   await postAutomationReport(runState.reportUrl, reportPayload);
   await cleanupAutomationTabs(runState);
+  await closeAutomationReportTab(runState);
   delete AUTOMATION_RUNS[runState.runId];
 }
 
 async function resolveAutomationTargetTabId(targetUrl, sender) {
   if (!targetUrl) {
     return null;
+  }
+  var senderUrl = sender && sender.tab ? (sender.tab.url || sender.url || "") : (sender && sender.url ? sender.url : "");
+  if (sender && sender.tab && isNumericId(sender.tab.id) && !isAutomationHarnessUrl(senderUrl)) {
+    var navigateResult = await handleTool("browser.navigate", { url: targetUrl }, sender, sender.tab.id);
+    if (navigateResult && navigateResult.status === "ok") {
+      return sender.tab.id;
+    }
   }
   var openResult = await handleTool("browser.open_tab", { url: targetUrl }, sender, null);
   if (openResult && openResult.status === "ok" && isNumericId(openResult.tabId)) {
@@ -2049,12 +2195,7 @@ async function startAutomationRun(message, sender) {
   if (!sender || !sender.tab || !isNumericId(sender.tab.id)) {
     return { status: "error", error: "no_sender_tab" };
   }
-  var origin = sender.url ? sender.url.split("#")[0] : (message.origin || "");
-  try {
-    origin = new URL(origin).origin;
-  } catch (error) {
-    origin = sender.url ? sender.url.split("#")[0] : (message.origin || "");
-  }
+  var origin = resolveAutomationOrigin(sender, message);
   var automationEnabled = await resolveAutomationEnabled();
   if (!automationEnabled) {
     return { status: "error", error: "automation_disabled" };
@@ -2130,7 +2271,7 @@ async function startAutomationRun(message, sender) {
   var ownerWindowId = resolveOwnerWindowId(sender, null);
   var deps = {
     observe: function (options, tabId) {
-      return handleObserve(options, sender, tabId);
+      return handleObserve(options, sender, tabId, true);
     },
     runTool: function (action, tabId) {
       return handleTool(action.toolCall.name, action.toolCall.arguments || {}, sender, tabId).then(function (result) {
@@ -2155,6 +2296,9 @@ async function startAutomationRun(message, sender) {
       return !!runState.cancelRequested;
     },
     onStatus: function (status) {
+      if (status) {
+        runState.lastStatus = status;
+      }
       runState.status = status || runState.status;
       sendAutomationMessage(runState.reportTabId, {
         type: "laika.automation.status",
@@ -2165,6 +2309,12 @@ async function startAutomationRun(message, sender) {
     onStep: function (stepInfo, meta) {
       runState.lastStep = stepInfo && stepInfo.step ? stepInfo.step : runState.lastStep;
       runState.goalIndex = meta && typeof meta.goalIndex === "number" ? meta.goalIndex : runState.goalIndex;
+      if (stepInfo && stepInfo.action && stepInfo.action.name) {
+        runState.lastToolCall = stepInfo.action.name;
+      }
+      if (meta && meta.goal) {
+        runState.lastGoal = meta.goal;
+      }
       sendAutomationMessage(runState.reportTabId, {
         type: "laika.automation.progress",
         runId: runId,
@@ -2220,8 +2370,24 @@ async function startAutomationRun(message, sender) {
     runState.status = "error";
     runState.completedAt = Date.now();
     runState.error = String(error && error.message ? error.message : error);
-    if (error && error.details) {
-      runState.errorDetails = error.details;
+    var details = error && error.details && typeof error.details === "object" ? Object.assign({}, error.details) : {};
+    if (details.lastStatus === undefined && runState.lastStatus) {
+      details.lastStatus = runState.lastStatus;
+    }
+    if (details.lastStep === undefined && typeof runState.lastStep === "number") {
+      details.lastStep = runState.lastStep;
+    }
+    if (details.lastToolCall === undefined && runState.lastToolCall) {
+      details.lastToolCall = runState.lastToolCall;
+    }
+    if (details.lastGoalIndex === undefined && typeof runState.goalIndex === "number") {
+      details.lastGoalIndex = runState.goalIndex;
+    }
+    if (details.lastGoal === undefined && runState.lastGoal) {
+      details.lastGoal = runState.lastGoal;
+    }
+    if (Object.keys(details).length > 0) {
+      runState.errorDetails = details;
     }
     var payload = {
       type: "laika.automation.error",
@@ -2268,7 +2434,7 @@ browser.runtime.onMessage.addListener(function (message, sender) {
     return Promise.resolve({ status: "error", error: "invalid_message" });
   }
   if (message.type === "laika.observe") {
-    return handleObserve(message.options, sender, message.tabId);
+    return handleObserve(message.options, sender, message.tabId, false);
   }
   if (message.type === "laika.tool") {
     return handleTool(message.toolName, message.args || {}, sender, message.tabId);
@@ -2298,6 +2464,13 @@ browser.runtime.onMessage.addListener(function (message, sender) {
     return closePanelWindow(sender, message.windowId).then(function () {
       return { status: "ok" };
     });
+  }
+  if (message.type === "laika.automation.enable") {
+    if (!message.nonce || typeof message.nonce !== "string") {
+      return Promise.resolve({ status: "error", error: "missing_nonce" });
+    }
+    var origin = resolveAutomationOrigin(sender, message);
+    return enableAutomationForOrigin(origin);
   }
   if (message.type === "laika.automation.start") {
     return startAutomationRun(message, sender);

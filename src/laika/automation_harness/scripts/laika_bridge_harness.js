@@ -7,6 +7,7 @@ const http = require("http");
 const crypto = require("crypto");
 
 const DEFAULT_PORT = 8766;
+const FIXTURE_DIR = path.resolve(__dirname, "../fixtures");
 
 function usage() {
   console.log(
@@ -242,17 +243,61 @@ async function main() {
       res.end("bad request");
       return;
     }
-    if (req.url === "/" || req.url.startsWith("/harness.html")) {
+    const parsedUrl = new URL(req.url, "http://127.0.0.1");
+    if (parsedUrl.pathname.startsWith("/fixtures/")) {
+      const relativePath = decodeURIComponent(parsedUrl.pathname.replace("/fixtures/", ""));
+      if (!relativePath || relativePath.includes("..")) {
+        res.writeHead(400);
+        res.end("bad request");
+        return;
+      }
+      const fixturePath = path.resolve(FIXTURE_DIR, relativePath);
+      if (!fixturePath.startsWith(FIXTURE_DIR + path.sep)) {
+        res.writeHead(403);
+        res.end("forbidden");
+        return;
+      }
+      if (!fs.existsSync(fixturePath) || !fs.statSync(fixturePath).isFile()) {
+        res.writeHead(404);
+        res.end("not found");
+        return;
+      }
+      const ext = path.extname(fixturePath).toLowerCase();
+      const contentType = ext === ".html" ? "text/html"
+        : ext === ".css" ? "text/css"
+        : ext === ".json" ? "application/json"
+        : "text/plain";
+      res.writeHead(200, { "content-type": contentType });
+      res.end(fs.readFileSync(fixturePath, "utf8"));
+      return;
+    }
+    if (parsedUrl.pathname === "/" || parsedUrl.pathname.startsWith("/harness.html")) {
       res.writeHead(200, { "content-type": "text/html" });
       res.end(html);
       return;
     }
-    if (req.url === "/api/config") {
+    if (parsedUrl.pathname === "/api/config") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ scenario, runId, nonce, timeoutSeconds: args.timeoutSeconds }));
       return;
     }
-    if (req.url === "/api/telemetry" && req.method === "POST") {
+    if (parsedUrl.pathname === "/api/health") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        ok: true,
+        runId: runId,
+        scenario: scenario,
+        ready: telemetry.readyCount > 0,
+        readyCount: telemetry.readyCount,
+        ackCount: telemetry.ackCount,
+        progressCount: telemetry.progressCount,
+        status: telemetry.status,
+        lastEvent: telemetry.lastEvent,
+        lastEventAt: telemetry.lastEventAt
+      }));
+      return;
+    }
+    if (parsedUrl.pathname === "/api/telemetry" && req.method === "POST") {
       const raw = await readBody(req);
       let payload = null;
       try {
@@ -265,7 +310,7 @@ async function main() {
       res.end(JSON.stringify({ ok: true }));
       return;
     }
-    if (req.url === "/api/report" && req.method === "POST") {
+    if (parsedUrl.pathname === "/api/report" && req.method === "POST") {
       const raw = await readBody(req);
       let payload = null;
       try {

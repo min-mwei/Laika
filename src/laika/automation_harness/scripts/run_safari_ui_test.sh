@@ -14,8 +14,10 @@ Options:
   --retries <n>      Retry UI test on flaky failures (default 2)
   --retry-delay <s>  Delay between retries in seconds (default 3)
   --quit-safari      Quit Safari before and after running the UI test
+  --no-quit-safari   Keep Safari open between runs
   --no-build         Skip building/installing the app
   --install-dir <p>  Install directory for Laika.app (default ~/Applications)
+  --open-app         Open the app after install
   --no-open-app      Do not open the app after install
   --help             Show this help
 USAGE
@@ -37,15 +39,18 @@ XCODE_RETRY_DELAY="3"
 DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-4Z82EAJL2W}"
 SIGN_IDENTITY="${SIGN_IDENTITY:-Apple Development}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-}"
-HARNESS_TIMEOUT_BUFFER="${HARNESS_TIMEOUT_BUFFER:--5}"
+HARNESS_TIMEOUT_BUFFER="${HARNESS_TIMEOUT_BUFFER:-5}"
 HARNESS_TIMEOUT_SECONDS="${HARNESS_TIMEOUT_SECONDS:-}"
 TELEMETRY_PATH="${TELEMETRY_PATH:-}"
 BUILD_APP="1"
 INSTALL_DIR="${HOME}/Applications"
-OPEN_APP="1"
-QUIT_SAFARI="0"
+OPEN_APP="0"
+QUIT_SAFARI="1"
+APP_NAME="Laika.app"
+EXTENSION_NAME="Laika Extension.appex"
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-com.laika.Laika}"
 EXT_BUNDLE_ID="${EXT_BUNDLE_ID:-com.laika.Laika.Extension}"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,6 +82,10 @@ while [[ $# -gt 0 ]]; do
       QUIT_SAFARI="1"
       shift 1
       ;;
+    --no-quit-safari)
+      QUIT_SAFARI="0"
+      shift 1
+      ;;
     --no-build)
       BUILD_APP="0"
       shift 1
@@ -87,6 +96,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-open-app)
       OPEN_APP="0"
+      shift 1
+      ;;
+    --open-app)
+      OPEN_APP="1"
       shift 1
       ;;
     --help|-h)
@@ -138,7 +151,7 @@ EOF
 HARNESS_PID=""
 
 if [[ -z "${HARNESS_TIMEOUT_SECONDS}" ]]; then
-  HARNESS_TIMEOUT_SECONDS=$((TIMEOUT_SECONDS + HARNESS_TIMEOUT_BUFFER))
+  HARNESS_TIMEOUT_SECONDS=$((TIMEOUT_SECONDS - HARNESS_TIMEOUT_BUFFER))
   if [[ "${HARNESS_TIMEOUT_SECONDS}" -le 0 ]]; then
     HARNESS_TIMEOUT_SECONDS="${TIMEOUT_SECONDS}"
   fi
@@ -150,6 +163,124 @@ stop_harness() {
     wait "${HARNESS_PID}" >/dev/null 2>&1 || true
   fi
   HARNESS_PID=""
+}
+
+resolve_primary_app_path() {
+  echo "${INSTALL_DIR}/${APP_NAME}"
+}
+
+resolve_derived_app_path() {
+  if [[ -z "${DERIVED_DATA_PATH}" ]]; then
+    return 1
+  fi
+  for config in Debug Release; do
+    candidate="${DERIVED_DATA_PATH}/Build/Products/${config}/${APP_NAME}"
+    if [[ -d "${candidate}" ]]; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_keep_app_path() {
+  local primary_path
+  local derived_path
+  primary_path="$(resolve_primary_app_path)"
+  if [[ -d "${primary_path}" ]]; then
+    echo "${primary_path}"
+    return 0
+  fi
+  derived_path="$(resolve_derived_app_path || true)"
+  if [[ -n "${derived_path}" ]]; then
+    echo "${derived_path}"
+    return 0
+  fi
+  return 1
+}
+
+prune_extension_duplicates() {
+  local keep_path="${1:-}"
+  local candidates=()
+  local derived_path
+  local primary_path
+  local trash_app
+  local unique_paths
+
+  if [[ -z "${keep_path}" ]]; then
+    keep_path="$(resolve_keep_app_path || true)"
+  fi
+
+  if command -v mdfind >/dev/null 2>&1; then
+    while IFS= read -r app_path; do
+      if [[ -n "${app_path}" ]]; then
+        candidates+=("${app_path}")
+      fi
+    done < <(mdfind "kMDItemCFBundleIdentifier == '${APP_BUNDLE_ID}'")
+  fi
+
+  derived_path="$(resolve_derived_app_path || true)"
+  if [[ -n "${derived_path}" ]]; then
+    candidates+=("${derived_path}")
+  fi
+
+  primary_path="$(resolve_primary_app_path)"
+  if [[ -d "${primary_path}" ]]; then
+    candidates+=("${primary_path}")
+  fi
+  if [[ -d "${LAIKA_ROOT}" ]]; then
+    while IFS= read -r app_path; do
+      if [[ -n "${app_path}" ]]; then
+        candidates+=("${app_path}")
+      fi
+    done < <(find "${LAIKA_ROOT}" -type d -name "${APP_NAME}" -print 2>/dev/null)
+  fi
+  trash_app="${HOME}/.Trash/${APP_NAME}"
+  if [[ -d "${trash_app}" ]]; then
+    candidates+=("${trash_app}")
+  fi
+
+  if [[ -x "${LSREGISTER}" ]]; then
+    unique_paths="$(printf "%s\n" "${candidates[@]}" | awk 'NF' | sort -u)"
+    while IFS= read -r app_path; do
+      if [[ -z "${app_path}" || "${app_path}" == "${keep_path}" ]]; then
+        continue
+      fi
+      if [[ -d "${app_path}" ]]; then
+        unregister_extension_for_app "${app_path}"
+        "${LSREGISTER}" -u "${app_path}" >/dev/null 2>&1 || true
+      fi
+    done <<< "${unique_paths}"
+    if [[ -n "${keep_path}" && -d "${keep_path}" ]]; then
+      "${LSREGISTER}" -f "${keep_path}" >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
+register_extension_for_app() {
+  local app_path="$1"
+  local extension_path
+  extension_path="$(extension_path_for_app "${app_path}")"
+  if [[ -d "${extension_path}" ]] && command -v pluginkit >/dev/null 2>&1; then
+    pluginkit -a "${extension_path}" >/dev/null 2>&1 || true
+  fi
+}
+
+extension_path_for_app() {
+  local app_path="$1"
+  if [[ -z "${app_path}" ]]; then
+    return 1
+  fi
+  echo "${app_path}/Contents/PlugIns/${EXTENSION_NAME}"
+}
+
+unregister_extension_for_app() {
+  local app_path="$1"
+  local extension_path
+  extension_path="$(extension_path_for_app "${app_path}")"
+  if [[ -d "${extension_path}" ]] && command -v pluginkit >/dev/null 2>&1; then
+    pluginkit -r "${extension_path}" >/dev/null 2>&1 || true
+  fi
 }
 
 start_harness() {
@@ -176,6 +307,12 @@ start_harness() {
 
 cleanup() {
   stop_harness
+  local keep_path
+  keep_path="$(resolve_keep_app_path || true)"
+  prune_extension_duplicates "${keep_path}"
+  if [[ -n "${keep_path}" ]]; then
+    register_extension_for_app "${keep_path}"
+  fi
   rm -f "${CONFIG_PATH}"
 }
 trap cleanup EXIT
@@ -210,7 +347,7 @@ if [[ -z "${TELEMETRY_PATH}" ]]; then
 fi
 
 if [[ "${QUIT_SAFARI}" == "1" ]]; then
-  osascript -e 'tell application "Safari" to quit' >/dev/null 2>&1 || true
+  pkill -x "Safari" >/dev/null 2>&1 || true
   sleep 1
 fi
 
@@ -255,16 +392,14 @@ cleanup_test_runner() {
 }
 
 clean_extension_registration() {
-  if command -v pluginkit >/dev/null 2>&1; then
-    pluginkit -r "${EXT_BUNDLE_ID}" >/dev/null 2>&1 || true
+  local keep_path
+  keep_path="$(resolve_keep_app_path || true)"
+  if [[ -n "${keep_path}" ]]; then
+    unregister_extension_for_app "${keep_path}"
   fi
-  LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-  if [[ -x "${LSREGISTER}" ]] && command -v mdfind >/dev/null 2>&1; then
-    mdfind "kMDItemCFBundleIdentifier == '${APP_BUNDLE_ID}'" | while IFS= read -r app_path; do
-      if [[ -n "${app_path}" ]]; then
-        "${LSREGISTER}" -u "${app_path}" >/dev/null 2>&1 || true
-      fi
-    done
+  prune_extension_duplicates "${keep_path}"
+  if [[ -n "${keep_path}" ]]; then
+    register_extension_for_app "${keep_path}"
   fi
 }
 
@@ -273,6 +408,8 @@ attempt=0
 max_attempts=$((XCODE_RETRIES + 1))
 XCODE_STATUS=1
 CLEAN_DERIVED_DATA="0"
+LAST_RESULT_BUNDLE=""
+LAST_LOG_PATH=""
 while [[ "${attempt}" -lt "${max_attempts}" ]]; do
   attempt=$((attempt + 1))
   if [[ "${attempt}" -gt 1 && "${CLEAN_DERIVED_DATA}" == "1" ]]; then
@@ -294,6 +431,8 @@ while [[ "${attempt}" -lt "${max_attempts}" ]]; do
   fi
   result_bundle="${result_base}-attempt${attempt}.xcresult"
   log_path="${result_base}-attempt${attempt}.log"
+  LAST_RESULT_BUNDLE="${result_bundle}"
+  LAST_LOG_PATH="${log_path}"
   if [[ -e "${result_bundle}" ]]; then
     rm -rf "${result_bundle}"
   fi
@@ -320,4 +459,23 @@ done
 set -e
 
 stop_harness
+if [[ "${XCODE_STATUS}" -ne 0 ]]; then
+  artifact_base="${OUTPUT_PATH}"
+  if [[ "${artifact_base}" == *.json ]]; then
+    artifact_base="${artifact_base%.json}"
+  fi
+  artifact_dir="${artifact_base}-artifacts"
+  echo "Automation run failed."
+  if [[ -n "${LAST_RESULT_BUNDLE}" ]]; then
+    echo "Last xcresult: ${LAST_RESULT_BUNDLE}"
+  fi
+  if [[ -n "${LAST_LOG_PATH}" ]]; then
+    echo "Last xcodebuild log: ${LAST_LOG_PATH}"
+  fi
+  echo "Output JSON: ${OUTPUT_PATH}"
+  echo "Harness telemetry: ${TELEMETRY_PATH}"
+  echo "UI artifacts: ${artifact_dir}"
+  echo "Extension logs: ${HOME}/Library/Containers/com.laika.Laika.Extension/Data/Laika/logs/llm.jsonl"
+  echo "App logs: ${HOME}/Library/Containers/com.laika.Laika/Data/Laika/logs/llm.jsonl"
+fi
 exit "${XCODE_STATUS}"

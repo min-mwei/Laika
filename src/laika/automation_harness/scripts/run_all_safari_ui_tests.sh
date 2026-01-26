@@ -11,9 +11,12 @@ Options:
   --timeout <sec>      UI test timeout in seconds (default 240)
   --retries <n>        Retry UI test on flaky failures (default 2)
   --retry-delay <s>    Delay between retries in seconds (default 3)
+  --include-live       Include live-web smoke scenarios (HN/BBC)
   --quit-safari        Quit Safari before and after each UI test
+  --no-quit-safari     Keep Safari open between runs
   --no-build           Skip building/installing the app
   --install-dir <p>    Install directory for Laika.app (default ~/Applications)
+  --open-app           Open the app after install
   --no-open-app        Do not open the app after install
   --help               Show this help
 USAGE
@@ -27,8 +30,9 @@ XCODE_RETRIES="2"
 XCODE_RETRY_DELAY="3"
 BUILD_APP="1"
 INSTALL_DIR="${HOME}/Applications"
-OPEN_APP="1"
-QUIT_SAFARI="0"
+OPEN_APP="0"
+QUIT_SAFARI="1"
+INCLUDE_LIVE="0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -48,8 +52,16 @@ while [[ $# -gt 0 ]]; do
       XCODE_RETRY_DELAY="$2"
       shift 2
       ;;
+    --include-live)
+      INCLUDE_LIVE="1"
+      shift 1
+      ;;
     --quit-safari)
       QUIT_SAFARI="1"
+      shift 1
+      ;;
+    --no-quit-safari)
+      QUIT_SAFARI="0"
       shift 1
       ;;
     --no-build)
@@ -62,6 +74,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-open-app)
       OPEN_APP="0"
+      shift 1
+      ;;
+    --open-app)
+      OPEN_APP="1"
       shift 1
       ;;
     --help|-h)
@@ -81,8 +97,11 @@ mkdir -p "${OUTPUT_DIR}"
 scenarios=(
   "scripts/scenarios/hn.json"
   "scripts/scenarios/bbc.json"
-  "scripts/scenarios/wsj.json"
+  "scripts/scenarios/sec_nvda.json"
 )
+if [[ "${INCLUDE_LIVE}" == "1" ]]; then
+  scenarios+=("scripts/scenarios/hn_live.json" "scripts/scenarios/bbc_live.json")
+fi
 
 first_run=1
 for scenario in "${scenarios[@]}"; do
@@ -94,12 +113,16 @@ for scenario in "${scenarios[@]}"; do
     args+=("--no-build")
   else
     args+=("--install-dir" "${INSTALL_DIR}")
-    if [[ "${OPEN_APP}" != "1" ]]; then
+    if [[ "${OPEN_APP}" == "1" ]]; then
+      args+=("--open-app")
+    else
       args+=("--no-open-app")
     fi
   fi
   if [[ "${QUIT_SAFARI}" == "1" ]]; then
     args+=("--quit-safari")
+  else
+    args+=("--no-quit-safari")
   fi
 
   "${RUN_SCRIPT}" "${args[@]}"

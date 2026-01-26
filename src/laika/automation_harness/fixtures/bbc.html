@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>BBC News Fixture</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        font-family: "Gill Sans", "Helvetica", Arial, sans-serif;
+        background: #f4f6f9;
+        color: #141414;
+      }
+      header {
+        background: #bb1919;
+        color: #ffffff;
+        padding: 18px 24px;
+        font-weight: bold;
+        font-size: 20px;
+      }
+      main {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .lede {
+        font-size: 17px;
+        line-height: 1.5;
+        margin-bottom: 20px;
+        color: #333333;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 18px;
+      }
+      article {
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+      }
+      article h2 {
+        margin: 0 0 8px;
+        font-size: 18px;
+      }
+      article p {
+        margin: 0;
+        color: #4b4b4b;
+        line-height: 1.4;
+      }
+    </style>
+  </head>
+  <body>
+    <header>BBC News</header>
+    <main>
+      <p class="lede">
+        BBC News provides breaking news, analysis, and features from around the world.
+      </p>
+      <section class="grid" aria-label="Top headlines">
+        <article>
+          <h2>Global Chip Demand Spurs New Factory Plans</h2>
+          <p>Manufacturers outline new investments as demand for advanced hardware grows.</p>
+        </article>
+        <article>
+          <h2>City Transit Trials Real-Time Crowd Alerts</h2>
+          <p>New displays aim to reduce congestion during the morning commute.</p>
+        </article>
+        <article>
+          <h2>Remote Work Policies Shift Again</h2>
+          <p>Companies balance flexibility with in-person collaboration goals.</p>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

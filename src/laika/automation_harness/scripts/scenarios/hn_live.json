@@ -1,5 +1,5 @@
 {
-  "url": "http://127.0.0.1:8766/fixtures/hn.html",
+  "url": "https://news.ycombinator.com/",
   "goals": [
     "What is this page about?",
     "Tell me about the first topic.",

@@ -47,7 +47,7 @@ This note captures practical heuristics for walking DOM trees, extracting text, 
 
 - Keep **weights and thresholds** in one place so they are tunable without rewiring logic.
 - Add **debug counters and timings** to see what was filtered and why.
-- Use **scenario-driven evaluation** (HN/BBC/WSJ + internal pages).
+- Use **scenario-driven evaluation** (HN/BBC/SEC + internal pages).
 - Add **site-specific override rules** as last-resort patches, gated by origin.
 - Prefer **feature-based logic** over string matching when possible.
 
