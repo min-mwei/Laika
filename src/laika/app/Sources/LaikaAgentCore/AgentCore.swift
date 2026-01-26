@@ -60,6 +60,7 @@ public final class AgentOrchestrator: @unchecked Sendable {
 
     private enum SummaryFormat {
         case plain
+        case pageSummary
         case topicDetail
         case commentDetail
     }
@@ -327,7 +328,7 @@ public final class AgentOrchestrator: @unchecked Sendable {
         if let engine = intent.engine, !engine.isEmpty {
             arguments["engine"] = .string(engine)
         }
-        let summary = "Searching the web for '\(intent.query)'."
+        let summary = buildSearchSummary(query: intent.query, engine: intent.engine, newTab: true)
         let toolCall = ToolCall(name: .search, arguments: arguments)
         return PlannedAction(toolCall: toolCall, summary: summary)
     }
@@ -338,9 +339,39 @@ public final class AgentOrchestrator: @unchecked Sendable {
             "engine": .string(engine),
             "newTab": .bool(true)
         ]
-        let summary = "\(summaryPrefix). Retrying with \(engine.capitalized)."
+        let engineLabel = displaySearchEngine(engine)
+        let summary = "\(summaryPrefix). Retrying '\(query)' with \(engineLabel) in a new tab."
         let toolCall = ToolCall(name: .search, arguments: arguments)
         return PlannedAction(toolCall: toolCall, summary: summary)
+    }
+
+    private func buildSearchSummary(query: String, engine: String?, newTab: Bool) -> String {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let engineLabel = displaySearchEngine(engine)
+        let tabSuffix = newTab ? " in a new tab" : ""
+        return "Searching the web for '\(trimmed)' (engine: \(engineLabel))\(tabSuffix)."
+    }
+
+    private func displaySearchEngine(_ engine: String?) -> String {
+        let trimmed = engine?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            return "default"
+        }
+        let normalized = trimmed.lowercased()
+        switch normalized {
+        case "google":
+            return "Google"
+        case "duckduckgo":
+            return "DuckDuckGo"
+        case "bing":
+            return "Bing"
+        case "yahoo":
+            return "Yahoo"
+        case "custom":
+            return "Custom"
+        default:
+            return trimmed
+        }
     }
 
     private func assistantFromSummary(_ summary: String) -> AssistantMessage {
@@ -1274,6 +1305,7 @@ public final class AgentOrchestrator: @unchecked Sendable {
             }
         }
         output = appendTopDiscussionsIfNeeded(summary: output, context: context, focus: focus)
+        output = appendAccessLimitationsIfNeeded(summary: output, context: context)
         return output
     }
 
@@ -1299,6 +1331,69 @@ public final class AgentOrchestrator: @unchecked Sendable {
         }
         let line = "Top discussions (by comments): " + topDiscussions.joined(separator: "; ")
         return trimmed + "\n" + line
+    }
+
+    private func appendAccessLimitationsIfNeeded(summary: String, context: ContextPack) -> String {
+        guard let line = accessLimitationsLine(for: context) else {
+            return summary
+        }
+        let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return line
+        }
+        if trimmed.lowercased().contains("access limitation") {
+            return summary
+        }
+        return trimmed + "\n" + line
+    }
+
+    private func accessLimitationsLine(for context: ContextPack) -> String? {
+        let labels = accessLimitations(for: context)
+        guard !labels.isEmpty else {
+            return nil
+        }
+        return "Access limitations: " + labels.joined(separator: "; ") + "."
+    }
+
+    private func accessLimitations(for context: ContextPack) -> [String] {
+        var allowed = ObservationSignalNormalizer.accessLimitSignals
+        allowed.insert(ObservationSignal.sparseText.rawValue)
+        allowed.insert(ObservationSignal.nonTextContent.rawValue)
+        let normalized = context.observation.signals
+            .map { ObservationSignalNormalizer.normalize($0) }
+            .filter { allowed.contains($0) }
+        var labels: [String] = []
+        for signal in normalized {
+            if let label = accessLimitationLabel(for: signal), !labels.contains(label) {
+                labels.append(label)
+            }
+        }
+        return labels
+    }
+
+    private func accessLimitationLabel(for signal: String) -> String? {
+        switch signal {
+        case ObservationSignal.paywallOrLogin.rawValue:
+            return "paywall or login required"
+        case ObservationSignal.consentModal.rawValue:
+            return "consent modal"
+        case ObservationSignal.overlayBlocking.rawValue:
+            return "overlay blocking content"
+        case ObservationSignal.captchaOrRobotCheck.rawValue:
+            return "captcha or robot check"
+        case ObservationSignal.ageGate.rawValue:
+            return "age gate"
+        case ObservationSignal.geoBlock.rawValue:
+            return "geo-restricted content"
+        case ObservationSignal.scriptRequired.rawValue:
+            return "scripts required"
+        case ObservationSignal.sparseText.rawValue:
+            return "sparse text"
+        case ObservationSignal.nonTextContent.rawValue:
+            return "non-text content"
+        default:
+            return nil
+        }
     }
 
     private func topDiscussionSummaries(from items: [ObservedItem], limit: Int) -> [String] {
@@ -1398,7 +1493,19 @@ public final class AgentOrchestrator: @unchecked Sendable {
             if case let .string(query)? = call.arguments["query"] {
                 let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
-                    return "Searching the web for '\(trimmed)'."
+                    let engine = (call.arguments["engine"]).flatMap { value -> String? in
+                        if case let .string(engineValue) = value {
+                            return engineValue
+                        }
+                        return nil
+                    }
+                    let newTab = (call.arguments["newTab"]).flatMap { value -> Bool? in
+                        if case let .bool(flag) = value {
+                            return flag
+                        }
+                        return nil
+                    } ?? false
+                    return buildSearchSummary(query: trimmed, engine: engine, newTab: newTab)
                 }
             }
             return "Running a web search."
@@ -1661,6 +1768,9 @@ public final class AgentOrchestrator: @unchecked Sendable {
         if goalPlan.intent == .itemSummary {
             return .topicDetail
         }
+        if goalPlan.intent == .pageSummary {
+            return .pageSummary
+        }
         return .plain
     }
 
@@ -1668,6 +1778,12 @@ public final class AgentOrchestrator: @unchecked Sendable {
         switch format {
         case .plain:
             return []
+        case .pageSummary:
+            return [
+                "Summary:",
+                "Key takeaways:",
+                "What to verify next:"
+            ]
         case .topicDetail:
             return [
                 "Topic overview:",
@@ -1939,6 +2055,10 @@ public final class AgentOrchestrator: @unchecked Sendable {
         let url = context.observation.url
 
         switch format {
+        case .pageSummary:
+            let overview = buildOverview(title: title, url: url, fallback: "Not stated in the page.")
+            let accessLimited = !accessLimitations(for: context).isEmpty
+            return buildPageSummary(sentences: sentences, overview: overview, accessLimited: accessLimited)
         case .topicDetail:
             let overview = buildOverview(title: title, url: url, fallback: "Topic at \(url).")
             let whatItIs = sentences.first ?? "Not stated in the page."
@@ -1980,12 +2100,35 @@ public final class AgentOrchestrator: @unchecked Sendable {
         }
     }
 
+    private func buildPageSummary(sentences: [String], overview: String, accessLimited: Bool) -> String {
+        let summaryLine = sentences.first ?? overview
+        let takeaways = sentences.dropFirst().prefix(2).joined(separator: " ")
+        let takeawaysText = takeaways.isEmpty ? "Not stated in the page." : takeaways
+        let verifyText = accessLimited
+            ? "Access appears limited; verify details directly on the site."
+            : "Verify key details on the page or open relevant links for confirmation."
+        return [
+            "Summary: \(summaryLine)",
+            "Key takeaways: \(takeawaysText)",
+            "What to verify next: \(verifyText)"
+        ].joined(separator: "\n")
+    }
+
     private func structuredSummaryFromText(_ summary: String, format: SummaryFormat, context: ContextPack) -> String? {
         let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return nil
         }
         switch format {
+        case .pageSummary:
+            let sentences = TextUtils.firstSentences(trimmed, maxItems: 5, minLength: 24, maxLength: 280)
+            let overview = buildOverview(
+                title: context.observation.title,
+                url: context.observation.url,
+                fallback: "Not stated in the page."
+            )
+            let accessLimited = !accessLimitations(for: context).isEmpty
+            return buildPageSummary(sentences: sentences, overview: overview, accessLimited: accessLimited)
         case .topicDetail:
             let sentences = TextUtils.firstSentences(trimmed, maxItems: 5, minLength: 24, maxLength: 280)
             let overview = buildOverview(title: context.observation.title, url: context.observation.url, fallback: "Topic at \(context.observation.url).")

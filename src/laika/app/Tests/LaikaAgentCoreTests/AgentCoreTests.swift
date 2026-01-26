@@ -7,15 +7,21 @@ final class AgentCoreTests: XCTestCase {
     private struct MockModelRunner: ModelRunner {
         let summary: String
         let toolCalls: [ToolCall]
+        let goalPlan: GoalPlan?
 
-        init(summary: String, toolCalls: [ToolCall] = []) {
+        init(summary: String, toolCalls: [ToolCall] = [], goalPlan: GoalPlan? = nil) {
             self.summary = summary
             self.toolCalls = toolCalls
+            self.goalPlan = goalPlan
         }
 
         func generatePlan(context: ContextPack, userGoal: String) async throws -> ModelResponse {
             let assistant = AssistantMessage(render: Document.paragraph(text: summary))
             return ModelResponse(toolCalls: toolCalls, assistant: assistant)
+        }
+
+        func parseGoalPlan(context: ContextPack, userGoal: String) async throws -> GoalPlan {
+            return goalPlan ?? .unknown
         }
     }
 
@@ -73,6 +79,44 @@ final class AgentCoreTests: XCTestCase {
         XCTAssertTrue(response.summary.contains("Alpha Beta Gamma"))
         XCTAssertEqual(response.actions.count, 0)
         XCTAssertEqual(response.assistant.render.plainText(), response.summary)
+    }
+
+    func testPageSummaryAddsStructuredHeadings() async throws {
+        let observation = Observation(
+            url: "https://example.com",
+            title: "Example",
+            text: "Example page text about reliability and testing.",
+            elements: []
+        )
+        let context = ContextPack(origin: "https://example.com", mode: .assist, observation: observation, recentToolCalls: [])
+        let goalPlan = GoalPlan(intent: .pageSummary)
+        let model = MockModelRunner(summary: "This page explains how testing improves reliability.", goalPlan: goalPlan)
+        let orchestrator = AgentOrchestrator(model: model)
+
+        let response = try await orchestrator.runOnce(context: context, userGoal: "Summarize this page")
+
+        XCTAssertTrue(response.summary.contains("Summary:"))
+        XCTAssertTrue(response.summary.contains("Key takeaways:"))
+        XCTAssertTrue(response.summary.contains("What to verify next:"))
+    }
+
+    func testSummaryIncludesAccessLimitations() async throws {
+        let observation = Observation(
+            url: "https://example.com",
+            title: "Example",
+            text: "Limited page content.",
+            elements: [],
+            signals: [ObservationSignal.paywallOrLogin.rawValue]
+        )
+        let context = ContextPack(origin: "https://example.com", mode: .assist, observation: observation, recentToolCalls: [])
+        let goalPlan = GoalPlan(intent: .pageSummary)
+        let model = MockModelRunner(summary: "This page is about Example.", goalPlan: goalPlan)
+        let orchestrator = AgentOrchestrator(model: model)
+
+        let response = try await orchestrator.runOnce(context: context, userGoal: "Summarize this page")
+
+        XCTAssertTrue(response.summary.contains("Access limitations:"))
+        XCTAssertTrue(response.summary.contains("paywall or login required"))
     }
 
     func testTopDiscussionsAppendedForListPages() async throws {
