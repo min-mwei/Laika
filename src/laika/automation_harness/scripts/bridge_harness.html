@@ -58,6 +58,8 @@
         var startDeadlineAt = null;
         var enableAttempts = 0;
         var enableAcked = false;
+        var automationEnabledByHarness = false;
+        var disableSent = false;
         var runTimeoutBufferSeconds = 30;
         var minRunTimeoutBufferSeconds = 5;
 
@@ -111,6 +113,26 @@
           }, pageOrigin);
         }
 
+        function postAutomationDisable() {
+          if (!nonce || disableSent) {
+            return;
+          }
+          disableSent = true;
+          sendTelemetry("disable_sent", { attempt: 1 });
+          window.postMessage({
+            type: "laika.automation.disable",
+            runId: runId,
+            nonce: nonce
+          }, pageOrigin);
+        }
+
+        function maybeDisableAutomation() {
+          if (!automationEnabledByHarness) {
+            return;
+          }
+          postAutomationDisable();
+        }
+
         function postAutomationStart() {
           if (!scenario || !nonce) {
             return;
@@ -151,14 +173,12 @@
             sendTelemetry("start_timeout", { attempts: startAttempts });
             runDone = true;
             stopStartRetry();
-            reportResult({
+            reportAndFinalize({
               runId: runId,
               scenario: scenario,
               error: "start_timeout",
               source: "page",
               receivedAt: new Date().toISOString()
-            }).catch(function () {
-              log({ event: "report_failed" });
             });
             return;
           }
@@ -167,14 +187,12 @@
             sendTelemetry("start_timeout", { attempts: startAttempts });
             runDone = true;
             stopStartRetry();
-            reportResult({
+            reportAndFinalize({
               runId: runId,
               scenario: scenario,
               error: "start_timeout",
               source: "page",
               receivedAt: new Date().toISOString()
-            }).catch(function () {
-              log({ event: "report_failed" });
             });
             return;
           }
@@ -190,10 +208,30 @@
         }
 
         function reportResult(payload) {
+          var body = JSON.stringify(payload);
+          if (navigator && typeof navigator.sendBeacon === "function") {
+            try {
+              var blob = new Blob([body], { type: "application/json" });
+              if (navigator.sendBeacon("/api/report", blob)) {
+                return Promise.resolve({ ok: true, method: "beacon" });
+              }
+            } catch (error) {
+            }
+          }
           return fetch("/api/report", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify(payload)
+            body: body,
+            keepalive: true
+          });
+        }
+
+        function reportAndFinalize(payload) {
+          reportResult(payload).then(function () {
+            maybeDisableAutomation();
+          }).catch(function () {
+            log({ event: "report_failed" });
+            maybeDisableAutomation();
           });
         }
 
@@ -226,8 +264,18 @@
           if (data.type === "laika.automation.enabled") {
             var enabledOk = data.status === "ok";
             enableAcked = enabledOk || enableAcked;
+            if (enabledOk) {
+              if (data.alreadyEnabled !== true) {
+                automationEnabledByHarness = true;
+              }
+            }
             log({ event: "enabled", status: data.status, error: data.error });
             sendTelemetry("enabled", { status: data.status, error: data.error });
+            return;
+          }
+          if (data.type === "laika.automation.disabled") {
+            log({ event: "disabled", status: data.status, error: data.error });
+            sendTelemetry("disabled", { status: data.status, error: data.error });
             return;
           }
           if (data.type === "laika.automation.ack") {
@@ -255,14 +303,12 @@
             sendTelemetry("result", { runId: data.runId });
             runDone = true;
             stopStartRetry();
-            reportResult({
+            reportAndFinalize({
               runId: data.runId,
               scenario: scenario,
               result: data.result,
               source: "page",
               receivedAt: new Date().toISOString()
-            }).catch(function () {
-              log({ event: "report_failed" });
             });
             return;
           }
@@ -280,15 +326,13 @@
             sendTelemetry("error", { runId: data.runId, error: data.error, errorDetails: errorDetails });
             runDone = true;
             stopStartRetry();
-            reportResult({
+            reportAndFinalize({
               runId: data.runId,
               scenario: scenario,
               error: data.error,
               errorDetails: errorDetails,
               source: "page",
               receivedAt: new Date().toISOString()
-            }).catch(function () {
-              log({ event: "report_failed" });
             });
           }
         });

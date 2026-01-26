@@ -329,6 +329,23 @@ ensure_harness() {
   return 0
 }
 
+quit_safari() {
+  if ! pgrep -x "Safari" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e 'tell application "Safari" to quit' >/dev/null 2>&1 || true
+    for _ in {1..10}; do
+      if ! pgrep -x "Safari" >/dev/null 2>&1; then
+        return 0
+      fi
+      sleep 0.3
+    done
+  fi
+  pkill -x "Safari" >/dev/null 2>&1 || true
+  sleep 1
+}
+
 if [[ -z "${DERIVED_DATA_PATH}" ]]; then
   derived_base="${OUTPUT_PATH}"
   if [[ "${derived_base}" == *.json ]]; then
@@ -347,8 +364,7 @@ if [[ -z "${TELEMETRY_PATH}" ]]; then
 fi
 
 if [[ "${QUIT_SAFARI}" == "1" ]]; then
-  pkill -x "Safari" >/dev/null 2>&1 || true
-  sleep 1
+  quit_safari
 fi
 
 should_retry_ui() {
@@ -459,6 +475,9 @@ done
 set -e
 
 stop_harness
+if [[ "${QUIT_SAFARI}" == "1" ]]; then
+  quit_safari
+fi
 if [[ "${XCODE_STATUS}" -ne 0 ]]; then
   artifact_base="${OUTPUT_PATH}"
   if [[ "${artifact_base}" == *.json ]]; then

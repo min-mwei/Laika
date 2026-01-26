@@ -1993,7 +1993,29 @@ function enableAutomationForOrigin(origin) {
     if (enabled) {
       return { status: "ok", enabled: true, alreadyEnabled: true };
     }
-    return setAutomationEnabled(true);
+    return setAutomationEnabled(true).then(function (result) {
+      if (result && result.status === "ok") {
+        result.alreadyEnabled = false;
+      }
+      return result;
+    });
+  });
+}
+
+function disableAutomationForOrigin(origin) {
+  if (!isAllowedAutomationOrigin(origin)) {
+    return Promise.resolve({ status: "error", error: "origin_not_allowed" });
+  }
+  return resolveAutomationEnabled().then(function (enabled) {
+    if (!enabled) {
+      return { status: "ok", enabled: false, alreadyDisabled: true };
+    }
+    return setAutomationEnabled(false).then(function (result) {
+      if (result && result.status === "ok") {
+        result.alreadyDisabled = false;
+      }
+      return result;
+    });
   });
 }
 
@@ -2139,32 +2161,22 @@ async function postAutomationReport(reportUrl, payload) {
 }
 
 async function deliverAutomationResult(runState, payload, kind) {
-  var delivered = await sendAutomationMessage(runState.reportTabId, payload);
-  if (delivered) {
-    await cleanupAutomationTabs(runState);
-    await closeAutomationReportTab(runState);
-    delete AUTOMATION_RUNS[runState.runId];
-    return;
-  }
-  if (!runState.reportUrl) {
-    await cleanupAutomationTabs(runState);
-    await closeAutomationReportTab(runState);
-    delete AUTOMATION_RUNS[runState.runId];
-    return;
-  }
-  var reportPayload = {
-    runId: runState.runId,
-    source: "background"
-  };
-  if (kind === "result") {
-    reportPayload.result = payload.result;
-  } else if (kind === "error") {
-    reportPayload.error = payload.error;
-    if (runState.errorDetails) {
-      reportPayload.errorDetails = runState.errorDetails;
+  await sendAutomationMessage(runState.reportTabId, payload);
+  if (runState.reportUrl) {
+    var reportPayload = {
+      runId: runState.runId,
+      source: "background"
+    };
+    if (kind === "result") {
+      reportPayload.result = payload.result;
+    } else if (kind === "error") {
+      reportPayload.error = payload.error;
+      if (runState.errorDetails) {
+        reportPayload.errorDetails = runState.errorDetails;
+      }
     }
+    await postAutomationReport(runState.reportUrl, reportPayload);
   }
-  await postAutomationReport(runState.reportUrl, reportPayload);
   await cleanupAutomationTabs(runState);
   await closeAutomationReportTab(runState);
   delete AUTOMATION_RUNS[runState.runId];
@@ -2261,11 +2273,30 @@ async function startAutomationRun(message, sender) {
       return { status: "error", error: "target_tab_failed" };
     }
     recordAutomationTab(targetTabId);
-    await waitForContentScript(targetTabId);
+    var contentReady = await waitForContentScript(targetTabId);
+    if (!contentReady && sender && sender.tab && isNumericId(sender.tab.id)) {
+      var fallbackResult = await handleTool("browser.navigate", { url: message.targetUrl }, sender, sender.tab.id);
+      if (fallbackResult && fallbackResult.status === "ok") {
+        targetTabId = sender.tab.id;
+        await waitForContentScript(targetTabId);
+      }
+    }
   }
   var initialObserveSettings = null;
-  if (targetTabId) {
+  if (message.options && message.options.initialObserveSettings && typeof message.options.initialObserveSettings === "object") {
+    initialObserveSettings = Object.assign({}, message.options.initialObserveSettings);
+  } else if (targetTabId) {
     initialObserveSettings = { attempts: 14, delayMs: 350, initialDelayMs: 700 };
+  }
+  if (initialObserveSettings && runTimeoutMs) {
+    var perAttemptMs = TAB_MESSAGE_TIMEOUT_MS + (TAB_PING_TOTAL_MS * 2) + 1000;
+    var budgetMs = Math.max(1000, runTimeoutMs - 2000);
+    var maxAttempts = Math.max(1, Math.floor(budgetMs / perAttemptMs));
+    if (typeof initialObserveSettings.attempts === "number" && isFinite(initialObserveSettings.attempts)) {
+      initialObserveSettings.attempts = Math.min(initialObserveSettings.attempts, maxAttempts);
+    } else {
+      initialObserveSettings.attempts = maxAttempts;
+    }
   }
 
   var ownerWindowId = resolveOwnerWindowId(sender, null);
@@ -2331,9 +2362,7 @@ async function startAutomationRun(message, sender) {
     maxSteps: message.options && message.options.maxSteps,
     autoApprove: message.options && typeof message.options.autoApprove === "boolean" ? message.options.autoApprove : true,
     observeOptions: message.options && message.options.observeOptions,
-    initialObserveSettings: message.options && message.options.initialObserveSettings
-      ? message.options.initialObserveSettings
-      : initialObserveSettings,
+    initialObserveSettings: initialObserveSettings,
     detail: message.options && !!message.options.detail,
     maxTokens: message.options && message.options.maxTokens,
     planTimeoutMs: message.options && message.options.planTimeoutMs,
@@ -2471,6 +2500,13 @@ browser.runtime.onMessage.addListener(function (message, sender) {
     }
     var origin = resolveAutomationOrigin(sender, message);
     return enableAutomationForOrigin(origin);
+  }
+  if (message.type === "laika.automation.disable") {
+    if (!message.nonce || typeof message.nonce !== "string") {
+      return Promise.resolve({ status: "error", error: "missing_nonce" });
+    }
+    var disableOrigin = resolveAutomationOrigin(sender, message);
+    return disableAutomationForOrigin(disableOrigin);
   }
   if (message.type === "laika.automation.start") {
     return startAutomationRun(message, sender);

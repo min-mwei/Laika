@@ -9,6 +9,7 @@ Purpose: implement `docs/laika_vocabulary.md` by finishing a small, robust primi
 - Keep the Safari extension thin; policy/orchestration/model calls live in the app.
 - Log actions in append-only form; avoid storing sensitive raw page content.
 - Assist-only mode; do not reintroduce observe-only branches.
+- Automation is opt-in: default disabled, explicitly enabled for test runs.
 
 ## Phase 1 - Low-level primitives complete (v1)
 
@@ -60,6 +61,13 @@ Purpose: implement `docs/laika_vocabulary.md` by finishing a small, robust primi
 - Unit tests: URL sanitation, argument validation, handle staleness, deterministic compute.
 - Extension tests: observe/action error codes.
 - Automation harness scenarios per primitive + a small "capability probe" suite across representative sites/content types.
+- Default scenarios use local fixtures; live-web smoke tests are opt-in.
+- Preflight the bridge (via `/api/health`) before full UI runs; fail fast with actionable guidance.
+- Ensure harness reporting survives tab teardown (sendBeacon/keepalive or background POST).
+- Restore `automationEnabled` after test runs if the harness toggled it on.
+- Prefer graceful Safari quits before a `pkill` fallback.
+- Capture failure artifacts (screenshots + UI hierarchy) and print xcresult/log/telemetry paths on failure.
+- Align timeouts (`runTimeoutMs < harnessTimeout < uiTestTimeout`) and clamp defaults centrally.
 - Track simple probe metrics (success rate per primitive, common failure codes, and median/p95 timings).
 
 ## Phase 1 exit criteria
@@ -69,7 +77,16 @@ Purpose: implement `docs/laika_vocabulary.md` by finishing a small, robust primi
 - `browser.observe_dom` supports `rootHandleId` scoping and emits stable `signals` for access/visibility limitations.
 - Error codes are stable/documented (models can learn retry strategies).
 - Deterministic `Calculate` is available for higher-level workflows.
-- Harness passes primitive scenarios with consistent logs.
+- Harness passes fixture-based primitive scenarios with consistent logs; live-web smoke runs are clean when enabled.
+
+## Phase 1 status (current)
+- [x] Tool schemas are unified across shared + extension + docs, and invalid tool calls are rejected.
+- [x] Observation metadata/signals + handle staleness are enforced in JS and shared types.
+- [x] DOM actions sanitize/validate inputs; search/navigation are gated and URL-sanitized.
+- [x] Deterministic `app.calculate` is implemented with unit coverage.
+- [x] Sensitive-field detection gates `browser.type`/`browser.select` for credential/payment/personal-id fields.
+- [x] Automation harness includes preflight, default fixtures, opt-in live smoke tests, failure artifacts, aligned timeouts, and keepalive/beacon reporting.
+- [x] Automation enable is restored after test runs, and Safari quits gracefully before forced termination.
 
 ## Phase 2 - High-level vocabulary layer (Summarize/Find/Search/Investigate)
 

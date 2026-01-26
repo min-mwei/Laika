@@ -140,16 +140,134 @@ public final class AgentOrchestrator: @unchecked Sendable {
     }
 
     private func applyPolicy(to toolCalls: [ToolCall], context: ContextPack) -> [AgentAction] {
-        let policyContext = PolicyContext(
-            origin: context.origin,
-            mode: context.mode,
-            fieldKind: .unknown
-        )
         return toolCalls.map { toolCall in
+            let policyContext = PolicyContext(
+                origin: context.origin,
+                mode: context.mode,
+                fieldKind: fieldKindForToolCall(toolCall, context: context)
+            )
             let decision = policyGate.decide(for: toolCall, context: policyContext)
             return AgentAction(toolCall: toolCall, policy: decision)
         }
     }
+
+    private func fieldKindForToolCall(_ toolCall: ToolCall, context: ContextPack) -> FieldKind {
+        switch toolCall.name {
+        case .browserType, .browserSelect:
+            guard case let .string(handleId)? = toolCall.arguments["handleId"] else {
+                return .unknown
+            }
+            guard let element = context.observation.elements.first(where: { $0.handleId == handleId }) else {
+                return .unknown
+            }
+            return classifyFieldKind(element)
+        default:
+            return .unknown
+        }
+    }
+
+    private func classifyFieldKind(_ element: ObservedElement) -> FieldKind {
+        let label = element.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let inputType = (element.inputType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        if inputType == "password" || containsAny(label, tokens: Self.credentialFieldTokens) {
+            return .credential
+        }
+        if matchesPaymentField(label: label, inputType: inputType) {
+            return .payment
+        }
+        if matchesPersonalIdField(label: label, inputType: inputType) {
+            return .personalId
+        }
+        return .unknown
+    }
+
+    private func matchesPaymentField(label: String, inputType: String) -> Bool {
+        if containsAny(label, tokens: Self.paymentFieldTokens) {
+            return true
+        }
+        if inputType == "number" && containsAny(label, tokens: Self.paymentNumberTokens) {
+            return true
+        }
+        return false
+    }
+
+    private func matchesPersonalIdField(label: String, inputType: String) -> Bool {
+        if inputType == "email" {
+            return true
+        }
+        if inputType == "tel" && containsAny(label, tokens: Self.phoneFieldTokens) {
+            return true
+        }
+        return containsAny(label, tokens: Self.personalIdFieldTokens)
+    }
+
+    private func containsAny(_ text: String, tokens: [String]) -> Bool {
+        guard !text.isEmpty else {
+            return false
+        }
+        for token in tokens {
+            if text.contains(token) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static let credentialFieldTokens = [
+        "password",
+        "passcode",
+        "pin",
+        "one-time",
+        "otp",
+        "verification",
+        "auth code"
+    ]
+    private static let paymentFieldTokens = [
+        "card",
+        "credit",
+        "debit",
+        "cvv",
+        "cvc",
+        "security code",
+        "expiration",
+        "expiry",
+        "exp date",
+        "billing",
+        "iban",
+        "routing",
+        "account number",
+        "bank account"
+    ]
+    private static let paymentNumberTokens = [
+        "card",
+        "cvv",
+        "cvc",
+        "expiration",
+        "expiry",
+        "exp"
+    ]
+    private static let personalIdFieldTokens = [
+        "email",
+        "e-mail",
+        "phone",
+        "mobile",
+        "ssn",
+        "social security",
+        "passport",
+        "driver",
+        "license",
+        "tax id",
+        "ein",
+        "national id",
+        "birth",
+        "dob"
+    ]
+    private static let phoneFieldTokens = [
+        "phone",
+        "mobile",
+        "cell"
+    ]
 
     private struct TargetItem {
         let index: Int

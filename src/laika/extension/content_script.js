@@ -3638,12 +3638,51 @@
         origin: event.origin,
         nonce: enableNonce
       }).then(function (response) {
-        postAutomationMessage({
+        var message = {
           type: "laika.automation.enabled",
           runId: enableRunId,
           status: response && response.status ? response.status : "error",
           error: response && response.error ? response.error : undefined
-        });
+        };
+        if (response && typeof response.enabled === "boolean") {
+          message.enabled = response.enabled;
+        }
+        if (response && typeof response.alreadyEnabled === "boolean") {
+          message.alreadyEnabled = response.alreadyEnabled;
+        }
+        postAutomationMessage(message);
+      });
+      return;
+    }
+    if (payload.type === "laika.automation.disable") {
+      var disableNonce = typeof payload.nonce === "string" && payload.nonce.length >= 8 ? payload.nonce : null;
+      if (!disableNonce) {
+        if (typeof window !== "undefined") {
+          window.postMessage({ type: "laika.automation.disabled", status: "error", error: "missing_nonce" }, event.origin);
+        }
+        return;
+      }
+      var disableRunId = typeof payload.runId === "string" && payload.runId ? payload.runId : automationState.runId;
+      setAutomationState(event.origin, disableNonce, disableRunId, automationState.reportUrl);
+      ensureAutomationPort();
+      sendAutomationRequest({
+        type: "laika.automation.disable",
+        origin: event.origin,
+        nonce: disableNonce
+      }).then(function (response) {
+        var message = {
+          type: "laika.automation.disabled",
+          runId: disableRunId,
+          status: response && response.status ? response.status : "error",
+          error: response && response.error ? response.error : undefined
+        };
+        if (response && typeof response.enabled === "boolean") {
+          message.enabled = response.enabled;
+        }
+        if (response && typeof response.alreadyDisabled === "boolean") {
+          message.alreadyDisabled = response.alreadyDisabled;
+        }
+        postAutomationMessage(message);
       });
       return;
     }
