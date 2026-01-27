@@ -13,7 +13,7 @@ This design applies to the Safari extension sidecar UI and any companion UI that
 ## Non-goals
 - Support arbitrary HTML/CSS/JS from the model.
 - Parse Markdown or carry legacy Markdown fallbacks.
-- Render rich media (images, tables, embeds).
+- Render rich media (images, embeds).
 
 ## Document (assistant.render)
 Assistant output is a JSON AST with a fixed allowlist:
@@ -26,6 +26,9 @@ Block nodes:
 - `list_item` (`children`)
 - `blockquote` (`children`)
 - `code_block` (`language?`, `text`)
+- `table` (`rows`)
+- `table_row` (`cells`)
+- `table_cell` (`header`, `children`) — `children` must be inline nodes only
 
 Inline nodes:
 - `text` (`text`)
@@ -38,7 +41,7 @@ Inline nodes:
 
 ## Rendering pipeline
 1. Validate the root `doc` and walk the tree.
-2. Convert nodes to an allowlisted DOM subset (`<p>`, `<h2>`, `<ul>`, `<li>`, `<pre><code>`, `<a>`).
+2. Convert nodes to an allowlisted DOM subset (`<p>`, `<h2>`, `<ul>`, `<li>`, `<pre><code>`, `<a>`, `<table>`, `<thead>`, `<tbody>`, `<tr>`, `<th>`, `<td>`).
 3. Ignore unknown node types or invalid fields.
 4. Enforce link sanitization (`http`, `https`, `mailto` only).
 
@@ -63,3 +66,10 @@ System prompts must require `assistant.render`:
 - Model output is untrusted even when local.
 - Never inject model content back into the page DOM.
 - Keep the extension UI isolated and allowlist-rendered.
+
+## Artifact viewers (new tabs)
+
+Some outputs should be viewable outside the chat stream (e.g., a comparison table or a timeline opened “in a new tab”).
+
+- Safe artifacts should be stored as a Document AST and rendered by the same allowlist renderer in a dedicated viewer surface (Workspace tab or trusted viewer page).
+- If Laika supports interactive artifacts (HTML/CSS/JS produced by a transform), they must render in a sandboxed container (iframe/WebView) with no extension privileges and strict navigation isolation.

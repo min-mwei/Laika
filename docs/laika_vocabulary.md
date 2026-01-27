@@ -4,7 +4,7 @@ This doc defines a small, composable **high-level action vocabulary** Laika can 
 
 Users should write normal prompts. Laika may translate that intent into one or more internal actions like:
 
-`Summarize(Entity), Find(Topic, Entity), Search(Query), Share(Artifact), Investigate(Topic, Entity), Create(Artifact), Price(Artifact), Buy(Artifact), Save(Artifact), Invoke(API), Calculate(Expression), Dossier(Topic, Entity)`.
+`Summarize(Entity), Find(Topic, Entity), Search(Query), Save(Artifact), Share(Artifact), Invoke(API)`.
 
 For end-user scenarios and positioning, see `docs/Laika_pitch.md`.
 
@@ -46,15 +46,17 @@ This vocabulary exists to solve a few practical problems:
 - Clear intent makes it easier for Laika to plan, and easier for you to review.
 
 2) Make safety boundaries explicit
-- Read-only actions (like `Summarize`) should feel different from write actions (like `Buy`).
+- Read-only actions (like `Summarize`) should feel different from:
+  - mutating browser primitives (`browser.click/type/select`), and
+  - explicit egress actions (`Share`, `Invoke`).
 - A compact set of verbs helps the UI and policy layer consistently gate risky steps.
 
 3) Make outcomes reviewable
 - Browsing work often ends in outputs: a comparison table, an appeal letter draft, a packet for a dispute, a shortlist.
-- Explicit `Create/Save/Share` makes "output" a first-class concept.
+- Explicit `Save/Share` makes outputs first-class.
 
 4) Make workflows repeatable
-- Once you have a good sequence (for example: `Find -> Price -> Create -> Save -> Buy`), you can reuse it.
+- Once you have a good sequence (for example: `Search -> Find -> Summarize -> Save -> Share`), you can reuse it.
 - Repeatability is a prerequisite for automation and for testing reliability.
 
 5) Improve speed without sacrificing control
@@ -197,15 +199,15 @@ This section documents the vocabulary, what each action means, and how to get re
 Users should write normal prompts:
 
 - "Find the refund policy on this page and draft a short email to support."
-- "Investigate why this claim was denied and draft an appeal letter."
+- "Help me understand why this claim was denied and draft an appeal letter."
 
 Internally, Laika can represent the same intent as an action chain using the vocabulary:
 
 ```text
 Find("refund policy", ThisPage)
-Create("support email draft requesting a refund")
-Save("support email draft")
-Share("support email draft")
+Summarize("this page; draft a short refund request email citing the policy")
+Save("refund request email draft")
+Share("refund request email draft")
 ```
 
 Notes:
@@ -228,21 +230,6 @@ Implementation model:
 - High-level verbs are *not* Safari APIs. They are intent-level building blocks used for planning and auditing.
 - When a verb requires browser interaction, it must compile down to one or more low-level primitives from the tool catalog (section 4.4), mediated by Policy Gate.
 - Some verbs are primarily “local/model” work (summarization, drafting, calculation) and may require *zero* browser tool calls if the needed context is already present.
-
-Common mapping (informal):
-
-| High-level verb | What provides the logic | Typical low-level primitives |
-| --- | --- | --- |
-| `Summarize` | LLM summarization over `observe_dom` documents + grounding checks | `browser.observe_dom` (optional re-observe/zoom) |
-| `Find` | LLM/local retrieval over observed content | `browser.observe_dom` (scoped), `browser.scroll` |
-| `Search` | Open a search results page | `search` |
-| `Investigate` | Multi-step evidence gathering + synthesis | `search`, `browser.open_tab`/`browser.navigate`, `browser.observe_dom`, `browser.click`, `browser.scroll` |
-| `Create` | LLM drafting/structuring (artifact generation) | (no browser primitive required) |
-| `Save` / `Share` / `Invoke` | Persistence + egress (workspace + connectors) | `artifact.save`, `artifact.share`, `integration.invoke` (app-level primitives; not part of the browser tool surface) |
-| `Price` | Extract + compare + compute totals/assumptions | (usually a mix of `Find`/`Search` + navigation + observation; plus deterministic calculation) |
-| `Buy` | Assisted form/checkout flow with explicit approvals | `browser.click`, `browser.type`, `browser.select`, `browser.scroll` (+ navigation) |
-| `Calculate` | Deterministic compute | `app.calculate` (app-level primitive) |
-| `Dossier` | Structured brief with citations (often “Investigate + Create”) | (same as `Investigate`, plus synthesis) |
 
 ---
 
@@ -281,7 +268,7 @@ Good follow-ups:
 ```text
 Find("cancellation", ThisPage)
 Find("data retention", ThisPage)
-Create("questions to ask sales based on this page")
+Summarize("this page; list 5 questions to ask sales based on what's missing or unclear")
 ```
 
 ---
@@ -325,7 +312,7 @@ Pattern: "Find then extract"
 
 ```text
 Find("pricing table", ThisPage)
-Create("a 2-column table of plan name vs monthly price from the pricing table")
+Summarize("this page; extract the pricing table as a 2-column list: plan name → monthly price")
 ```
 
 ---
@@ -356,78 +343,12 @@ Search("standing desk under $700 60x30")
 Search("refund policy Stripe cancellation terms")
 ```
 
-Pattern: "Search -> Find -> Investigate"
+Pattern: "Search -> Find -> Summarize"
 
 ```text
 Search("vendor SOC 2 report")
 Find("SOC 2", ThisPage)
-Investigate("is the SOC 2 current and what scope it covers", ThisPage)
-```
-
----
-
-### Investigate(Topic, Entity)
-
-Purpose:
-- Do deeper, evidence-driven analysis: follow links, cross-check details, and explain "what happened and why."
-
-Typical output:
-- An investigation note that includes: findings, evidence, uncertainties, and recommended actions.
-
-Safety notes:
-- Often expands into multiple steps (navigate, open details pages, compare sources).
-- Should ask before doing anything that might submit forms, buy, upload, or share data externally.
-
-Examples:
-
-```text
-Investigate("why my claim was denied", "this insurance portal")
-```
-
-```text
-Investigate("is this charge legitimate", "my credit card transactions page")
-```
-
-```text
-Investigate("what changed in the latest 8-K vs last quarter", "SEC EDGAR filings for $COMPANY")
-```
-
-Pattern: "Investigate then create a packet"
-
-```text
-Investigate("chargeback evidence needed", "merchant receipt + card statement pages")
-Create("dispute packet with timeline, amounts, merchant info, and evidence links")
-```
-
----
-
-### Create(Artifact)
-
-Purpose:
-- Generate a concrete output you can use: tables, drafts, memos, checklists, packets, and structured datasets.
-
-Typical output:
-- The artifact content (often in Markdown/table form), and a suggested filename/title.
-
-Safety notes:
-- Creation itself is usually local and safe, but the inputs might be sensitive. If the artifact includes sensitive content, Laika should default to redaction and ask before sharing/exporting.
-
-Examples:
-
-```text
-Create("a ranked shortlist of the top 10 listings from the results page with: address, price, commute time, and notes")
-```
-
-```text
-Create("an email draft to support requesting a refund, citing the policy I found")
-```
-
-```text
-Create("a comparison table: plan, monthly price, included seats, SSO, API limits, support tier")
-```
-
-```text
-Create("a checklist of what I should verify manually before I submit this form")
+Summarize("this page; extract report date, period covered, and audit scope")
 ```
 
 ---
@@ -486,85 +407,12 @@ Share("the apartment shortlist to Slack #housing")
 Share("the vendor comparison table as a PDF")
 ```
 
-Pattern: "Create -> Save -> Share"
+Pattern: "Summarize -> Save -> Share"
 
 ```text
-Create("1-page brief with citations")
+Summarize("this page; produce a 1-page brief with citations")
 Save("1-page brief")
 Share("1-page brief")
-```
-
----
-
-### Price(Artifact)
-
-Purpose:
-- Compute or compare pricing for an artifact: carts, quotes, plans, itineraries, or a shortlist of options.
-
-Typical output:
-- A price breakdown (line items + assumptions), and (if relevant) a comparison across options.
-
-Safety notes:
-- Usually read-only, but may require navigation to gather prices.
-- Should be explicit about assumptions: tax, region, discounts, shipping, subscription renewal terms.
-
-Examples:
-
-```text
-Price("my cart on this page; include shipping, tax, and final total")
-```
-
-```text
-Price("these 5 laptop options; compute total cost for each with estimated tax in CA and include warranty cost")
-```
-
-```text
-Price("this trip itinerary: flights + hotel + local transit estimate for 4 days")
-```
-
-Pattern: "Search -> Price -> Create"
-
-```text
-Search("standing desk under $700 with 60x30 size")
-Price("top 5 candidates")
-Create("a recommendation with best value pick and what trade-offs I accept")
-```
-
----
-
-### Buy(Artifact)
-
-Purpose:
-- Perform a purchase or commit a transaction related to an artifact (placing an order, subscribing, paying, booking).
-
-Typical output:
-- A step-by-step preview of what will happen, followed by a confirmation gate before the final commit.
-
-Safety notes:
-- Highest risk. Should always ask before the final "Place order"/"Pay"/"Book" step.
-- Payment credentials and sensitive fields should default to manual entry or system autofill.
-- Prefer "dry run" behavior: add to cart, fill shipping, reach the final review screen, then stop for approval.
-
-Examples:
-
-```text
-Buy("the selected laptop option; stop at final review and ask before placing the order")
-```
-
-```text
-Buy("book the refundable flight option with carry-on included; ask before paying")
-```
-
-```text
-Buy("subscribe to the monthly plan; confirm renewal terms and cancellation steps first")
-```
-
-Pattern: "Price -> Buy -> Save"
-
-```text
-Price("this cart")
-Buy("this cart; stop at final review")
-Save("receipt + order confirmation page as an artifact")
 ```
 
 ---
@@ -595,91 +443,11 @@ Invoke("Slack.postMessage: #procurement")
 Invoke("Jira.createIssue: VENDOR-SECURITY-REVIEW")
 ```
 
-Pattern: "Create -> Invoke"
+Pattern: "Save -> Invoke"
 
 ```text
-Create("a 10-row table of the shortlisted options with columns: name, price, pros, cons, link")
-Invoke("GoogleSheets.writeTable: Purchases 2026")
-```
-
----
-
-### Calculate(Expression)
-
-Purpose:
-- Perform a deterministic computation (math, unit conversion, aggregation) and show the working.
-
-Typical output:
-- The result plus the formula/assumptions used.
-
-Safety notes:
-- Read-only and local. Still, be explicit about units and rounding.
-
-Implementation notes:
-- Prefer a deterministic evaluator (app-local) for arithmetic/unit conversion over asking an LLM to "do math".
-- Define supported operators/functions and rounding rules so repeated runs are consistent and audit-friendly.
-
-Examples:
-
-```text
-Calculate("129.99 * 1.0825")
-```
-
-```text
-Calculate("($1200 / 12) + $15.99")
-```
-
-```text
-Calculate("sum of the last 3 months of 'subscription' charges from the table we extracted")
-```
-
-Pattern: "Extract -> Calculate -> Create"
-
-```text
-Find("the pricing table", ThisPage)
-Create("extract the pricing table into rows")
-Calculate("annual cost per plan = monthly_price * 12")
-Create("a final comparison table with annual costs and break-even notes")
-```
-
----
-
-### Dossier(Topic, Entity)
-
-Purpose:
-- Produce a structured, citation-backed brief ("everything I need to know") about a topic within an entity.
-
-Typical output:
-- A multi-section dossier, often including:
-  - Executive summary
-  - Key facts and definitions
-  - Evidence and sources (with links/anchors)
-  - Timeline (when relevant)
-  - Risks / trade-offs / unknowns
-  - Recommended next actions and verification checklist
-
-Safety notes:
-- Often involves wider navigation and source gathering; should be transparent about where information came from and what remains uncertain.
-
-Examples:
-
-```text
-Dossier("material risks and recent changes", "SEC filings for $COMPANY")
-```
-
-```text
-Dossier("refund eligibility for my order", "this merchant site + my order page")
-```
-
-```text
-Dossier("vendor security posture", "vendor trust center + documentation")
-```
-
-Pattern: "Dossier -> Create"
-
-```text
-Dossier("options and trade-offs", "my shortlist")
-Create("a decision memo: recommended choice, why, and what could change my mind")
+Save("a 10-row table of the shortlisted options with columns: name, price, pros, cons, link")
+Invoke("GoogleSheets.writeTable: Purchases 2026")  // optional
 ```
 
 ---
@@ -696,41 +464,22 @@ Find(Topic, Entity)
 Search(Query)
 ```
 
-2) Research and decide
+2) Export and integrate into your workflow
 
 ```text
-Search(Query)
-Find(Topic, Entity)
-Investigate(Topic, Entity)
-Create(Artifact)
+Summarize(Entity)
 Save(Artifact)
-Share(Artifact)
-```
-
-3) Shop and transact (with approvals)
-
-```text
-Search(Query)
-Find(Topic, Entity)
-Price(Artifact)
-Create(Artifact)   // comparison table / recommendation
-Buy(Artifact)      // stop at final review
-Save(Artifact)     // receipt / confirmation
-```
-
-4) Export and integrate into your workflow
-
-```text
-Create(Artifact)
 Invoke(API)
 Share(Artifact)
 ```
+
+For multi-source collections + transforms (comparison tables, timelines, new viewer tabs), see `docs/LaikaOverview.md` (Use Case Walkthroughs) and `src/laika/PLAN.md` (P0 scenarios + phases).
 
 ---
 
 ### 4.4 Low-Level Primitives (typed tool calls + LLM integration)
 
-This doc’s verbs (e.g., `Find`, `Buy`, `Summarize`) are **high-level intent**. Execution happens via **low-level primitives** (typed tool calls) that the model proposes and Laika enforces.
+This doc’s verbs (e.g., `Find`, `Search`, `Summarize`) are **high-level intent**. Execution happens via **low-level primitives** (typed tool calls) that the model proposes and Laika enforces.
 
 Core rules:
 
@@ -938,73 +687,12 @@ Internal action chain:
 ```text
 Summarize(ThisPage)
 Find("refund + cancellation terms", ThisPage)
-Create("refund request email draft with cited terms")
-Save("refund checklist + email draft")  // optional
+Save("refund terms + draft email (from this chat)")  // optional
 ```
 
 ---
 
-### Example 2: Shopping -> compare -> stop at final checkout
-
-User prompt:
-
-```text
-Find 5 options that match my criteria, compare total cost (tax/shipping/warranty), recommend one with trade-offs, then take me to the final checkout review and stop before placing the order.
-```
-
-Internal action chain:
-
-```text
-Search("product criteria")
-Price("top options; include tax/shipping/warranty assumptions")
-Create("comparison table + recommendation + what to verify")
-Buy("recommended option; stop at final review; ask before placing order")
-Save("comparison + receipt/confirmation")  // optional
-```
-
----
-
-### Example 3: Suspicious charge -> dispute packet
-
-User prompt:
-
-```text
-Investigate this charge, total similar charges in the last 90 days, and create a dispute packet with evidence links plus a message to the merchant. Save a redacted version and ask before emailing anything.
-```
-
-Internal action chain:
-
-```text
-Investigate("is this charge legitimate + how to cancel/refund", "card portal")
-Find("merchant contact + refund policy", "relevant pages")
-Calculate("total amount of similar charges in last 90 days")
-Create("dispute packet + merchant message draft")
-Save("redacted dispute packet")
-Share("message draft")  // ask before sending
-```
-
----
-
-### Example 4: Vendor due diligence -> decision memo
-
-User prompt:
-
-```text
-Review this vendor's trust center. Summarize security posture, data retention, subprocessors, and compliance claims. Draft a decision memo and list what we still need to verify.
-```
-
-Internal action chain:
-
-```text
-Dossier("vendor security + privacy posture", "vendor trust center + docs")
-Create("decision memo: what we know vs what to verify")
-Save("decision memo")
-Share("decision memo")  // optional
-```
-
----
-
-### Example 5: Weekly ops -> export to your tools
+### Example 2: Weekly ops -> export to your tools
 
 User prompt:
 
@@ -1016,7 +704,8 @@ Internal action chain:
 
 ```text
 Search("weekly criteria")
-Create("structured table")
+Summarize("the results; produce a table with columns: company, role, location, link, notes")
+Save("structured table")                 // optional
 Invoke("GoogleSheets.writeTable: Tracker")  // optional
 Invoke("Slack.postMessage: #channel")       // optional
 Save("run outputs")

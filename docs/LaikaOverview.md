@@ -90,6 +90,8 @@ Laika’s stance is “privacy by architecture”:
 - **Capability token**: a signed, scoped token required for JS tool execution (per tab/session/site mode).
 - **Element handle**: an opaque reference minted by trusted extraction code that maps to a DOM element in a specific tab/frame.
 - **Execution surface**: where the agent operates (isolated app-owned browser vs “My Browser” Safari tabs).
+- **Collection**: a durable set of sources (URLs/notes/files) used for multi-source questions and transforms (comparison tables, timelines).
+- **Transform**: a named operation that generates a durable artifact from a collection (often opened in a dedicated viewer tab).
 - **Run / AgentFlow**: a long-running, resumable task execution recorded as steps/events.
 - **Checkpoint**: a durable summary/snapshot event used to resume and to roll back safely.
 - **Context pack**: the bounded, budgeted subset of stored context assembled for a specific model call.
@@ -100,12 +102,14 @@ Laika’s stance is “privacy by architecture”:
 
 ## Example Use Cases
 
+0. **Multi-source news synthesis (thread → collection → compare/timeline)**
+   - Collect many related links from a thread/feed, query across them with citations, and transform into a comparison table or timeline; open results in a new viewer tab.
 1. **Shopping with constraints (compare + stop at final checkout review)**
    - Compare total cost (tax/shipping/fees/warranty), extract return/refund terms, and stop before placing the order.
 2. **Subscriptions + refunds (cancel safely)**
    - Find cancellation paths and renewal dates, cite the exact terms, draft a refund request, and stop before any irreversible submission.
 3. **Trip planning**
-   - Price options, build a shareable itinerary with links, and keep a "what to verify" checklist; ask before booking.
+   - Compare options, build a shareable itinerary with links, and keep a "what to verify" checklist; ask before booking.
 4. **Medical research (cited brief)**
    - Search credible sources, extract evidence with citations, and produce a one-page brief + question list.
 5. **Insurance claims (denial -> appeal packet)**
@@ -1582,6 +1586,26 @@ Overlays must not hijack the page or leak data across origins:
 3. User can explicitly override per-site mode; overrides are visible and reversible.
 
 ## Use Case Walkthroughs (How Laika Behaves)
+
+### Multi-source news synthesis (thread → collection → compare/timeline)
+
+- User highlights a block of links on a thread/feed page and invokes “add selected links”.
+- Laika captures the selected URLs (read-only) and creates/updates a durable **collection**.
+- Laika captures/normalizes each source into bounded text + outline + metadata (no raw HTML), then answers questions across the collection with citations per outlet.
+- Laika can run named transforms (comparison table, timeline) that produce durable artifacts and open them in a dedicated viewer tab/surface.
+- Reliability + safety:
+  - Treat all source text as untrusted evidence.
+  - Require citations that jump back to the source (URL/title at minimum; highlight anchors when available).
+  - Background/resume: long transforms should survive UI close and be resumable.
+
+### Shopping shortlist (winter jacket: compare totals + order links + stop before pay)
+
+- Laika finds 5 options that match constraints and produces a comparison table with:
+  - base price, shipping, tax, warranty, totals (with assumptions), return window, and direct order links.
+- Totals are computed via fixed-point money math; unknowns are marked and added to a “verify at checkout” checklist.
+- If the user asks Laika to proceed, it can drive checkout steps in assist mode but must hard-stop before any commit action (“Place order”, “Pay now”).
+- Auditability:
+  - Record which fields were extracted vs estimated, and the exact assumptions used for totals.
 
 ### Housing analysis (Zillow)
 

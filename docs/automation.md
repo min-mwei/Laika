@@ -149,6 +149,44 @@ Keep existing JSON but allow automation options:
 Default scenarios (`hn.json`, `bbc.json`, `sec_nvda.json`) use local fixtures where possible to reduce flakiness.
 Live-web smoke scenarios are suffixed with `_live.json` and are opt-in.
 
+## Planned scenarios (source collections + transforms)
+
+The collections + transforms workflow (see `docs/LaikaOverview.md` and `src/laika/PLAN.md`) adds requirements that are best validated end-to-end in Safari (collection capture, transforms, viewer tabs).
+
+Add fixture-backed scenarios (names illustrative; keep them deterministic):
+
+- `collection_selection_links.json`
+  - Fixture: a “thread” page containing many outbound links (Techmeme-like).
+  - Validates: `browser.get_selection_links` returns stable URLs; collection ingestion adds N sources deterministically.
+
+- `collection_capture_normalization.json`
+  - Fixture: a few representative pages (article, list, discussion) behind the same origin.
+  - Validates: `source.capture` produces bounded normalized text + metadata; no raw HTML persistence; provenance is recorded.
+
+- `collection_answer_differences.json`
+  - Uses a small collection of sources about the same story.
+  - Validates: `web.answer` over a collection context pack produces a “key differences” synthesis with usable citations back to each source.
+
+- `transform_comparison_table.json`
+  - Uses a small collection of sources.
+  - Validates: `transform.run(type=comparison)` produces an artifact that renders via `assistant.render` table nodes (no markdown tables).
+
+- `transform_timeline.json`
+  - Uses sources with dates.
+  - Validates: `transform.run(type=timeline)` produces a usable timeline artifact (safe document by default; interactive viewer optional).
+
+- `artifact_open_viewer.json`
+  - Creates an artifact, then opens it in a new viewer surface.
+  - Validates: `artifact.open` opens a trusted viewer tab/window and never injects untrusted HTML into privileged UI.
+
+- `shopping_compare_totals.json`
+  - Fixture: 5 product pages with known base/shipping/tax/warranty fields.
+  - Validates: Laika produces a comparison table with order links and deterministic totals (via `app.money_calculate`) plus “what to verify”.
+
+- `shopping_stop_before_commit.json`
+  - Fixture: a checkout review page with a commit action (e.g., “Place order”).
+  - Validates: Policy Gate blocks commit clicks unless the user explicitly changes intent; run logs record a stable reason code.
+
 ## Runner outputs
 
 - JSON file with:

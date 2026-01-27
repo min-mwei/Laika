@@ -76,21 +76,35 @@ Agentic browsing is arriving, but safety and privacy are the real blockers. Mode
 
 Each scenario includes: what you do today, what Laika does, and what you get at the end.
 
-### 1) Shopping with constraints (and a paper trail)
+### 1) Multi-source news synthesis: from thread to understanding
+
+Today:
+- You open 10–20 links, skim each one, and mentally keep track of what’s different.
+
+Laika:
+- Lets you select a block of links (a thread/feed), add them to a collection, ask “what’s different across sources?”, and generate a comparison table or timeline that you can open in its own viewer tab.
+
+You get:
+- A durable synthesis you can reuse/share, with citations back to each source.
+
+Try it:
+- "On this thread, select all the links. Add them to a collection and tell me the key differences in how each outlet is covering this story. Then generate a comparison table and a timeline."
+
+### 2) Shopping with constraints (and a paper trail)
 
 Today:
 - You compare 8 tabs, forget why you opened half of them, and still miss total cost (tax/shipping/fees) and return/warranty terms.
 
 Laika:
-- Finds candidates, builds a price-and-tradeoff table (including policy details), and (if you ask) drives checkout until the final review screen and stops.
+- Finds candidates, builds a total-cost-and-tradeoff table (including direct order links and policy details), and (if you ask) drives checkout until the final review screen and stops.
 
 You get:
 - A comparison you can trust, plus a purchase flow that stops before you pay.
 
 Try it:
-- "Find 5 options that match my criteria, compare total cost (tax/shipping/warranty), recommend one with trade-offs, then take me to the final checkout review and stop before placing the order."
+- "Find 5 options that match my criteria, compare total cost (tax/shipping/warranty), recommend one with trade-offs, put it in a table with order links, and if I say 'go' take me to the final checkout review and stop before placing the order."
 
-### 2) Trip planning: from constraints to a booking-ready plan
+### 3) Trip planning: from constraints to a booking-ready plan
 
 Today:
 - You open a dozen tabs for flights, hotels, and "what should we do", then lose track of trade-offs, fees, and cancellation rules.
@@ -104,7 +118,7 @@ You get:
 Try it:
 - "Plan a 5-day Kyoto trip in April for two adults: find 3 hotels near Gion under $250/night, suggest a simple day-by-day itinerary, and save it. Ask before booking anything."
 
-### 3) Health research: from web reading to a cited brief
+### 4) Health research: from web reading to a cited brief
 
 Today:
 - You skim contradictory pages, miss key caveats, and still don't know what to ask next.
@@ -118,7 +132,7 @@ You get:
 Try it:
 - "Research evidence-backed options for chronic migraine: summarize what helps, what the evidence says, and what questions I should ask my doctor. Include citations and save a one-page brief."
 
-### 4) Subscriptions, refunds, and "what did I actually agree to?"
+### 5) Subscriptions, refunds, and "what did I actually agree to?"
 
 Today:
 - You hunt for the one paragraph that matters, then try to find the "cancel" button, then wonder if you'll be charged anyway (or lose access immediately).
@@ -132,21 +146,21 @@ You get:
 Try it:
 - "Find the refund/cancellation terms, take me to the final cancellation review screen and stop, and draft a short refund request message citing the terms. Ask before submitting anything."
 
-### 5) Credit cards: suspicious charge -> dispute-ready packet
+### 6) Credit cards: suspicious charge -> dispute-ready packet
 
 Today:
 - You spot a charge you don't recognize, click through transaction details, and assemble evidence manually while the clock is ticking.
 
 Laika:
-- Investigates the charge, totals similar charges, finds refund/cancellation paths, and drafts a dispute packet and support message.
+- Looks into the charge, totals similar charges, finds refund/cancellation paths, and drafts a dispute packet and support message.
 
 You get:
 - A dispute-ready packet (timeline, amounts, links/evidence) you can save and reuse.
 
 Try it:
-- "Investigate this charge, total similar charges in the last 90 days, and create a dispute packet with evidence links plus a message to the merchant. Save a redacted version and ask before emailing anything."
+- "Look into this charge, total similar charges in the last 90 days, and draft a dispute packet with evidence links plus a message to the merchant. Save a redacted version and ask before emailing anything."
 
-### 6) Insurance claims: denial -> appeal letter + attachment checklist
+### 7) Insurance claims: denial -> appeal letter + attachment checklist
 
 Today:
 - You bounce between the portal and a policy PDF, unsure what matters, and you risk missing a deadline or required attachment.
@@ -160,7 +174,7 @@ You get:
 Try it:
 - "Figure out why this claim was denied, find the relevant policy language, and draft an appeal letter with an attachment checklist. Ask before submitting anything."
 
-### 7) Apartment hunting: from messy listings to a shareable shortlist
+### 8) Apartment hunting: from messy listings to a shareable shortlist
 
 Today:
 - You doomscroll listings, lose track of favorites, and keep re-evaluating the same trade-offs (and worrying about scams and hidden fees).
@@ -174,7 +188,7 @@ You get:
 Try it:
 - "Find 2BRs under $3500 in Mission or Noe with in-unit laundry and cats allowed. Estimate total monthly cost and make a ranked shortlist with links and dealbreakers. Save it."
 
-### 8) Government + identity forms: applications -> submission-ready packet
+### 9) Government + identity forms: applications -> submission-ready packet
 
 Today:
 - You bounce between requirements pages, PDFs, and form portals, and you still miss a document or a deadline.
@@ -188,7 +202,7 @@ You get:
 Try it:
 - "Help me apply for Global Entry: find the requirements, draft my answers, and take me to the final review screen without submitting. Save a checklist of what I need and ask before any submission."
 
-### 9) Vendor due diligence: trust center -> decision memo
+### 10) Vendor due diligence: trust center -> decision memo
 
 Today:
 - You chase SOC 2s, DPAs, subprocessor lists, retention terms, and security FAQs across a dozen pages, then still need something you can send to stakeholders.
@@ -202,7 +216,7 @@ You get:
 Try it:
 - "Review this vendor's trust center. Summarize security posture, data retention, subprocessors, and compliance claims. Draft a decision memo and list what we still need to verify."
 
-### 10) Weekly ops: turn browsing into a workflow (Sheets/Slack/Notion)
+### 11) Weekly ops: turn browsing into a workflow (Sheets/Slack/Notion)
 
 Today:
 - You repeat the same web work every week and manually retype it somewhere else, and it never quite stays consistent.
@@ -222,96 +236,18 @@ Try it:
 - It asks before irreversible actions: purchases, submissions, messages, uploads, permission grants.
 - It keeps you oriented: previews, checkpoints, and a run log so you can audit what happened.
 
-## Under the hood (internal action vocabulary)
+## Under the hood (planning + tools)
 
-To make behavior more reliable and reviewable, Laika can decompose your request into a small set of internal actions:
+Laika stays reliable and reviewable by separating:
 
-Search, Summarize, Find, Investigate, Dossier, Create, Price, Calculate, Save, Share, Invoke, Buy.
+- **Untrusted input**: web content (evidence only).
+- **Trusted actions**: typed tool calls that Policy Gate can allow/ask/deny.
 
-You never need to type these explicitly, but the constraint helps Laika stay consistent: read actions feel different from write actions, and high-risk actions are easier to gate.
+Internally, Laika currently uses a small set of intent labels for planning and UI:
 
-In practice, this vocabulary lets you focus on forming the right question. Great prompts usually include:
+`Search, Summarize, Find, Save, Share, Invoke`
 
-- The topic/decision (what you want to know)
-- The target (this page/tab, a specific site/portal, or "open web")
-- The artifact (table, itinerary, brief, packet, draft)
-- Constraints (budget/time window/preferences)
-- Autonomy ("ask before acting", "stop at final review", "read-only")
-
-Example decompositions (plain English -> vocabulary):
-
-### Shopping (compare + stop at checkout)
-
-User prompt:
-
-```text
-Find 5 options that match my criteria, compare total cost (tax/shipping/warranty), recommend one with trade-offs, then take me to the final checkout review and stop before placing the order.
-```
-
-Internal action chain:
-
-```text
-Search("product criteria")
-Price("top options; include tax/shipping/warranty assumptions")
-Create("comparison table + recommendation + what to verify")
-Buy("recommended option; stop at final review; ask before placing order")
-Save("comparison + receipt/confirmation")  // optional
-```
-
-### Trip planning (options table + itinerary)
-
-User prompt:
-
-```text
-Plan a 5-day Kyoto trip in April for two adults: find 3 hotels near Gion under $250/night, suggest a simple day-by-day itinerary, and save it. Ask before booking anything.
-```
-
-Internal action chain:
-
-```text
-Search("Kyoto April hotels near Gion under $250/night")
-Find("must-know constraints (transit passes, closures, reservations)", "open web")
-Price("3 hotel options; include assumptions and fees")
-Create("5-day itinerary + options table + what to verify")
-Save("trip plan")
-```
-
-### Health research (cited brief + questions)
-
-User prompt:
-
-```text
-Research evidence-backed options for chronic migraine: summarize what helps, what the evidence says, and what questions I should ask my doctor. Include citations and save a one-page brief.
-```
-
-Internal action chain:
-
-```text
-Search("chronic migraine treatments guidelines meta-analysis RCT")
-Investigate("evidence-backed options + caveats + contraindications", "credible sources")
-Create("one-page brief with citations + questions for clinician")
-Save("health research brief")
-```
-
-### Subscriptions + refunds (cancel safely)
-
-User prompt:
-
-```text
-Find the refund/cancellation terms, take me to the final cancellation review screen and stop, and draft a short refund request message citing the terms. Ask before submitting anything.
-```
-
-Internal action chain:
-
-```text
-Summarize(ThisPage)
-Find("refund/cancellation terms + renewal date", ThisPage)
-Find("cancellation path", ThisSite)
-Create("cancellation checklist + refund request draft with cited terms")
-Save("cancellation/refund packet")
-```
-
-For the full internal vocabulary reference, see `docs/laika_vocabulary.md`.
+For multi-source “browser as workshop” workflows (collections, transforms like comparison tables/timelines, and opening results in a new viewer tab), see `docs/LaikaOverview.md` (Use Case Walkthroughs) and `src/laika/PLAN.md` (P0 scenarios + phases).
 
 ## What to validate with users (fast)
 

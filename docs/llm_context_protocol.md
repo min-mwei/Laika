@@ -133,7 +133,7 @@ Request packets describe what the agent wants, what context is available, and wh
 
 - `web.summarize`: summarize the provided page/document(s)
 - `web.extract`: extract specific fields from the page (e.g., `{price, sku, availability}`)
-- `web.answer`: answer a question using only provided context
+- `web.answer`: answer a question using only provided context (single- or multi-document)
 
 Future tasks may add tool-calling and multi-document workflows without changing the envelope.
 
@@ -188,6 +188,45 @@ Chunking rules:
 - Chunks are 1-based and ordered by `chunk_index`.
 - `chunk_count` is the total number of chunk docs in the request.
 - Chunks extend the summary document; they do not replace it.
+
+### Collection index document (`kind: "collection.index.v1"`) (planned)
+
+For multi-source workflows (see `docs/LaikaOverview.md` and `src/laika/PLAN.md`), Agent Core should be able to provide a lightweight “index” of a saved collection.
+
+```json
+{
+  "doc_type": "collection.index.v1",
+  "collection_id": "col:123",
+  "title": "Techmeme thread: [story]",
+  "sources": [
+    { "source_id": "src:1", "url": "https://...", "title": "...", "outlet": "example.com", "captured_at": "2026-01-27T01:02:03Z", "published_at": "optional" }
+  ]
+}
+```
+
+### Collection source document (`kind: "collection.source.v1"`) (planned)
+
+Captured sources should be sent as normalized, size-bounded documents (derived from web content, so still `trust="untrusted"` even though extraction runs in trusted code).
+
+```json
+{
+  "doc_type": "collection.source.v1",
+  "collection_id": "col:123",
+  "source_id": "src:1",
+  "url": "https://example.com/story",
+  "title": "Example story",
+  "outlet": "example.com",
+  "captured_at": "2026-01-27T01:02:03Z",
+  "published_at": "optional",
+  "text": "H1: ...\n\nH2: ...\n- ...",
+  "outline": [{ "level": 2, "text": "..." }],
+  "extracted_links": [{ "url": "https://...", "text": "...", "context": "..." }]
+}
+```
+
+Recommended packing:
+- Include one `collection.index.v1` doc + N `collection.source.v1` docs.
+- If a source is long, split it into multiple documents (chunking) and keep the total token budget bounded.
 
 ### Streaming considerations (future)
 
@@ -293,6 +332,7 @@ Notes:
 ### Browser primitives (Safari extension)
 
 - `browser.observe_dom`: `{ "maxChars"?: int, "maxElements"?: int, "maxBlocks"?: int, "maxPrimaryChars"?: int, "maxOutline"?: int, "maxOutlineChars"?: int, "maxItems"?: int, "maxItemChars"?: int, "maxComments"?: int, "maxCommentChars"?: int, "rootHandleId"?: string }`
+- `browser.get_selection_links`: `{ "maxLinks"?: int }`
 - `browser.click`: `{ "handleId": string }`
 - `browser.type`: `{ "handleId": string, "text": string }`
 - `browser.select`: `{ "handleId": string, "value": string }`
@@ -313,11 +353,28 @@ Planned/primitives to layer the high-level vocabulary on top of:
 - `artifact.save`: `{ "title": string, "mime"?: string, "text"?: string, "doc"?: { "...": "Laika Document" }, "tags"?: [string], "redaction"?: "default"|"none" }`
   - Exactly one of `text` or `doc` should be provided.
 - `artifact.share`: `{ "artifactId": string, "format": "markdown"|"text"|"json"|"csv"|"pdf", "filename"?: string, "target"?: "share_sheet"|"clipboard"|"file" }`
+- `artifact.open`: `{ "artifactId": string, "target"?: "workspace"|"browser", "newTab"?: boolean }`
 - `integration.invoke`: `{ "integration": string, "operation": string, "payload": object, "idempotencyKey"?: string }`
 - `app.calculate`: `{ "expression": string, "precision"?: number }`
   - `precision` is optional (integer 0..6). When provided, results are rounded using IEEE-754 double precision (current implementation uses `toFixed`-style rounding and inherits its edge cases).
   - Tool results include `result` (number) and `formatted` (string) when `precision` is provided.
   - Not intended for currency math; use a Decimal/fixed-point path when correctness is required.
+
+- Collections + sources (multi-page context):
+  - `collection.create`: `{ "title": string, "tags"?: [string] }`
+  - `collection.add_sources`: `{ "collectionId": string, "sources": [{ "type": "url", "url": string, "title"?: string } | { "type": "note", "title"?: string, "text": string }] }`
+  - `collection.list_sources`: `{ "collectionId": string }`
+  - `source.capture`: `{ "collectionId": string, "url": string, "mode"?: "auto"|"article"|"list", "maxChars"?: int }`
+  - `source.refresh`: `{ "sourceId": string }`
+
+- Transforms (produce durable artifacts from a collection):
+  - `transform.list_types`: `{}`
+  - `transform.run`: `{ "collectionId": string, "type": string, "config"?: object }`
+
+- Money + commerce helpers:
+  - `app.money_calculate`: `{ "expression": string, "currency": string, "rounding"?: "bankers"|"up"|"down" }`
+  - `commerce.estimate_tax`: `{ "amountMinor": int, "currency": string, "destination": { "state": string, "zip"?: string }, "category"?: string, "merchantOrigin"?: string }`
+  - `commerce.estimate_shipping`: `{ "destination": { "state": string, "zip"?: string }, "speed"?: "standard"|"expedited", "merchantOrigin"?: string }`
 
 Rules:
 
@@ -340,6 +397,9 @@ Instead of returning raw HTML, the model returns a **safe document AST** that La
 - `list_item`: `{ "children": [block...] }`
 - `blockquote`: `{ "children": [block...] }`
 - `code_block`: `{ "language": "optional", "text": "..." }`
+- `table`: `{ "rows": [table_row...] }`
+- `table_row`: `{ "cells": [table_cell...] }`
+- `table_cell`: `{ "header": boolean, "children": [inline...] }` (`children` must be inline nodes only)
 - inline nodes:
   - `text`: `{ "text": "..." }`
   - `link`: `{ "href": "https://...", "children": [text...] }`
@@ -367,7 +427,7 @@ No inline styling nodes (`strong`, `em`, `code`) are supported in v1.
 
 ### Rendering rules (UI)
 
-- Convert render nodes to a **sanitized HTML subset** (`<p>`, `<h2>`, `<ul>`, `<li>`, `<pre><code>`, `<a>`).
+- Convert render nodes to a **sanitized HTML subset** (`<p>`, `<h2>`, `<ul>`, `<li>`, `<pre><code>`, `<a>`, `<table>`, `<thead>`, `<tbody>`, `<tr>`, `<th>`, `<td>`).
 - Strip/ignore unknown node types or invalid fields (never throw raw model output into the DOM).
 - Enforce link sanitization (no `javascript:`; optional allowlist for schemes).
 - Optionally render citations as hoverable highlights by mapping `(doc_id, node_id)` to page elements via `handle_id`.

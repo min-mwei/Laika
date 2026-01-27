@@ -10,5 +10,6 @@ Quick index for design and research notes.
 - `docs/llm_context_protocol.md`: proposed JSON protocol for DOM context packs + JSON-only LLM responses + SQLite chat history.
 - `docs/QWen3.md`: Qwen3 thinking/streaming/decoding one-pager.
 - `docs/rendering.md`: Render Document AST rules and UI sanitization pipeline.
+- `src/laika/PLAN.md`: implementation plan for P0 workflows, including collections + transforms + viewer tabs and shopping guardrails.
 
 If you add a new doc, list it here. Keep entries short and focused on intent. 

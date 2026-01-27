@@ -40,6 +40,7 @@ This note captures practical heuristics for walking DOM trees, extracting text, 
 - **Outline**: headings + small list items with levels.
 - **Items**: `{title, url, snippet, linkCandidates[]}` for list-like pages.
 - **Comments**: `{author, age, score, text, depth}` for discussion pages.
+- **Links** (optional): `{url, text, context}` extracted from the content root to support “suggested links” and multi-source collection expansion.
 - **Access signals**: small string tags for overlays and gates (e.g. `paywall`, `auth_gate`, `overlay_or_dialog`).
 - **Section summaries** (optional): short notes per heading to improve long-form coverage.
 
@@ -62,3 +63,12 @@ This note captures practical heuristics for walking DOM trees, extracting text, 
 - Block window coverage (primary index, window start/end).
 - Item/comment candidate counts and top scoring reasons.
 - Per-stage timings (roots, text, blocks, items, comments).
+
+## Notes for source collections (multi-page workflows)
+
+Laika’s “browser as workshop” workflow (see `docs/LaikaOverview.md` and `src/laika/PLAN.md`) collects many sources, then queries/transforms them (comparison tables, timelines) and opens results in new viewer tabs.
+
+Extraction implications:
+- Prefer capturing a **stable, normalized representation** per source (primary text + outline) rather than raw HTML.
+- Extract outbound links (URL + anchor text + short surrounding context) when feasible; this enables “suggested links” and follow-up expansion without re-scanning the whole DOM.
+- Support “links in selection” as a separate, narrow helper (`browser.get_selection_links`) so users can add many links from a thread/feed in one action.
