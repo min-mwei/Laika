@@ -273,6 +273,20 @@
         ? String(rawResult.observation.primary.text).length
         : 0;
     }
+    if (toolName === "browser.get_selection_links" && rawResult) {
+      if (Array.isArray(rawResult.urls)) {
+        payload.urls = rawResult.urls.filter(function (value) {
+          return typeof value === "string" && value;
+        });
+        payload.urlCount = payload.urls.length;
+      }
+      if (typeof rawResult.totalFound === "number") {
+        payload.totalFound = rawResult.totalFound;
+      }
+      if (typeof rawResult.truncated === "boolean") {
+        payload.truncated = rawResult.truncated;
+      }
+    }
     if (toolName === "app.calculate" && rawResult) {
       if (typeof rawResult.result === "number") {
         payload.result = rawResult.result;
@@ -291,13 +305,47 @@
     };
   }
 
-  function pickNextAction(actions) {
+  function isToolBlocked(toolName, blockedTools) {
+    if (!toolName || !Array.isArray(blockedTools) || blockedTools.length === 0) {
+      return false;
+    }
+    for (var i = 0; i < blockedTools.length; i += 1) {
+      if (blockedTools[i] === toolName) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function findBlockedAction(actions, blockedTools) {
+    if (!Array.isArray(actions) || !Array.isArray(blockedTools) || blockedTools.length === 0) {
+      return null;
+    }
+    for (var i = 0; i < actions.length; i += 1) {
+      var action = actions[i];
+      if (!action || !action.toolCall || !action.policy) {
+        continue;
+      }
+      if (action.policy.decision !== "allow" && action.policy.decision !== "ask") {
+        continue;
+      }
+      if (isToolBlocked(action.toolCall.name, blockedTools)) {
+        return action;
+      }
+    }
+    return null;
+  }
+
+  function pickNextAction(actions, blockedTools) {
     if (!Array.isArray(actions)) {
       return null;
     }
     for (var i = 0; i < actions.length; i += 1) {
       var action = actions[i];
       if (!action || !action.toolCall || !action.policy) {
+        continue;
+      }
+      if (isToolBlocked(action.toolCall.name, blockedTools)) {
         continue;
       }
       if (action.policy.decision === "allow" || action.policy.decision === "ask") {
@@ -414,6 +462,16 @@
       ? Math.max(1, Math.floor(config.maxSteps))
       : 6;
     var autoApprove = config.autoApprove !== false;
+    var blockedTools = Array.isArray(config.blockedTools)
+      ? config.blockedTools.map(function (name) {
+        return typeof name === "string" ? name.trim() : "";
+      }).filter(function (name) {
+        return !!name;
+      })
+      : [];
+    if (config.disallowOpenTabs === true) {
+      blockedTools.push("browser.open_tab");
+    }
     var observeOptions = config.observeOptions || (config.detail ? DETAIL_OBSERVE_OPTIONS : DEFAULT_OBSERVE_OPTIONS);
     var requestPlanFn = deps.requestPlan || requestPlan;
     var validatePlanFn = typeof deps.validatePlan === "function" ? deps.validatePlan : null;
@@ -496,7 +554,8 @@
             }
           }
           summary = extractPlanSummary(plan);
-          var action = pickNextAction(plan.actions);
+          var action = pickNextAction(plan.actions, blockedTools);
+          var blockedAction = action ? null : findBlockedAction(plan.actions, blockedTools);
           lastToolCall = action && action.toolCall ? action.toolCall.name : null;
           var stepInfo = {
             step: step,
@@ -512,6 +571,14 @@
             onStep(stepInfo, { goalIndex: goalIndex, goal: goal });
           }
           if (!action) {
+            if (blockedAction) {
+              recentToolCalls.push(blockedAction.toolCall);
+              recentToolResults.push(buildToolResult(blockedAction.toolCall, blockedAction.toolCall.name, {
+                status: "error",
+                error: "blocked_tool"
+              }));
+              continue;
+            }
             break;
           }
           if (action.policy && action.policy.decision === "deny") {

@@ -1,0 +1,6 @@
+{
+  "url": "http://127.0.0.1:8766/fixtures/collection_selection_links.html",
+  "goals": [
+    "The selection area on the page is already highlighted. Call browser.get_selection_links (do not rely on observed items) and list the unique http(s) URLs plus the count. Mention whether any non-http(s) links were filtered out (e.g., mailto)."
+  ]
+}

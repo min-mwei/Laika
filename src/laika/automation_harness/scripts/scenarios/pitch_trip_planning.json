@@ -1,0 +1,13 @@
+{
+  "url": "http://127.0.0.1:8766/fixtures/pitch_trip_planning.html",
+  "goals": [
+    "Create a hotel options table using only this page with columns: hotel, nightly price, distance to Gion/Yasaka, cancellation deadline, and notes.",
+    "Draft a simple 5-day Kyoto itinerary that respects the attraction notes on this page.",
+    "List a short checklist of what to verify and confirm you will ask before booking anything."
+  ],
+  "options": {
+    "maxSteps": 7,
+    "autoApprove": true,
+    "resetStorage": true
+  }
+}

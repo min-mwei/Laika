@@ -139,14 +139,19 @@ Keep existing JSON but allow automation options:
     "maxSteps": 6,
     "autoApprove": true,
     "observeDelayMs": 300,
+    "blockedTools": ["browser.open_tab"],
+    "disallowOpenTabs": true,
     "resetStorage": true
   }
 }
 ```
 
 `resetStorage` defaults to `true` for automation runs; it clears automation-scoped keys and in-memory caches (not user settings). Set it to `false` if you need to keep automation state between scenarios.
+`blockedTools` is an optional list of tool names to skip when selecting the next action (useful for live tests).
+`disallowOpenTabs` is a convenience flag that adds `browser.open_tab` to `blockedTools`.
+`blockedUrlHosts` is an optional list of hostname suffixes (e.g., `["linkedin.com"]`) that automation will block for `browser.open_tab` and `browser.navigate` (useful for live Techmeme tests to avoid social/login detours).
 
-Default scenarios (`hn.json`, `bbc.json`, `sec_nvda.json`) use local fixtures where possible to reduce flakiness.
+Default scenarios (`hn.json`, `bbc.json`, `sec_nvda.json`, `collection_selection_links.json`) use local fixtures where possible to reduce flakiness.
 Live-web smoke scenarios are suffixed with `_live.json` and are opt-in.
 
 ## Planned scenarios (source collections + transforms)
@@ -156,8 +161,8 @@ The collections + transforms workflow (see `docs/LaikaOverview.md` and `src/laik
 Add fixture-backed scenarios (names illustrative; keep them deterministic):
 
 - `collection_selection_links.json`
-  - Fixture: a “thread” page containing many outbound links (Techmeme-like).
-  - Validates: `browser.get_selection_links` returns stable URLs; collection ingestion adds N sources deterministically.
+  - Fixture: `fixtures/collection_selection_links.html` (auto-selects a “thread” region containing many outbound links).
+  - Validates: `browser.get_selection_links` returns stable, deduped http(s) URLs (collection ingestion validation comes later).
 
 - `collection_capture_normalization.json`
   - Fixture: a few representative pages (article, list, discussion) behind the same origin.
@@ -186,6 +191,34 @@ Add fixture-backed scenarios (names illustrative; keep them deterministic):
 - `shopping_stop_before_commit.json`
   - Fixture: a checkout review page with a commit action (e.g., “Place order”).
   - Validates: Policy Gate blocks commit clicks unless the user explicitly changes intent; run logs record a stable reason code.
+
+## Pitch-based workflow scenarios (fixture-backed)
+
+These scenarios mirror the “Try it” prompts in `docs/Laika_pitch.md` to keep the end-to-end harness aligned with product narratives while the underlying tools evolve.
+
+- `pitch_news_synthesis.json`
+  - Fixture: a thread page with multiple outlets covering the same story plus linked outlet pages.
+  - Validates: multi-source differences summary, a comparison table draft, and a timeline draft (plain text is acceptable until transforms land).
+
+- `pitch_shopping_constraints.json`
+  - Fixture: five jacket product cards with prices, shipping, tax, warranty, and return policy fields.
+  - Validates: total-cost comparison with explicit assumptions, order links, and “verify at checkout” notes plus a stop-before-purchase reminder.
+
+- `pitch_trip_planning.json`
+  - Fixture: three Kyoto hotel options plus trip constraints and itinerary notes.
+  - Validates: options table, day-by-day itinerary, and a clear “ask before booking” checkpoint.
+
+## Techmeme theme scenarios (fixture + live)
+
+These scenarios mirror a current Techmeme theme so we can validate the “thread → synthesis” flow on live news while keeping a deterministic fixture.
+
+- `techmeme_maia_theme.json`
+  - Fixture: Techmeme-style thread about Microsoft’s Maia 200 AI accelerator launch.
+  - Validates: multi-source differences summary, comparison table draft, and timeline draft (plain text until transforms land).
+
+- `techmeme_maia_theme_live.json` (opt-in)
+  - Live: Techmeme homepage or snapshot containing the Maia 200 AI accelerator coverage block.
+  - Validates: identifies the theme and lists outlet perspectives without opening unrelated tabs.
 
 ## Runner outputs
 

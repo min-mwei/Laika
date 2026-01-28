@@ -218,6 +218,7 @@ if (!SearchTools) {
 
 var ALLOWED_TOOLS = {
   "browser.observe_dom": true,
+  "browser.get_selection_links": true,
   "browser.click": true,
   "browser.type": true,
   "browser.scroll": true,
@@ -2055,6 +2056,43 @@ function isAutomationHarnessUrl(url) {
   }
 }
 
+function normalizeBlockedUrlHosts(hosts) {
+  if (!Array.isArray(hosts)) {
+    return null;
+  }
+  var normalized = hosts.map(function (host) {
+    return typeof host === "string" ? host.trim().toLowerCase() : "";
+  }).filter(function (host) {
+    return !!host;
+  });
+  return normalized.length ? normalized : null;
+}
+
+function isUrlHostBlocked(url, blockedHosts) {
+  if (!url || typeof url !== "string" || !Array.isArray(blockedHosts) || blockedHosts.length === 0) {
+    return false;
+  }
+  try {
+    var parsed = new URL(url);
+    var hostname = (parsed.hostname || "").toLowerCase();
+    if (!hostname) {
+      return false;
+    }
+    for (var i = 0; i < blockedHosts.length; i += 1) {
+      var blocked = blockedHosts[i];
+      if (!blocked) {
+        continue;
+      }
+      if (hostname === blocked || hostname.endsWith("." + blocked)) {
+        return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
 function getAutomationRun(runId) {
   return runId && AUTOMATION_RUNS[runId] ? AUTOMATION_RUNS[runId] : null;
 }
@@ -2264,6 +2302,16 @@ async function startAutomationRun(message, sender) {
       runTimeoutMs = Math.floor(message.options.runTimeoutMs);
     }
   }
+  var blockedTools = null;
+  if (message.options && Array.isArray(message.options.blockedTools)) {
+    blockedTools = message.options.blockedTools.map(function (name) {
+      return typeof name === "string" ? name.trim() : "";
+    }).filter(function (name) {
+      return !!name;
+    });
+  }
+  var disallowOpenTabs = message.options && message.options.disallowOpenTabs === true;
+  var blockedUrlHosts = normalizeBlockedUrlHosts(message.options ? message.options.blockedUrlHosts : null);
 
   var targetTabId = null;
   if (message.targetUrl) {
@@ -2305,7 +2353,18 @@ async function startAutomationRun(message, sender) {
       return handleObserve(options, sender, tabId, true);
     },
     runTool: function (action, tabId) {
-      return handleTool(action.toolCall.name, action.toolCall.arguments || {}, sender, tabId).then(function (result) {
+      var toolName = action && action.toolCall ? action.toolCall.name : null;
+      var args = action && action.toolCall && action.toolCall.arguments ? action.toolCall.arguments : {};
+      if ((toolName === "browser.open_tab" || toolName === "browser.navigate") &&
+        args && typeof args.url === "string" &&
+        blockedUrlHosts && isUrlHostBlocked(args.url, blockedUrlHosts)) {
+        return Promise.resolve({
+          status: "error",
+          error: "blocked_url",
+          errorDetails: { url: args.url }
+        });
+      }
+      return handleTool(toolName, args || {}, sender, tabId).then(function (result) {
         if (action && action.toolCall && (action.toolCall.name === "browser.open_tab" || action.toolCall.name === "search")) {
           if (result && typeof result.tabId === "number") {
             recordAutomationTab(result.tabId);
@@ -2361,6 +2420,8 @@ async function startAutomationRun(message, sender) {
     goals: goals,
     maxSteps: message.options && message.options.maxSteps,
     autoApprove: message.options && typeof message.options.autoApprove === "boolean" ? message.options.autoApprove : true,
+    blockedTools: blockedTools,
+    disallowOpenTabs: disallowOpenTabs,
     observeOptions: message.options && message.options.observeOptions,
     initialObserveSettings: initialObserveSettings,
     detail: message.options && !!message.options.detail,

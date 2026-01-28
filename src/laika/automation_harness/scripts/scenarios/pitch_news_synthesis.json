@@ -1,0 +1,13 @@
+{
+  "url": "http://127.0.0.1:8766/fixtures/pitch_news_thread.html",
+  "goals": [
+    "Summarize how each outlet frames the HarborCell recall using only the content on this page (do not open new tabs).",
+    "Draft a comparison table in plain text with columns: outlet, focus, key dates mentioned, stakeholder impact.",
+    "Draft a short timeline of the key dates mentioned across outlets."
+  ],
+  "options": {
+    "maxSteps": 6,
+    "autoApprove": true,
+    "resetStorage": true
+  }
+}

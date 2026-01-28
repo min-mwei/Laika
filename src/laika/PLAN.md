@@ -58,6 +58,12 @@ Exit criteria:
 
 Implement `browser.get_selection_links` (browser primitive).
 
+Tool schema:
+- arguments: `{ "maxLinks": number? }` (optional integer, 1..200; default 50)
+
+Tool result (extension → agent runner):
+- `{ "status": "ok", "urls": [string], "totalFound": number, "truncated": bool }`
+
 Behavior:
 - Returns a unique list of http(s) URLs contained in the user’s current selection.
 - Must be robust to:
@@ -73,9 +79,11 @@ Policy:
 
 Validation:
 - Add a fixture page with many links (thread/feed layout) and an automation scenario that:
-  - selects a region,
+  - sets up a selection automatically on load (avoid brittle UI selection automation),
   - calls `browser.get_selection_links`,
   - asserts the returned URL count and stability.
+- Proposed harness scenario: `src/laika/automation_harness/scripts/scenarios/collection_selection_links.json`
+- Proposed fixture: `src/laika/automation_harness/fixtures/collection_selection_links.html`
 
 Reference pattern: `NotebookLM-Chrome/src/lib/selection-links.ts` and the injected variant in `NotebookLM-Chrome/src/background.ts`.
 

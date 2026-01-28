@@ -1,0 +1,23 @@
+{
+  "url": "https://www.techmeme.com/260126/p26",
+  "goals": [
+    "On this Techmeme story page about Microsoft’s Maia 200, list several distinct outlets linked on the page and summarize each outlet’s framing using the link titles/snippets on this page. You may open up to two non-social links if needed; do not open unrelated links.",
+    "Draft a plain-text comparison table (outlet | angle | key facts/dates) and a short timeline for the Maia 200 coverage."
+  ],
+  "options": {
+    "maxSteps": 6,
+    "autoApprove": true,
+    "observeOptions": {
+      "maxItems": 12
+    },
+    "blockedUrlHosts": [
+      "linkedin.com",
+      "twitter.com",
+      "x.com",
+      "threads.net",
+      "bsky.app",
+      "techhub.social"
+    ],
+    "resetStorage": true
+  }
+}

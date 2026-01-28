@@ -1,0 +1,13 @@
+{
+  "url": "http://127.0.0.1:8766/fixtures/techmeme_maia_thread.html",
+  "goals": [
+    "Summarize how each outlet frames the Microsoft Maia 200 launch using only this page (do not open new tabs).",
+    "Draft a plain-text comparison table with columns: outlet, primary angle, key dates, business impact.",
+    "Draft a short timeline of the key dates mentioned across outlets."
+  ],
+  "options": {
+    "maxSteps": 6,
+    "autoApprove": true,
+    "resetStorage": true
+  }
+}

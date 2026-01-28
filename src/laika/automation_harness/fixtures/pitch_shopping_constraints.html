@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Winter Jacket Comparison - Fixture</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        font-family: "SF Pro Text", "Helvetica Neue", sans-serif;
+        background: #f6f7fb;
+        color: #111827;
+      }
+      header {
+        background: #111827;
+        color: #f9fafb;
+        padding: 18px 26px;
+      }
+      main {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 26px;
+      }
+      .constraints {
+        background: #ffffff;
+        padding: 16px 18px;
+        border-radius: 12px;
+        border-left: 4px solid #2563eb;
+        margin-bottom: 20px;
+      }
+      .product-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 16px;
+      }
+      .card {
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 6px 18px rgba(17, 24, 39, 0.08);
+      }
+      .card h3 {
+        margin: 0 0 6px;
+      }
+      .price {
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+      ul {
+        padding-left: 18px;
+        margin: 0 0 10px;
+        color: #374151;
+        line-height: 1.5;
+      }
+      .card a {
+        color: #2563eb;
+        text-decoration: none;
+        font-weight: 600;
+      }
+      footer {
+        margin-top: 22px;
+        font-size: 12px;
+        color: #6b7280;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Winter Jacket Shortlist</h1>
+      <div>Fixture catalog for shopping comparison automation</div>
+    </header>
+    <main>
+      <section class="constraints">
+        <h2>Buyer constraints</h2>
+        <ul>
+          <li>Waterproof rating at least 10k mm.</li>
+          <li>Weight under 1.3 kg.</li>
+          <li>Target total under $260 if possible (before optional warranty).</li>
+          <li>Include order links and note what to verify at checkout.</li>
+        </ul>
+      </section>
+      <section class="product-grid" aria-label="Jacket options">
+        <article class="card" id="order-alpine">
+          <h3>Alpine Shell Pro</h3>
+          <div class="price">Base $189 • Shipping $12 • Est. tax $16.92 • Warranty $24</div>
+          <ul>
+            <li>Waterproof: 20k mm</li>
+            <li>Weight: 0.95 kg</li>
+            <li>Return window: 30 days</li>
+            <li>Insulation: 80g synthetic</li>
+          </ul>
+          <a href="/fixtures/pitch_shopping_constraints.html#order-alpine">Order link</a>
+        </article>
+        <article class="card" id="order-north">
+          <h3>North Ridge 3L</h3>
+          <div class="price">Base $219 • Shipping $0 • Est. tax $19.71 • Warranty $29</div>
+          <ul>
+            <li>Waterproof: 30k mm</li>
+            <li>Weight: 1.10 kg</li>
+            <li>Return window: 45 days</li>
+            <li>Insulation: Shell only</li>
+          </ul>
+          <a href="/fixtures/pitch_shopping_constraints.html#order-north">Order link</a>
+        </article>
+        <article class="card" id="order-harbor">
+          <h3>Harbor Trek Insulated</h3>
+          <div class="price">Base $169 • Shipping $18 • Est. tax $15.21 • Warranty $19</div>
+          <ul>
+            <li>Waterproof: 12k mm</li>
+            <li>Weight: 1.35 kg</li>
+            <li>Return window: 20 days</li>
+            <li>Insulation: 120g recycled</li>
+          </ul>
+          <a href="/fixtures/pitch_shopping_constraints.html#order-harbor">Order link</a>
+        </article>
+        <article class="card" id="order-rainshield">
+          <h3>Rainshield Lite</h3>
+          <div class="price">Base $149 • Shipping $9 • Est. tax $13.41 • Warranty $15</div>
+          <ul>
+            <li>Waterproof: 10k mm</li>
+            <li>Weight: 0.78 kg</li>
+            <li>Return window: 30 days</li>
+            <li>Insulation: Shell only</li>
+          </ul>
+          <a href="/fixtures/pitch_shopping_constraints.html#order-rainshield">Order link</a>
+        </article>
+        <article class="card" id="order-summit">
+          <h3>Summit Edge Hybrid</h3>
+          <div class="price">Base $239 • Shipping $0 • Est. tax $21.51 • Warranty $32</div>
+          <ul>
+            <li>Waterproof: 15k mm</li>
+            <li>Weight: 1.25 kg</li>
+            <li>Return window: 30 days</li>
+            <li>Insulation: 60g hybrid</li>
+          </ul>
+          <a href="/fixtures/pitch_shopping_constraints.html#order-summit">Order link</a>
+        </article>
+      </section>
+      <footer>
+        Taxes are estimates for fixture purposes. Verify totals, stock, and warranty terms at checkout.
+      </footer>
+    </main>
+  </body>
+</html>

@@ -22,6 +22,10 @@
         rootHandleId: "string"
       }
     },
+    "browser.get_selection_links": {
+      required: {},
+      optional: { maxLinks: "number" }
+    },
     "browser.click": { required: { handleId: "string" }, optional: {} },
     "browser.type": { required: { handleId: "string", text: "string" }, optional: {} },
     "browser.scroll": { required: { deltaY: "number" }, optional: {} },
@@ -118,6 +122,21 @@
       }
       if (typeof args.rootHandleId !== "undefined" && typeof args.rootHandleId !== "string") {
         return "observe_dom.rootHandleId must be string";
+      }
+      return null;
+    }
+
+    if (toolCall.name === "browser.get_selection_links") {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
+        return "get_selection_links has unknown arguments";
+      }
+      if (typeof args.maxLinks !== "undefined") {
+        if (!isFiniteNumber(args.maxLinks)) {
+          return "get_selection_links.maxLinks must be number";
+        }
+        if (Math.floor(args.maxLinks) !== args.maxLinks || args.maxLinks < 1 || args.maxLinks > 200) {
+          return "get_selection_links.maxLinks must be integer 1..200";
+        }
       }
       return null;
     }

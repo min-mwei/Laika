@@ -2,6 +2,7 @@ import Foundation
 
 public enum ToolName: String, Codable, CaseIterable, Sendable {
     case browserObserveDom = "browser.observe_dom"
+    case browserGetSelectionLinks = "browser.get_selection_links"
     case browserClick = "browser.click"
     case browserType = "browser.type"
     case browserScroll = "browser.scroll"

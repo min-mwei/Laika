@@ -184,6 +184,7 @@ Tool rules:
 - Never invent handleId values; use ones from context.
 - Use browser.click for links/buttons, browser.type for inputs, browser.select for <select>.
 - Use browser.observe_dom to zoom in on a block or comment when needed.
+- Use browser.get_selection_links to extract selected links when the user has highlighted multiple URLs.
 - Use search for web search; include query and optional engine/newTab.
 - Tool arguments must match the schema exactly; do not add extra keys.
 - If you include a tool call, still provide assistant.render that explains what will happen.
@@ -196,6 +197,7 @@ Task guidance:
 
 Tools:
 - browser.observe_dom arguments: {"maxChars": int?, "maxElements": int?, "maxBlocks": int?, "maxPrimaryChars": int?, "maxOutline": int?, "maxOutlineChars": int?, "maxItems": int?, "maxItemChars": int?, "maxComments": int?, "maxCommentChars": int?, "rootHandleId": string?}
+- browser.get_selection_links arguments: {"maxLinks": number?}
 - browser.click arguments: {"handleId": string}
 - browser.type arguments: {"handleId": string, "text": string}
 - browser.select arguments: {"handleId": string, "value": string}

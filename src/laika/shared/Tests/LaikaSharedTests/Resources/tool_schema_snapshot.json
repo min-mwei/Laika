@@ -16,6 +16,12 @@
         "rootHandleId": "string"
       }
     },
+    "browser.get_selection_links": {
+      "required": {},
+      "optional": {
+        "maxLinks": "number"
+      }
+    },
     "browser.click": {
       "required": {
         "handleId": "string"

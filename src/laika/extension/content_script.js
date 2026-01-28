@@ -3343,6 +3343,131 @@
   }
 
   function applyTool(toolName, args) {
+    if (toolName === "browser.get_selection_links") {
+      var DEFAULT_MAX_LINKS = 50;
+      var maxLinks = DEFAULT_MAX_LINKS;
+      if (args && typeof args.maxLinks !== "undefined") {
+        if (typeof args.maxLinks !== "number" || !isFinite(args.maxLinks)) {
+          return { status: "error", error: ToolErrorCode.INVALID_ARGUMENTS };
+        }
+        var rounded = Math.floor(args.maxLinks);
+        if (rounded !== args.maxLinks) {
+          return { status: "error", error: ToolErrorCode.INVALID_ARGUMENTS };
+        }
+        maxLinks = Math.max(1, Math.min(200, rounded));
+      }
+
+      var selection = typeof window !== "undefined" && typeof window.getSelection === "function"
+        ? window.getSelection()
+        : null;
+      if (!selection || selection.rangeCount === 0) {
+        return { status: "ok", urls: [], totalFound: 0, truncated: false };
+      }
+
+      function closestAnchor(node) {
+        var current = node && node.nodeType === 1 ? node : (node && node.parentElement ? node.parentElement : null);
+        while (current) {
+          if (current.tagName && current.tagName.toLowerCase() === "a") {
+            return current;
+          }
+          current = current.parentElement;
+        }
+        return null;
+      }
+
+      function rangeIntersectsNode(range, node) {
+        if (!range || !node) {
+          return false;
+        }
+        try {
+          if (typeof range.intersectsNode === "function") {
+            return range.intersectsNode(node);
+          }
+        } catch (error) {
+        }
+        try {
+          var nodeRange = document.createRange();
+          nodeRange.selectNodeContents(node);
+          return range.compareBoundaryPoints(Range.END_TO_START, nodeRange) < 0 &&
+            range.compareBoundaryPoints(Range.START_TO_END, nodeRange) > 0;
+        } catch (error) {
+          return false;
+        }
+      }
+
+      var seen = new Set();
+      var urls = [];
+      var totalFound = 0;
+      var truncated = false;
+
+      outer: for (var i = 0; i < selection.rangeCount; i += 1) {
+        var range = null;
+        try {
+          range = selection.getRangeAt(i);
+        } catch (error) {
+          continue;
+        }
+        if (!range) {
+          continue;
+        }
+        var root = range.commonAncestorContainer;
+        if (root && root.nodeType !== 1) {
+          root = root.parentElement;
+        }
+        if (!root || !root.querySelectorAll) {
+          root = document.body;
+        }
+
+        var anchors = [];
+        try {
+          anchors = Array.from(root.querySelectorAll("a[href]"));
+        } catch (error) {
+          anchors = [];
+        }
+
+        var startAnchor = closestAnchor(range.startContainer);
+        var endAnchor = closestAnchor(range.endContainer);
+        if (startAnchor) {
+          anchors.unshift(startAnchor);
+        }
+        if (endAnchor && endAnchor !== startAnchor) {
+          anchors.unshift(endAnchor);
+        }
+
+        for (var j = 0; j < anchors.length; j += 1) {
+          var anchor = anchors[j];
+          if (!anchor || typeof anchor.href !== "string" || !anchor.href) {
+            continue;
+          }
+          if (!rangeIntersectsNode(range, anchor) && anchor !== startAnchor && anchor !== endAnchor) {
+            continue;
+          }
+          var url = anchor.href;
+          try {
+            var parsed = new URL(url);
+            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+              continue;
+            }
+            url = parsed.toString();
+          } catch (error) {
+            continue;
+          }
+          if (seen.has(url)) {
+            continue;
+          }
+          seen.add(url);
+          totalFound += 1;
+          if (urls.length < maxLinks) {
+            urls.push(url);
+          } else {
+            truncated = true;
+          }
+        }
+      }
+
+      return { status: "ok", urls: urls, totalFound: totalFound, truncated: truncated };
+    }
+
     if (toolName === "browser.click") {
       var resolvedClick = resolveHandle(args.handleId);
       if (resolvedClick.error) {

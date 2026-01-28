@@ -35,6 +35,12 @@ public enum ToolSchemaValidator {
                 return false
             }
             return true
+        case .browserGetSelectionLinks:
+            let valid = validate(arguments: arguments, required: [:], optional: ["maxLinks": .number])
+            if !valid {
+                return false
+            }
+            return hasValidMaxLinks(arguments, key: "maxLinks")
         case .browserClick:
             return validate(arguments: arguments, required: ["handleId": .string], optional: [:])
                 && hasNonEmptyString(arguments, key: "handleId")
@@ -132,5 +138,18 @@ public enum ToolSchemaValidator {
             return false
         }
         return precision >= 0 && precision <= 6
+    }
+
+    private static func hasValidMaxLinks(_ arguments: [String: JSONValue], key: String) -> Bool {
+        guard let value = arguments[key] else {
+            return true
+        }
+        guard case let .number(maxLinks) = value else {
+            return false
+        }
+        if maxLinks.rounded() != maxLinks {
+            return false
+        }
+        return maxLinks >= 1 && maxLinks <= 200
     }
 }

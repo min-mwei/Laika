@@ -1,0 +1,13 @@
+{
+  "url": "http://127.0.0.1:8766/fixtures/pitch_shopping_constraints.html",
+  "goals": [
+    "Compare the five jackets against the listed constraints. Compute total cost per item (base + shipping + estimated tax; warranty optional) using only the data on this page.",
+    "Draft a plain-text comparison table with total costs, order links, and any constraint mismatches.",
+    "Recommend one option with trade-offs and list what to verify at checkout; confirm you will stop before any purchase."
+  ],
+  "options": {
+    "maxSteps": 7,
+    "autoApprove": true,
+    "resetStorage": true
+  }
+}

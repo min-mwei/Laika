@@ -92,6 +92,22 @@ public final class AgentOrchestrator: @unchecked Sendable {
             )
         }
 
+        if let planned = planSelectionLinksTool(context: enrichedContext, userGoal: userGoal) {
+            let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
+            logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
+            logFinalSummary(summary: planned.summary, context: enrichedContext, goalPlan: goalPlan, source: "planned_action")
+            return AgentResponse(
+                summary: planned.summary,
+                assistant: assistantFromSummary(planned.summary),
+                actions: actions,
+                goalPlan: goalPlan
+            )
+        }
+
+        if let response = answerSelectionLinksIfAvailable(context: enrichedContext, userGoal: userGoal, goalPlan: goalPlan) {
+            return response
+        }
+
         if let planned = planSearchTool(context: enrichedContext, userGoal: userGoal) {
             let actions = applyPolicy(to: [planned.toolCall], context: enrichedContext)
             logPlannedAction(planned: planned, actions: actions, context: enrichedContext)
@@ -331,6 +347,110 @@ public final class AgentOrchestrator: @unchecked Sendable {
         let summary = buildSearchSummary(query: intent.query, engine: intent.engine, newTab: true)
         let toolCall = ToolCall(name: .search, arguments: arguments)
         return PlannedAction(toolCall: toolCall, summary: summary)
+    }
+
+    private func planSelectionLinksTool(context: ContextPack, userGoal: String) -> PlannedAction? {
+        let normalized = normalizeForMatch(userGoal)
+        guard !normalized.isEmpty else {
+            return nil
+        }
+        let triggers = [
+            "get selection links",
+            "selection links",
+            "selected links"
+        ]
+        var matched = false
+        for trigger in triggers where normalized.contains(trigger) {
+            matched = true
+            break
+        }
+        guard matched else {
+            return nil
+        }
+        if let lastCall = context.recentToolCalls.last, lastCall.name == .browserGetSelectionLinks {
+            return nil
+        }
+        return PlannedAction(
+            toolCall: ToolCall(name: .browserGetSelectionLinks, arguments: [:]),
+            summary: "Collecting the selected links."
+        )
+    }
+
+    private func answerSelectionLinksIfAvailable(context: ContextPack, userGoal: String, goalPlan: GoalPlan) -> AgentResponse? {
+        guard shouldAnswerSelectionLinks(from: userGoal) else {
+            return nil
+        }
+        guard let urls = selectionLinksFromRecentResults(context: context) else {
+            return nil
+        }
+
+        var lines: [String] = []
+        lines.append("Selected links (\(urls.count)):")
+        for (index, url) in urls.prefix(50).enumerated() {
+            lines.append("\(index + 1). \(url)")
+        }
+        if urls.count > 50 {
+            lines.append("…")
+        }
+        lines.append("Note: non-http(s) links (e.g., mailto:) are omitted by design.")
+
+        let summary = lines.joined(separator: "\n")
+        logFinalSummary(summary: summary, context: context, goalPlan: goalPlan, source: "selection_links_answer")
+        return AgentResponse(summary: summary, assistant: assistantFromSummary(summary), actions: [], goalPlan: goalPlan)
+    }
+
+    private func shouldAnswerSelectionLinks(from goal: String) -> Bool {
+        let normalized = normalizeForMatch(goal)
+        guard !normalized.isEmpty else {
+            return false
+        }
+        let triggers = [
+            "get selection links",
+            "selection links",
+            "selected links"
+        ]
+        var matched = false
+        for trigger in triggers where normalized.contains(trigger) {
+            matched = true
+            break
+        }
+        guard matched else {
+            return false
+        }
+        let outputTokens = ["list", "show", "count", "url", "urls"]
+        for token in outputTokens where normalized.contains(token) {
+            return true
+        }
+        return false
+    }
+
+    private func selectionLinksFromRecentResults(context: ContextPack) -> [String]? {
+        if context.recentToolCalls.isEmpty || context.recentToolResults.isEmpty {
+            return nil
+        }
+        for result in context.recentToolResults.reversed() {
+            guard result.status == .ok else {
+                continue
+            }
+            guard let call = context.recentToolCalls.first(where: { $0.id == result.toolCallId }) else {
+                continue
+            }
+            guard call.name == .browserGetSelectionLinks else {
+                continue
+            }
+            guard case let .array(values)? = result.payload["urls"] else {
+                continue
+            }
+            let urls = values.compactMap { value -> String? in
+                guard case let .string(url) = value else {
+                    return nil
+                }
+                let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            return urls.isEmpty ? nil : urls
+        }
+        return nil
     }
 
     private func buildSearchAction(query: String, engine: String, summaryPrefix: String) -> PlannedAction? {
@@ -1483,6 +1603,8 @@ public final class AgentOrchestrator: @unchecked Sendable {
             return "Scrolling to see more content."
         case .browserObserveDom:
             return "Reading the page for more detail."
+        case .browserGetSelectionLinks:
+            return "Collecting the selected links."
         case .browserBack:
             return "Going back to the previous page."
         case .browserForward:

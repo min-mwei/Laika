@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Kyoto Trip Planner - Fixture</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        font-family: "Avenir", "Helvetica Neue", sans-serif;
+        background: #f8f7f4;
+        color: #1f2937;
+      }
+      header {
+        background: #1f2937;
+        color: #f9fafb;
+        padding: 18px 26px;
+      }
+      main {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 26px;
+      }
+      .constraints {
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 16px 18px;
+        border-left: 4px solid #0f766e;
+        margin-bottom: 18px;
+      }
+      .hotel-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 16px;
+      }
+      .card {
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 6px 18px rgba(31, 41, 55, 0.08);
+      }
+      .card h3 {
+        margin: 0 0 6px;
+      }
+      .price {
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+      ul {
+        padding-left: 18px;
+        margin: 0 0 10px;
+        color: #374151;
+        line-height: 1.5;
+      }
+      .notes {
+        margin-top: 18px;
+        background: #ffffff;
+        padding: 16px 18px;
+        border-radius: 12px;
+      }
+      footer {
+        margin-top: 22px;
+        font-size: 12px;
+        color: #6b7280;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Kyoto Trip Planning Board</h1>
+      <div>Fixture page for itinerary + hotel comparison automation</div>
+    </header>
+    <main>
+      <section class="constraints">
+        <h2>Trip constraints</h2>
+        <ul>
+          <li>Dates: April 12–17, 2026 (5 nights) for 2 adults.</li>
+          <li>Budget: under $250/night.</li>
+          <li>Neighborhood: near Gion or walkable to Yasaka Shrine.</li>
+          <li>Must have: private bath, free cancellation until March 20, 2026.</li>
+        </ul>
+      </section>
+      <section class="hotel-grid" aria-label="Hotel options">
+        <article class="card">
+          <h3>Higashiyama Garden Hotel</h3>
+          <div class="price">$232/night • 0.4 km to Gion</div>
+          <ul>
+            <li>Cancellation: free until Mar 20, 2026</li>
+            <li>Breakfast included</li>
+            <li>Quiet alley, limited elevator access</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Gion Riverside Inn</h3>
+          <div class="price">$248/night • 0.2 km to Yasaka Shrine</div>
+          <ul>
+            <li>Cancellation: free until Mar 18, 2026</li>
+            <li>Riverside view, compact rooms</li>
+            <li>Private bath, coin laundry onsite</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Machiya Lane Stay</h3>
+          <div class="price">$210/night • 0.7 km to Gion</div>
+          <ul>
+            <li>Cancellation: free until Mar 22, 2026</li>
+            <li>Traditional townhouse style</li>
+            <li>No breakfast, nearby cafes</li>
+          </ul>
+        </article>
+      </section>
+      <section class="notes">
+        <h2>Attraction notes</h2>
+        <ul>
+          <li>Arashiyama Bamboo Grove: best early morning.</li>
+          <li>Fushimi Inari Taisha: sunrise or late evening to avoid crowds.</li>
+          <li>Nishiki Market: closes by 6 PM.</li>
+          <li>Philosopher’s Path: late afternoon walk.</li>
+          <li>Kyoto Imperial Palace: closed Mondays.</li>
+        </ul>
+      </section>
+      <footer>Fixture content for Laika automation. Ask before booking anything.</footer>
+    </main>
+  </body>
+</html>

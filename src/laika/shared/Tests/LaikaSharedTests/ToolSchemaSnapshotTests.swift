@@ -83,6 +83,9 @@ final class ToolSchemaSnapshotTests: XCTestCase {
             if key == "deltaY" {
                 return .number(120)
             }
+            if key == "maxLinks" {
+                return .number(50)
+            }
             return .number(1200)
         case "bool":
             return .bool(true)

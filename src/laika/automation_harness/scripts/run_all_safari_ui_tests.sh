@@ -98,9 +98,14 @@ scenarios=(
   "scripts/scenarios/hn.json"
   "scripts/scenarios/bbc.json"
   "scripts/scenarios/sec_nvda.json"
+  "scripts/scenarios/collection_selection_links.json"
+  "scripts/scenarios/pitch_news_synthesis.json"
+  "scripts/scenarios/pitch_shopping_constraints.json"
+  "scripts/scenarios/pitch_trip_planning.json"
+  "scripts/scenarios/techmeme_maia_theme.json"
 )
 if [[ "${INCLUDE_LIVE}" == "1" ]]; then
-  scenarios+=("scripts/scenarios/hn_live.json" "scripts/scenarios/bbc_live.json")
+  scenarios+=("scripts/scenarios/hn_live.json" "scripts/scenarios/bbc_live.json" "scripts/scenarios/techmeme_maia_theme_live.json")
 fi
 
 first_run=1

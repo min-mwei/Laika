@@ -455,12 +455,21 @@ while [[ "${attempt}" -lt "${max_attempts}" ]]; do
   if [[ -e "${log_path}" ]]; then
     rm -f "${log_path}"
   fi
-  LAIKA_AUTOMATION_URL="http://127.0.0.1:${PORT}/harness.html" \
-  LAIKA_AUTOMATION_OUTPUT="${OUTPUT_PATH}" \
-  LAIKA_AUTOMATION_TIMEOUT="${TIMEOUT_SECONDS}" \
-  LAIKA_AUTOMATION_QUIT_SAFARI="${QUIT_SAFARI}" \
-  xcodebuild test -project "${XCODEPROJ}" -scheme LaikaUITests -destination "platform=macOS" -resultBundlePath "${result_bundle}" -derivedDataPath "${DERIVED_DATA_PATH}" DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" CODE_SIGN_IDENTITY="${SIGN_IDENTITY}" 2>&1 | tee "${log_path}"
-  XCODE_STATUS=${PIPESTATUS[0]}
+  if [[ "${LAIKA_AUTOMATION_QUIET:-0}" == "1" ]]; then
+    LAIKA_AUTOMATION_URL="http://127.0.0.1:${PORT}/harness.html" \
+    LAIKA_AUTOMATION_OUTPUT="${OUTPUT_PATH}" \
+    LAIKA_AUTOMATION_TIMEOUT="${TIMEOUT_SECONDS}" \
+    LAIKA_AUTOMATION_QUIT_SAFARI="${QUIT_SAFARI}" \
+    xcodebuild test -project "${XCODEPROJ}" -scheme LaikaUITests -destination "platform=macOS" -resultBundlePath "${result_bundle}" -derivedDataPath "${DERIVED_DATA_PATH}" DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" CODE_SIGN_IDENTITY="${SIGN_IDENTITY}" > "${log_path}" 2>&1
+    XCODE_STATUS=$?
+  else
+    LAIKA_AUTOMATION_URL="http://127.0.0.1:${PORT}/harness.html" \
+    LAIKA_AUTOMATION_OUTPUT="${OUTPUT_PATH}" \
+    LAIKA_AUTOMATION_TIMEOUT="${TIMEOUT_SECONDS}" \
+    LAIKA_AUTOMATION_QUIT_SAFARI="${QUIT_SAFARI}" \
+    xcodebuild test -project "${XCODEPROJ}" -scheme LaikaUITests -destination "platform=macOS" -resultBundlePath "${result_bundle}" -derivedDataPath "${DERIVED_DATA_PATH}" DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" CODE_SIGN_IDENTITY="${SIGN_IDENTITY}" 2>&1 | tee "${log_path}"
+    XCODE_STATUS=${PIPESTATUS[0]}
+  fi
   if [[ "${XCODE_STATUS}" -eq 0 ]]; then
     break
   fi

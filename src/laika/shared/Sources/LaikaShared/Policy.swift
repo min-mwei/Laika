@@ -46,6 +46,8 @@ public final class PolicyGate: Sendable {
         switch toolCall.name {
         case .browserObserveDom:
             return PolicyResult(decision: .allow, reasonCode: "observe_allowed")
+        case .browserGetSelectionLinks:
+            return PolicyResult(decision: .allow, reasonCode: "selection_links_allowed")
         case .search:
             if let query = extractSearchQuery(toolCall),
                isSensitiveSearchQuery(query) {
