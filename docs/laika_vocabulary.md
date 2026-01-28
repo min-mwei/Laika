@@ -1,712 +1,337 @@
-# Laika Action Vocabulary (Internal)
+# Laika Workflow Vocabulary (Internal)
 
-This doc defines a small, composable **high-level action vocabulary** Laika can use internally to decompose a plain-English user request into safer, more reviewable steps. It also defines the canonical **low-level primitives** (typed tool calls) that Laika’s planner model can propose and that Policy Gate can mediate.
+This doc defines a small, composable **high-level workflow vocabulary** for Laika: a browser-native system that turns a user's web session (tabs, search results, pages) into collections that can be queried and transformed.
 
-Users should write normal prompts. Laika may translate that intent into one or more internal actions like:
+Laika's thesis:
 
-`Summarize(Entity), Find(Topic, Entity), Search(Query), Save(Artifact), Share(Artifact), Invoke(API)`.
+- The browser is the execution environment (state, identity, permissions)
+- The web is the data source and context
+- LLMs are the capability engine that turns context into structures you can reuse
 
-For end-user scenarios and positioning, see `docs/Laika_pitch.md`.
+The goal is to make multi-source work in the browser predictable:
 
-Laika uses a two-layer model:
+- easy to plan (for the model)
+- easy to gate (for Policy Gate)
+- easy to audit (for the user)
 
-- High-level vocabulary (this doc’s verbs): intent-level building blocks that are easy to plan, gate, and audit.
-- Low-level primitives (typed tool calls): the only executable surface; small, deterministic operations implemented in trusted code (extension/app).
+Laika has a simple yet very extensible pipeline:
 
----
+**Collect -> Ask/Summarize/Compare -> Transform -> Save/Share**
 
-## 1. Intro
+Users should write normal prompts. Internally, Laika can translate intent into one or more of the verbs below.
 
-Laika is a security- and privacy-first AI Browser agent (starting in Safari) designed to help you get real work done on the sites you already use. Instead of being "just a chatbot," Laika is meant to:
-
-- Read what is on the page (treating the web as untrusted input),
-- Take safe, reviewable actions in the browser when you opt in,
-- Produce durable outputs ("artifacts") like tables, memos, packets, and drafts,
-- Keep an audit trail so you can understand what happened and why.
-
-This doc focuses on the internal layer: a set of verbs that map well to how people actually browse, and that are easy to gate, preview, and audit.
-
-If you are interested in the underlying tool execution and safety model, see:
+Related docs:
 
 - `docs/Laika_pitch.md` (product narrative and examples)
-- `docs/LaikaOverview.md` (security, permissions, audit, artifacts)
-- `docs/llm_context_protocol.md` (JSON context protocol and safe rendering contract)
-- `docs/QWen3.md` (Qwen3 programming notes: thinking control, tool calling, deployment)
+- `docs/LaikaOverview.md` (architecture + safety posture)
+- `docs/laika_ui.md` (UI layouts + flows)
+- `docs/llm_context_protocol.md` (JSON protocol + tool schemas)
+- `docs/safehtml_mark.md` (Safe HTML <-> Markdown: capture + rendering + sanitization)
 
 ---
 
-## 2. Why
+## 1) Core Objects (What the Verbs Operate On)
 
-Browsers are where sensitive work happens: money, identity, health, housing, procurement, and internal enterprise tools. Those workflows are not "one prompt = one answer"; they are multi-step and error-prone.
+### Collection
 
-This vocabulary exists to solve a few practical problems:
-
-1) Reduce ambiguity
-- "Help me with this" is unclear; `Find("refund policy", ThisPage)` is clear.
-- Clear intent makes it easier for Laika to plan, and easier for you to review.
-
-2) Make safety boundaries explicit
-- Read-only actions (like `Summarize`) should feel different from:
-  - mutating browser primitives (`browser.click/type/select`), and
-  - explicit egress actions (`Share`, `Invoke`).
-- A compact set of verbs helps the UI and policy layer consistently gate risky steps.
-
-3) Make outcomes reviewable
-- Browsing work often ends in outputs: a comparison table, an appeal letter draft, a packet for a dispute, a shortlist.
-- Explicit `Save/Share` makes outputs first-class.
-
-4) Make workflows repeatable
-- Once you have a good sequence (for example: `Search -> Find -> Summarize -> Save -> Share`), you can reuse it.
-- Repeatability is a prerequisite for automation and for testing reliability.
-
-5) Improve speed without sacrificing control
-- You should be able to say what you want in one line, while still getting previews, approvals, and an audit trail for sensitive steps.
-
----
-
-## 2.5 Low-Level Primitives (Typed Tool Calls)
-
-Laika uses **typed tool calls** as its low-level primitives. The model only **proposes** these calls; Policy Gate decides allow/ask/deny, and trusted code in the extension/app executes them.
-
-Low-level primitives should be:
-
-- Generic: rely on web platform semantics (DOM + accessibility), not site-specific selectors.
-- Efficient: aggressively budgeted, incremental, and safe to run repeatedly.
-- Robust: deterministic output shapes, stable error codes, and self-verifying (re-observe after actions).
-- Safe: treat web content as untrusted input; avoid data egress unless explicit; sanitize URLs.
-
-Core primitives (v1):
-
-- `browser.observe_dom`: capture page text + element handles (read-only).
-- `browser.click`, `browser.type`, `browser.select`, `browser.scroll`: DOM actions.
-- `browser.open_tab`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.refresh`: tab actions.
-- `search`: web search.
-
-Scope note:
-
-- The catalog in this doc is the browser primitive surface (extension + agent core).
-- App-level primitives (artifact store, exports/sharing, connectors, deterministic compute) should also be typed and policy-gated. Their schemas live in `docs/llm_context_protocol.md` under “App-level primitives”.
-
-Notes:
-
-- `handleId` values must come from the current observation.
-- There is no legacy `content.summarize` or Markdown summary path; summaries are returned as `assistant.render` Documents (the "Summarize" verb is high-level intent, not a tool).
-- Tool schemas live in `docs/llm_context_protocol.md`.
-- Tool schemas are the source of truth; section 4.4 summarizes the browser tool catalog and documents reliability/safety rules (and `docs/LaikaOverview.md` goes deeper on `browser.observe_dom`).
-- Primitive error codes and observation `signals` are part of the interface. Treat them as versioned, stable enums with a single source of truth shared across Swift + JS + docs.
-
----
-
-## 3. What
-
-Think of the vocabulary as a small set of building blocks for browsing work. Each action is:
-
-- A high-level intention (what outcome you want),
-- That can expand into multiple low-level steps (navigate, read, extract, calculate, draft),
-- While staying within Laika's safety model (read-only by default; ask before acting; explicit approval for high-risk steps).
-
-### The core "types"
-
-The signatures use a few nouns consistently:
-
-- Entity: the thing you want to operate on.
-- Topic: the question, subject, or criteria you're looking for.
-- Artifact: an output you want created, saved, shared, priced, or bought.
-- API: a configured integration endpoint (for import/export).
-- Expression: a concrete computation you want performed.
-
-#### Entity
-
-An Entity is the target context. Common entities in a browser agent:
-
-- The current page/tab: "this page", "this tab", "the active portal"
-- A site or section: "Amazon cart", "Chase transactions", "EDGAR filings page"
-- A collection: "open tabs", "my saved shortlist", "results on this page"
-- A document: "this PDF", "the invoice", "the statement download"
-
-In prompts, entities can be implied:
-
-- "Summarize this page" (Entity is the active tab)
-- "Find the refund policy on this page" (Entity is the active tab)
-
-Or explicit:
-
-- `Summarize("Stripe invoice page")`
-- `Find("10-K deadline", "SEC EDGAR")`
-
-#### Topic
-
-A Topic is what you're trying to locate or understand:
-
-- "refund policy", "return window", "cancellation terms"
-- "material risks", "revenue breakdown", "pricing tiers"
-- "which plan includes SSO", "why was this claim denied"
-
-Topics work best when you include constraints:
-
-- time window ("last 90 days")
-- geography ("California", "EU")
-- thresholds ("under $1200", "greater than 3% APR")
-- definitions ("count as 'software' spend")
-
-#### Artifact
-
-An Artifact is a durable output. Typical artifacts for Laika:
-
-- A table (comparison, extracted data, summary sheet)
-- A memo/brief (1-pager, executive summary)
-- A checklist (steps to do manually, verification list)
-- A packet (evidence bundle for a dispute/appeal)
-- A draft (email, form text, message to support)
-- A saved collection (shortlist, bookmarks, sources)
-
-Artifacts can be described in plain language:
-
-- "a ranked shortlist of apartments"
-- "a dispute-ready packet"
-- "a price comparison table"
-- "a one-page company brief with citations"
-
-#### API
-
-An API is an integration Laika can call to move data in/out of your workspace, for example:
-
-- Google Sheets (append a row, write a table)
-- Slack (post a message)
-- Notion (create a page)
-- Jira (create a ticket)
-- Internal enterprise endpoints (procurement request, expense report, CRM record)
-
-`Invoke(API)` is intentionally explicit because it represents data egress (or write access) outside the current browsing context.
-
-#### Expression
-
-An Expression is a computation you want done deterministically, such as:
-
-- "129.99 * 1.0825" (price plus tax)
-- "sum of charges tagged 'subscription' in last 90 days"
-- "convert 18 kg to lbs"
-- "APR to monthly payment estimate"
-
----
-
-## 4. How
-
-This section documents the vocabulary, what each action means, and how to get reliable results.
-
-### 4.1 Syntax and usage style
-
-Users should write normal prompts:
-
-- "Find the refund policy on this page and draft a short email to support."
-- "Help me understand why this claim was denied and draft an appeal letter."
-
-Internally, Laika can represent the same intent as an action chain using the vocabulary:
-
-```text
-Find("refund policy", ThisPage)
-Summarize("this page; draft a short refund request email citing the policy")
-Save("refund request email draft")
-Share("refund request email draft")
-```
-
-Notes:
-
-- Quotes make intent unambiguous when a string could be misread as an entity name.
-- Entities can be implicit ("this page") or explicit ("Amazon cart").
-- You can ask Laika to "ask before acting" for anything high-risk, even if the verb implies it.
-
-### 4.2 Action reference
-
-Below, each action includes:
-
-- Purpose: what the action means.
-- Typical output: what you should expect back.
-- Safety notes: how it should behave in a privacy-first browser agent.
-- Examples: compelling prompts and compositions.
-
-Implementation model:
-
-- High-level verbs are *not* Safari APIs. They are intent-level building blocks used for planning and auditing.
-- When a verb requires browser interaction, it must compile down to one or more low-level primitives from the tool catalog (section 4.4), mediated by Policy Gate.
-- Some verbs are primarily “local/model” work (summarization, drafting, calculation) and may require *zero* browser tool calls if the needed context is already present.
-
----
-
-### Summarize(Entity)
-
-Purpose:
-- Produce a grounded digest of an entity (usually the current page), in the format you request.
-
-Typical output:
-- A short summary plus a structured outline, key takeaways, and links/anchors (when available).
-
-Safety notes:
-- Read-only by default. Should not navigate or click unless you explicitly ask it to.
-- If the entity is another link/item ("summarize the first result"), it may use read-only navigation (`browser.open_tab`) to fetch that entity before summarizing.
-
-Reliability notes:
-- The summary must be grounded in the observed content. If the page appears blocked/sparse (paywall, login, overlay, CAPTCHA), say so and do not speculate.
-- If grounding is weak, fall back to an extractive/quoted summary or ask for a re-observe/scroll rather than guessing.
+A **Collection** is a named bundle of sources you want to reason over.
 
 Examples:
 
-```text
-Summarize(ThisPage)
-```
+- "Kyoto trip planning"
+- "Vendor X due diligence"
+- "Model release coverage"
 
-```text
-Summarize("this pricing page; focus on plan differences, limits, and hidden fees")
-```
+### Source
 
-```text
-Summarize("my open tabs about HSA providers; give me a 5-bullet comparison and what to verify next")
-```
+A **Source** is a single captured item.
 
-Good follow-ups:
+Common source types:
 
-```text
-Find("cancellation", ThisPage)
-Find("data retention", ThisPage)
-Summarize("this page; list 5 questions to ask sales based on what's missing or unclear")
-```
+- URL (a page snapshot: url/title + bounded Markdown + capture timestamp)
+- Note (user-authored text)
+- Image (optional, for multimodal grounding)
 
----
+### Artifact
 
-### Find(Topic, Entity)
-
-Purpose:
-- Locate relevant items, passages, or candidates related to a topic within an entity.
-
-Typical output:
-- A short ranked list of matches (with citations/anchors when possible), plus suggested next steps.
-
-Safety notes:
-- Usually read-only within an entity. Use `Search(Query)` for web search / opening search results in a new tab.
-
-Implementation notes (how to keep it robust):
-- Prefer finding within the latest observation (`primary`, `blocks`, `items`, `outline`, `comments`) instead of clicking around.
-- Return matches with quotes/snippets and (when possible) anchors/handles so the user can verify.
-- Treat results as partial on dynamic/virtualized pages; if nothing is found, propose a deterministic next step (scroll + re-observe, re-observe with larger budget, or switch to `Search`).
-- V1 decision: keep `Find` model-driven (observe + scroll + re-observe). Do not add a dedicated `browser.find_text` primitive unless we later need it for reliability/perf.
+An **Artifact** is a saved output generated from a collection.
 
 Examples:
 
-```text
-Find("refund policy", ThisPage)
-```
+- executive brief
+- comparison table
+- timeline
+- study guide / quiz / flashcards
 
-```text
-Find("where to download the 2024 statement PDF", "this bank portal")
-```
+Artifacts should be durable and reopenable.
 
-```text
-Find("2BR under $3500 near Mission District with in-unit laundry", "Zillow")
-```
+### Citation
 
-```text
-Find("SOC 2 report", "vendor security page")
-```
+A **Citation** is a machine-readable pointer from an output back to one or more sources.
 
-Pattern: "Find then extract"
+In Laika, citations are not a vibe; they are a contract:
 
-```text
-Find("pricing table", ThisPage)
-Summarize("this page; extract the pricing table as a 2-column list: plan name → monthly price")
-```
+- If the model makes a claim based on sources, it must cite.
+- If sources do not support an answer, Laika should say so.
 
 ---
 
-### Search(Query)
+## 2) The Vocabulary (High-Level Verbs)
+
+### Collect
 
 Purpose:
-- Run a web search for a query and open the results (typically in a new tab).
+- Create or expand a collection by adding sources.
 
-Typical output:
-- A brief preview of the query (and engine, if specified), then a search results page to browse/summarize.
+There are two primary collection pathways:
+
+1) **Collect from tabs** (session capture)
+- Add current tab / selected tabs / selected links on the current page.
+
+2) **Collect from search** (search mode)
+- Start from a search results tab you opened manually.
+- Or ask Laika to run a search and collect the top ~8-10 links.
+
+Typical outputs:
+- A created/updated collection ID.
+- A list of added sources (URLs/notes/images).
 
 Safety notes:
-- Low-risk navigation, but the query is sent to a search engine (data egress). If the query includes personal/sensitive details, Laika should ask before searching.
-- In practice, treat emails, phone numbers, full addresses, account/order numbers, and other identifiers as sensitive by default.
+- Collect is read-only with respect to websites.
+- Capturing should treat web content as untrusted input.
+
+Implementation mapping (planned tools):
+
+- `collection.create`
+- `collection.add_sources`
+- `source.capture` (capture bounded Markdown snapshot)
+
+Browser assist primitives commonly used:
+
+- `browser.get_selection_links` (collect links from a highlighted selection)
+- `browser.observe_dom` (read a search results page and extract top links)
+- `search` (open a search page in a new tab)
+
+Examples (user prompts):
+
+- "Collect these tabs into a new collection called 'Kyoto trip'."
+- "Collect the top 10 results from this search page into a collection."
+- "Search for 'X' and collect 8 good sources (avoid SEO fluff)."
+
+---
+
+### Ask
+
+Purpose:
+- Ask a question over a collection (multi-source Q&A) with citations.
+
+Typical outputs:
+- An answer grounded only in the collection's sources.
+- Citations for any claim that comes from sources.
+
+Safety notes:
+- If the sources do not contain enough information, Laika should say so and suggest what to collect next.
+
+Implementation mapping:
+
+- LLM task: `web.answer` with collection context packs (index + source snapshots)
 
 Examples:
 
-```text
-Search("SEC filing deadlines")
-```
-
-```text
-Search("standing desk under $700 60x30")
-```
-
-```text
-Search("refund policy Stripe cancellation terms")
-```
-
-Pattern: "Search -> Find -> Summarize"
-
-```text
-Search("vendor SOC 2 report")
-Find("SOC 2", ThisPage)
-Summarize("this page; extract report date, period covered, and audit scope")
-```
+- "What are the top 5 claims across these sources? Cite each claim."
+- "Where do the sources disagree, and what evidence does each side give?"
 
 ---
 
-### Save(Artifact)
+### Summarize
 
 Purpose:
-- Persist an artifact to your workspace (or export it to a file) so it can be reused, audited, and shared later.
+- Produce a grounded summary of:
+  - a single source, or
+  - the whole collection.
 
-Typical output:
-- Confirmation of what was saved, where, and under what title/tags.
+Typical outputs:
+- A short overview + key takeaways + citations.
 
 Safety notes:
-- Saving may be restricted or disabled in private browsing contexts or on sensitive sites (depending on policy).
-- For sensitive workflows, prefer saving derived/aggregated artifacts rather than raw page text or screenshots.
+- Summaries must be grounded in the captured source text.
+- If content is missing (blocked by login/paywall), say so rather than guessing.
+
+Implementation mapping:
+
+- LLM task: `web.summarize` (single-page) or `web.answer` (collection overview)
+- Optionally saved via `artifact.save`
 
 Examples:
 
-```text
-Save("the price comparison table as laika/laptops_2026Q1.md")
-```
-
-```text
-Save("this run log and outputs under 'Insurance Appeal - Jan 2026'")
-```
-
-```text
-Save("a redacted version of the dispute packet (no account numbers)")
-```
+- "Summarize this source in 5 bullets with citations."
+- "Give me a one-paragraph overview of the whole collection."
 
 ---
 
-### Share(Artifact)
+### Compare
 
 Purpose:
-- Send an artifact outside the current Laika workspace: email, Slack, copy-to-clipboard, export as PDF, etc.
+- Produce a structured comparison across sources or options.
 
-Typical output:
-- A preview of what will be shared, the destination, and a confirmation step.
+Compare is the "decision" verb: it should highlight differences, tradeoffs, and disagreements.
+
+Typical outputs:
+- A comparison table, pros/cons list, or ranked recommendation.
 
 Safety notes:
-- Sharing is data egress. It should be explicit, previewed, and gated.
-- Redaction should be the default if the artifact contains personal or sensitive data.
+- Comparisons must cite the evidence for each row/claim.
+- Avoid invented attributes; if something is unknown, label it unknown.
+
+Implementation mapping:
+
+- LLM task: `web.answer` (freeform compare with citations)
+- Or a transform: `transform.run` with `type: "comparison"` (preferred for table outputs)
 
 Examples:
 
-```text
-Share("the appeal letter draft to my email")
-```
-
-```text
-Share("the apartment shortlist to Slack #housing")
-```
-
-```text
-Share("the vendor comparison table as a PDF")
-```
-
-Pattern: "Summarize -> Save -> Share"
-
-```text
-Summarize("this page; produce a 1-page brief with citations")
-Save("1-page brief")
-Share("1-page brief")
-```
+- "Compare these vendors on SSO, retention, pricing, and export options. Cite each cell."
+- "Compare the claims across sources and list points of disagreement."
 
 ---
 
-### Invoke(API)
+### Transform
 
 Purpose:
-- Call a configured external integration to import/export structured data or trigger an action.
+- Generate a named, reusable output format from a collection.
 
-Typical output:
-- The API call result (created row/page/ticket/message) plus a link/reference ID.
+Transforms are how Laika turns "a pile of sources" into something you can ship.
+
+Typical outputs:
+- An artifact ID + renderable document.
+
+Common transform types (directionally):
+
+- `comparison` (table)
+- `timeline`
+- `executive_brief`
+- `report`
+- `outline`
+- `study_guide`
+- `quiz`
+- `flashcards`
 
 Safety notes:
-- Treat as explicit egress/write. Require the destination to be clear and the payload previewed.
-- Prefer sending structured, minimal data (for example: a summary table, not raw page text).
+- Transform outputs must be safe to render (Markdown -> sanitized HTML in trusted UI).
+- If interactive content is ever supported, it must run in a sandboxed surface.
+
+Implementation mapping:
+
+- `transform.list_types`
+- `transform.run` (with optional config)
+- `artifact.save` / `artifact.open`
 
 Examples:
 
-```text
-Invoke("GoogleSheets.append: Apartment Shortlist")
-```
-
-```text
-Invoke("Slack.postMessage: #procurement")
-```
-
-```text
-Invoke("Jira.createIssue: VENDOR-SECURITY-REVIEW")
-```
-
-Pattern: "Save -> Invoke"
-
-```text
-Save("a 10-row table of the shortlisted options with columns: name, price, pros, cons, link")
-Invoke("GoogleSheets.writeTable: Purchases 2026")  // optional
-```
+- "Transform this collection into an executive brief with citations."
+- "Create a timeline of events mentioned, and link each event to sources."
 
 ---
 
-### 4.3 Composition patterns (how the verbs fit together)
+### Discover (Suggest Next Sources)
 
-Most browsing work follows a few repeatable shapes:
+Purpose:
+- Expand a collection intelligently by recommending what to read next.
 
-1) Understand quickly (read-only)
+Typical outputs:
+- A short list of suggested links with reasons and scores.
 
-```text
-Summarize(Entity)
-Find(Topic, Entity)
-Search(Query)
-```
+Safety notes:
+- Suggestions must not auto-open or auto-collect without explicit user intent.
 
-2) Export and integrate into your workflow
+Implementation mapping (direction):
 
-```text
-Summarize(Entity)
-Save(Artifact)
-Invoke(API)
-Share(Artifact)
-```
+- Extract outbound links from captured sources
+- Rank/filter via `web.answer`/`web.extract` style tasks
+- Add via `Collect` tools
 
-For multi-source collections + transforms (comparison tables, timelines, new viewer tabs), see `docs/LaikaOverview.md` (Use Case Walkthroughs) and `src/laika/PLAN.md` (P0 scenarios + phases).
+Examples:
+
+- "Suggest 8 additional sources worth adding next and explain why."
 
 ---
 
-### 4.4 Low-Level Primitives (typed tool calls + LLM integration)
+### Save
 
-This doc’s verbs (e.g., `Find`, `Search`, `Summarize`) are **high-level intent**. Execution happens via **low-level primitives** (typed tool calls) that the model proposes and Laika enforces.
+Purpose:
+- Persist an output as an artifact.
 
-Core rules:
+Implementation mapping:
 
-- The web is **untrusted input**; the model must treat page text as data, not instructions.
-- The model never performs actions directly; it proposes **tool calls**.
-- Tool calls are mediated by **Policy Gate** (allow/ask/deny), executed by trusted code, and logged.
+- `artifact.save`
 
-#### Primitive lifecycle (one step)
+Examples:
 
-1. Observe: capture page context + element handles.
-2. Plan: model emits an LLMCP JSON response with `assistant.render` plus optional `tool_calls`.
-3. Gate: Policy Gate decides allow/ask/deny per tool call.
-4. Act: allowed tools run (JS in the extension or Swift in Agent Core).
-5. Re-observe: capture fresh state after navigation/interaction.
-
-#### Planner response contract (current prototype)
-
-The planner model must return **exactly one LLMCP response object**:
-
-```json
-{
-  "protocol": { "name": "laika.llmcp", "version": 1 },
-  "type": "response",
-  "sender": { "role": "assistant" },
-  "in_reply_to": { "request_id": "..." },
-  "assistant": { "render": { "...": "Document" } },
-  "tool_calls": []
-}
-```
-
-Rules:
-
-- `assistant.render` is required; never emit raw HTML or Markdown.
-- If no action is needed, return `tool_calls: []`.
-- Tool names must match the allowed list below.
-- Arguments must match each tool’s schema (no extra keys).
-- Use only `handleId` values from the latest observation; never invent handle ids.
-- Prefer at most **one** tool call per step (for determinism and reviewability).
-
-Parsing behavior (important for prompting):
-
-- Laika extracts the **first top-level JSON object** from the model output; `<think>...</think>` and code fences are stripped first.
-- Responses are validated against `laika.llmcp.response.v1`; invalid responses are rejected.
-- Unknown tool names are ignored (not executed).
-- Minor JSON issues may be repaired (e.g., trailing commas). For `browser.observe_dom`, `maxItemsChars`/`maxItemsChar` are normalized to `maxItemChars`.
-
-Implementation note: Laika uses a JSON-only prompt + LLMCP parser. See `docs/QWen3.md` for thinking control and `docs/llm_context_protocol.md` for the protocol schema.
-
-#### Primitive catalog (authoritative)
-
-This table mirrors `docs/llm_context_protocol.md` (treat that doc as the schema source of truth). This is the **only** browser tool surface Laika should carry forward. App-level primitives (artifacts, exports, connectors, deterministic compute) are defined in `docs/llm_context_protocol.md` under “App-level primitives”.
-
-| Category | Primitive | What it does | Arguments (JSON) | Runs in |
-| --- | --- | --- | --- | --- |
-| Observation | `browser.observe_dom` | Capture/refresh page text + structured blocks/items/comments + element handles. | `{ "maxChars"?: number, "maxElements"?: number, "maxBlocks"?: number, "maxPrimaryChars"?: number, "maxOutline"?: number, "maxOutlineChars"?: number, "maxItems"?: number, "maxItemChars"?: number, "maxComments"?: number, "maxCommentChars"?: number, "rootHandleId"?: string }` | Extension (content script via background) |
-| DOM action | `browser.click` | Click a link/button element in the page. | `{ "handleId": string }` | Extension content script |
-| DOM action | `browser.type` | Type into an editable field (input/textarea/contenteditable). | `{ "handleId": string, "text": string }` | Extension content script |
-| DOM action | `browser.select` | Select a value in a `<select>`. | `{ "handleId": string, "value": string }` | Extension content script |
-| DOM action | `browser.scroll` | Scroll the page by a delta. | `{ "deltaY": number }` | Extension content script |
-| Navigation | `browser.open_tab` | Open a URL in a new tab. | `{ "url": string }` | Extension background |
-| Navigation | `browser.navigate` | Navigate the current tab to a URL. | `{ "url": string }` | Extension background |
-| Navigation | `browser.back` | Go back in tab history. | `{}` | Extension background |
-| Navigation | `browser.forward` | Go forward in tab history. | `{}` | Extension background |
-| Navigation | `browser.refresh` | Reload the current page. | `{}` | Extension background |
-| Navigation | `search` | Open search results for a query (engine selection is optional). | `{ "query": string, "engine"?: string, "newTab"?: boolean }` | Extension background |
-
-#### Implementing primitives (generic, efficient, robust)
-
-Low-level primitives should be intentionally boring: small, deterministic, and site-agnostic. The reliability comes from (1) a strong observation primitive, (2) strict handle semantics, and (3) a re-observe/verify loop.
-
-`browser.observe_dom` (the foundation):
-
-- Extract a compact, structured view of the current page that works across content types:
-  - `primary`: best-effort “main content” (article body, product detail, doc text).
-  - `blocks`: paragraph-ish chunks with link density (helps ignore nav/ads).
-  - `items`: list-like pages (search results, feeds, tables-as-cards).
-  - `outline`: headings/section structure.
-  - `comments`: discussion threads (often outside the primary root).
-  - `elements`: interactive controls (role + label + handleId) for safe actioning.
-  - `signals`: access/visibility hints (paywall/login/overlay/captcha/sparse_text/virtualized_list/etc).
-- Include observation metadata in every result (at minimum: `documentId`, `navigationGeneration`, and `observedAtMs`). Handle validity should be tied to this metadata. (Legacy `navGeneration` is accepted during the transition.)
-- Be aggressively budgeted:
-  - Clamp counts and chars (`maxChars`, `maxItems`, `maxBlocks`, ...).
-  - Prefer viewport-first extraction; include “tail” coverage only if budget remains.
-  - Avoid expensive style/layout queries; use heuristics that work off DOM + cheap bounding checks.
-- Support tight scoping:
-  - `rootHandleId` should re-observe a specific container/section (a "zoom in") while preserving the same output schema.
-- Be robust to modern web primitives:
-  - Shadow DOM: traverse open shadow roots; treat closed shadow as not inspectable and surface a `signal`.
-  - Iframes: traverse same-origin frames; emit a `signal` for cross-origin frames you can’t read.
-  - Virtualized/infinite lists: treat output as partial; rely on `browser.scroll` + re-`browser.observe_dom` loops.
-  - Non-text pages (canvas/images/video): rely on accessible names/alt text when present; otherwise emit `signal`s like `non_text_content` and return a minimal observation.
-- Never emit raw HTML. Prefer line-preserving text with lightweight structure prefixes (headings, lists, quotes, code) so summarization is stable under truncation.
-- Always mint action handles (`handleId`) only from trusted extraction; never from model text.
-
-Handles + staleness (cross-cutting):
-
-- Bind handles to a specific (`documentId`, `navigationGeneration`) and invalidate them on navigation/refresh. If the current page metadata does not match, return `STALE_HANDLE` and require a fresh `browser.observe_dom`.
-- Make handle resolution resilient:
-  - Keep an internal handle store (handleId -> element reference + fallback selectors/role/label hints).
-  - If resolution fails, return a stable `STALE_HANDLE` / `NOT_FOUND` error and force a fresh `browser.observe_dom`.
-
-DOM action primitives (`browser.click`, `browser.type`, `browser.select`, `browser.scroll`):
-
-- Treat each action as “attempt once, then verify”:
-  - Precondition checks: element exists, is connected, is visible/disabled state, is the expected role/type.
-  - Perform the action (scroll into view if needed).
-  - Postcondition strategy: don’t guess; re-`browser.observe_dom` and let the planner decide next.
-- Keep overlay detection lightweight (cheap hit test first, cache overlay candidate briefly) to avoid repeated deep scans on large pages.
-- Use instant scrolling (`behavior: "auto"`) for deterministic automation; avoid smooth scrolling for tool execution.
-- Keep error codes stable and meaningful (`NOT_FOUND`, `STALE_HANDLE`, `NOT_INTERACTABLE`, `BLOCKED_BY_OVERLAY`, ...). Models learn the retry strategy from these.
-
-Canonical primitive error codes (v1):
-
-- Tool execution results should use a stable shape: `{ "status": "ok" }` or `{ "status": "error", "error": "<code>" }`.
-- Treat `error` codes as a versioned enum (shared across Swift + JS) so the orchestration layer can respond deterministically.
-- Use UPPER_SNAKE_CASE strings for codes (matches the extension/tool surface and avoids casing drift).
-
-Common codes (v1):
-
-- `INVALID_ARGUMENTS`
-- `MISSING_URL`, `INVALID_URL`
-- `NO_ACTIVE_TAB`, `NO_TARGET_TAB`, `NO_CONTEXT`
-- `UNSUPPORTED_TOOL`
-- `STALE_HANDLE`, `NOT_FOUND`, `NOT_INTERACTABLE`, `DISABLED`, `BLOCKED_BY_OVERLAY`
-- `RUNTIME_UNAVAILABLE`
-- `SEARCH_UNAVAILABLE`, `SEARCH_FAILED`
-- `OPEN_TAB_FAILED`, `NAVIGATION_FAILED`, `BACK_FAILED`, `FORWARD_FAILED`, `REFRESH_FAILED`
-
-Navigation primitives (`browser.open_tab`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.refresh`, `search`):
-
-- Sanitize URLs and restrict to `http(s)`; never allow `javascript:`, `data:`, `file:`, or extension URLs.
-- `search` should build URLs from engine templates and treat the query as data egress (gate sensitive queries).
-- Use a conservative sensitive-query detector (emails/phones/account-like strings) and default to "ask" when unsure.
-
-Canonical `signals` from `browser.observe_dom` (v1):
-
-- Treat these as a versioned enum (shared across Swift + JS) so the model and UI can reliably explain limitations.
-
-Signals should be designed to be:
-
-- Present/absent booleans (no values), so they are easy to gate and easy to prompt on.
-- Conservative (better to say "maybe blocked" than to pretend content is visible).
-
-Currently emitted (v1):
-
-- `paywall_or_login`, `consent_modal`, `overlay_blocking`, `captcha_or_robot_check`
-- `age_gate`, `geo_block`, `script_required`
-- `url_redacted`
-- `sparse_text`, `non_text_content`
-- `cross_origin_iframe`, `closed_shadow_root`
-- `virtualized_list`, `infinite_scroll`
-- `pdf_viewer`
-
-Testing/hardening strategy:
-
-- Unit test the pure logic (URL sanitation, handle invalidation rules, extraction heuristics).
-- Maintain a small “capability probe” harness: run `observe_dom`/click/type/scroll on representative sites (news, web apps, ecommerce, docs, feeds) and record failure modes.
-- Start with a fixed set of 10-20 probes and track simple metrics (success rate per primitive, common failure codes, and median/p95 timings).
-
-Orchestration invariants (high-level verbs built on primitives):
-
-- Prefer at most 1 primitive call per step (reviewability and determinism).
-- Re-observe after any navigation or DOM action before making another decision.
-- Enforce step budgets and stop conditions (return partial results + "what I need next" instead of looping).
-
-#### Execution surfaces (prototype)
-
-- Policy Gate runs in Swift (Agent Core).
-- DOM actions (`browser.click/type/select/scroll/observe_dom`) execute in `content_script.js`.
-- Tab actions (`browser.open_tab/navigate/back/forward/refresh/search`) execute in `background.js`.
-- The UI renders `assistant.render` from the LLMCP response; no summary streaming.
-
-#### Summary guidance (LLMCP)
-
-Summaries are returned via `assistant.render` in the LLMCP response:
-
-- `browser.observe_dom` emits line-preserved `text` with structure prefixes (`H2:`, `- `, `> `, `Code:` …) plus `blocks/items/comments/outline/signals`.
-- `SummaryInputBuilder` picks a representation (list vs page text vs comments) and compacts it without losing structural hints.
-- Agent Core validates grounding and replaces responses with a fallback summary when needed.
-
-See `docs/dom_heuristics.md` and `docs/llm_context_protocol.md` for the prompt rules and response schema.
-
-#### Debugging (LLM + tools)
-
-- LLM traces: `~/Laika/logs/llm.jsonl` (or the sandbox container path). Control full prompt/output logging with `LAIKA_LOG_FULL_LLM=0`.
-- Set `LAIKA_DEBUG=1` to log lightweight extraction/debug events.
+- "Save this as 'Vendor X decision memo'."
 
 ---
 
-## 5. Example decompositions
+### Share
 
-These examples show how a plain-English user prompt can map to the internal vocabulary. End-user scenario narratives live in `docs/Laika_pitch.md`.
+Purpose:
+- Export an artifact (clipboard/file/share sheet) or send it via an integration.
 
-### Example 1: Refund terms -> checklist + email draft
+Safety notes:
+- Share is explicit data egress. It should always be user-visible and policy-gated.
 
-User prompt:
+Implementation mapping:
 
-```text
-Summarize this page, find the exact refund and cancellation terms, and draft a short email asking for a refund. Ask before sending anything.
-```
+- `artifact.share`
+- `integration.invoke` (optional)
 
-Internal action chain:
+Examples:
 
-```text
-Summarize(ThisPage)
-Find("refund + cancellation terms", ThisPage)
-Save("refund terms + draft email (from this chat)")  // optional
-```
+- "Export the comparison table as CSV."
+- "Copy the executive brief to my clipboard."
 
 ---
 
-### Example 2: Weekly ops -> export to your tools
+## 3) Composition Patterns
 
-User prompt:
+These are common, repeatable workflows.
 
-```text
-Find postings that match my criteria from the last 7 days, build a table (company, role, location, link, notes), and ask before exporting it to my tracker and sharing a summary.
-```
+### Pattern A: Search-first research
 
-Internal action chain:
+- Collect (search -> top N links)
+- Summarize (overview)
+- Compare (differences)
+- Transform (brief/table)
+- Save/Share
 
-```text
-Search("weekly criteria")
-Summarize("the results; produce a table with columns: company, role, location, link, notes")
-Save("structured table")                 // optional
-Invoke("GoogleSheets.writeTable: Tracker")  // optional
-Invoke("Slack.postMessage: #channel")       // optional
-Save("run outputs")
-```
+### Pattern B: Tabs-first synthesis
+
+- Collect (tabs/selection)
+- Ask (Q&A with citations)
+- Transform (timeline/comparison)
+- Save/Share
+
+### Pattern C: Study loop
+
+- Collect (reading list)
+- Summarize (key concepts)
+- Transform (flashcards/quiz)
+- Save
+
+---
+
+## 4) Low-Level Primitives (Typed Tool Calls)
+
+The high-level verbs above compile down to **typed tool calls** mediated by Policy Gate.
+
+Source of truth: `docs/llm_context_protocol.md`.
+
+At a minimum, the collection workflow depends on:
+
+- `browser.observe_dom`
+- `browser.get_selection_links`
+- `search`
+- `collection.create`
+- `collection.add_sources`
+- `source.capture`
+- `transform.run`
+- `artifact.save` / `artifact.open` / `artifact.share`

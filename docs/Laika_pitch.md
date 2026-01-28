@@ -1,271 +1,198 @@
-# Laika: AI Fortress - Scenarios First
+# Laika: AI Fortress for Web Work (Collect -> Ask -> Transform)
 
-**Understand your intent. Do the work. Keep it private.**
+**Move faster on the web and trust what you produce. Private by default.**
 
-Browsers are great at showing pages. They are terrible at finishing work.
+Browsers are great at showing pages. They are terrible at helping you *work with* what you read.
 
-Laika is a privacy-first AI agent embedded in your browser, starting in **Safari (macOS + iOS)**, with **Chrome (Android)** planned later. It turns questions into outcomes in minutes across the sites you already use: portals, forms, dashboards, and "do the thing" workflows.
+Laika is a privacy-first **AI fortress** in **Safari (macOS + iOS)**: a protected workspace that turns your browsing session (open tabs, search results, and the pages you visit) into **collections**. From there, Laika runs LLM-powered **queries and transforms** (summaries, comparisons, briefs, timelines, quizzes) with citations back to sources so the output is reviewable and trustworthy.
 
-Laika is an **AI Fortress**: it turns your intent into safe, fast progress inside the browser. It does the mundane work (clicking, tab-juggling, copying, reformatting) and produces reviewable artifacts (tables, drafts, checklists) so you can spend your time thinking, asking better questions, and making decisions.
+Laika's thesis:
 
-## The problem (what your browser makes you do today)
+- The browser is the execution environment (state, identity, permissions)
+- The web is the data source and context
+- LLMs are the capability engine that turns context into structures you can reuse
 
-- You become the "glue" between tabs and Office apps: copy/paste, compare, reconcile, reformat, repeat.
-- The web is full of portals and edge cases: filters, logins, attachments, confirmations, hidden fees, time windows.
-- A task is not a page: it is 10-50 steps across pages, menus, PDFs, and forms.
-- Mistakes are expensive: one wrong checkbox, one missed policy clause, one wrong total.
-- You cannot safely delegate: the moment money, identity, healthcare, or work systems are involved, "just let the AI do it" feels risky.
+The browser gives you state (sessions, identity, permissions). The web gives you context. LLMs turn that context into structures you can reuse.
 
-## Why an AI Fortress (not a cloud AI browser)
+That stack enables a fundamentally different way to interact with information: instead of tab-juggling and copy/paste, you build durable outputs directly from your session.
 
-AI browsers like Perplexity Comet are pushing a compelling idea: the browser becomes an agent that can read, research, and act on your behalf. They can be genuinely useful for open-web research, summaries, and cross-tab comparisons. In practice, users still hit four recurring problems when they try to trust cloud-first AI browsers with real work:
+Laika has a simple yet very extensible pipeline:
 
-1) Trust and privacy tradeoffs
-- To be useful, a cloud-first AI browser often needs to see what you see: logged-in pages, inboxes, calendars, carts, and forms.
-- If that processing happens in the cloud, you are forced into a hard choice: convenience vs. privacy.
-- The more the browser learns about you across sites, the higher the incentive (and temptation) to collect and retain more of your browsing context.
+1. **Collect** sources (from tabs or search)
+2. **Ask / Summarize / Compare** with citations
+3. **Transform** into an artifact (table, brief, timeline, quiz, etc.)
+4. **Save / Share** what you created
 
-2) Safety: the web is untrusted input
-- Security researchers have repeatedly shown that "agentic browsing" expands the attack surface: hidden instructions, malicious links, fake shops, and phishing pages can steer an AI into doing the wrong thing.
-- Example failure modes: a "summarize this page" request gets hijacked by hidden instructions; a fake shop or phishing flow convinces the agent to click/pay; a crafted link triggers the assistant to pull from memory/connected apps and leak data.
-- When the agent can click, buy, download, or send messages, "getting tricked" stops being annoying and becomes costly.
+## The Problem (Why Browsing Doesn't Convert to Decisions)
 
-3) Reliability: the agent gets stuck
-- Real websites are messy: popups, dynamic content, inconsistent flows, A/B tests, and fragile selectors.
-- Early agentic browsers can be slower than doing it yourself and frequently fail on the last mile (the part that matters).
+- Your research lives in 10-50 tabs, search results, and half-read pages.
+- Copy/paste into Docs/Sheets breaks traceability and wastes time.
+- Generic chatbots are not grounded in your reading set; you can't reliably answer "where did that come from?"
+- The real work is synthesis across sources: reconcile claims, extract evidence, and produce a shareable output.
 
-4) Accountability: what happened, exactly?
-- In high-stakes work, you need a paper trail: what it read, what it changed, what it assumed, what it could not verify.
-- "It said it did it" is not enough.
+## The Shift: Collections and Artifacts
 
-## What Laika is (in plain English)
+Laika turns the browser into a protected workspace:
 
-Laika is built for the workflows where browsers and cloud-first AI browsers fall down:
+- **Collection**: a named bundle of sources (URLs, notes, images) captured from your browsing session and searches.
+- **Source**: a single captured item (URL + title + bounded Markdown snapshot + provenance).
+- **Artifact**: a saved output generated from a collection (brief, table, timeline, quiz, etc.).
 
-- Private by default: designed so sensitive workflows do not have to leave your device.
-- In control by default: you can keep Laika read-only, or let it act with clear "ask before acting" moments.
-- Outcome-driven: it produces artifacts you can review, save, and share (tables, drafts, packets, memos, checklists).
-- Built for long tasks: pause/resume, checkpoints, and a run log so you can pick up where you left off.
-- Vocabulary-driven: it decomposes intent into a small, reviewable set of actions (read vs. write), so it stays predictable under pressure.
+The goal is not "one prompt = one answer". The goal is repeatable workflows where sources and outputs stay linked.
 
-For architecture and safety posture, see `docs/LaikaOverview.md`.
+## Collect (Two Ways)
 
-## The niche Laika targets
+Laika supports two primary collection entry points.
 
-Laika is built for the web workflows that are:
+### 1) Collect From Browser Tabs (Session Capture)
 
-- High-friction: 10-50 steps across tabs, menus, and forms
-- High-stakes: money, identity, health, insurance, work systems
-- High-trust: you want the outcome, but you do not want to hand your sessions and personal data to a cloud agent
+Use Laika to turn your current browsing session into a collection:
 
-This is not theoretical. Even the leading "computer use" / agentic tooling explicitly calls out unique risks on the internet: isolate the agent, avoid giving it sensitive data (like account login information), and ask a human to confirm meaningful real-world consequences (like financial transactions). It also warns that models can follow commands found in webpage content and recommends precautions against prompt injection (see: Anthropic "Computer use tool": https://docs.anthropic.com/en/docs/build-with-claude/computer-use).
+- Add the current tab.
+- Add selected tabs.
+- On a thread/feed/search page, select a bunch of links and ask Laika to collect them.
 
-Security researchers have also demonstrated prompt injection and scam flows against agentic browsers (see: Brave research on indirect prompt injection in Comet: https://brave.com/blog/comet-prompt-injection/ and Guardio Labs "Scamlexity": https://guard.io/labs/scamlexity-we-put-agentic-ai-browsers-to-the-test-they-clicked-they-paid-they-failed).
+Laika captures a bounded Markdown snapshot of each source so the collection can be queried later, and it preserves provenance (URL/title/captured-at).
 
-Laika's answer is the AI Fortress: on-device by default, strict separation of trusted user intent vs untrusted web content, and a policy-gated action interface with previews and an audit trail.
+### 2) Collect From Web Search (Search Mode)
 
-## Why Safari first
+Sometimes you don't have the sources yet.
 
-Safari is a large surface area where users are already doing sensitive work, especially on mobile. As of Dec 2025, Safari is ~22% of worldwide mobile browser share and ~5% of worldwide desktop browser share (StatCounter: https://gs.statcounter.com/browser-market-share/mobile/worldwide and https://gs.statcounter.com/browser-market-share/desktop/worldwide).
+Laika can collect 8-10 links starting from:
 
-## Why now
+- A search results tab you opened manually ("collect the top 10 results").
+- A Laika-initiated web search ("search for X and collect the best 10 sources").
 
-Agentic browsing is arriving, but safety and privacy are the real blockers. Models are good enough to click around; what is missing (and what users want) is the fortress: clear boundaries, human-in-the-loop controls for irreversible actions, and a durable audit trail.
+This makes "build a reading list" a first-class action, not a manual tab explosion.
 
-## Where it shines (real scenarios)
+## What Laika Does With Your Collection
 
-Each scenario includes: what you do today, what Laika does, and what you get at the end.
+### Ask (Q&A with citations)
+Ask questions across everything you've collected:
 
-### 1) Multi-source news synthesis: from thread to understanding
+- "What are the key claims and where do the sources disagree? Cite each claim."
+- "Extract the dates/metrics mentioned and cite the source for each."
+- "What does Source A say that Source B does not?"
 
-Today:
-- You open 10–20 links, skim each one, and mentally keep track of what’s different.
+### Summarize (single source or whole collection)
+Generate:
 
-Laika:
-- Lets you select a block of links (a thread/feed), add them to a collection, ask “what’s different across sources?”, and generate a comparison table or timeline that you can open in its own viewer tab.
+- A one-paragraph overview of the whole collection.
+- Per-source summaries.
+- Key takeaways with evidence.
 
-You get:
-- A durable synthesis you can reuse/share, with citations back to each source.
+### Compare (structured differences)
+Compare is the "decision" move:
 
-Try it:
-- "On this thread, select all the links. Add them to a collection and tell me the key differences in how each outlet is covering this story. Then generate a comparison table and a timeline."
+- Vendors/products
+- Perspectives across outlets
+- Approaches across papers/blogs
 
-### 2) Shopping with constraints (and a paper trail)
+Laika can output structured comparison tables and include direct links back to sources.
 
-Today:
-- You compare 8 tabs, forget why you opened half of them, and still miss total cost (tax/shipping/fees) and return/warranty terms.
+### Transform (turn sources into artifacts)
+Transforms generate reusable outputs from the collection, for example:
 
-Laika:
-- Finds candidates, builds a total-cost-and-tradeoff table (including direct order links and policy details), and (if you ask) drives checkout until the final review screen and stops.
+- Executive brief / report / outline
+- Comparison table / pros-cons
+- Timeline
+- Glossary / FAQ
+- Study guide / quiz / flashcards
 
-You get:
-- A comparison you can trust, plus a purchase flow that stops before you pay.
+The intent is: you shouldn't have to reinvent prompts every time you want a familiar format.
 
-Try it:
-- "Find 5 options that match my criteria, compare total cost (tax/shipping/warranty), recommend one with trade-offs, put it in a table with order links, and if I say 'go' take me to the final checkout review and stop before placing the order."
+### Discover (suggest what to read next)
+When your sources contain outbound links, Laika can recommend the most valuable next sources to add ("suggest 8 more links worth reading"), so collections can grow intelligently instead of randomly.
 
-### 3) Trip planning: from constraints to a booking-ready plan
+## Example Workflows (How Users Actually Use This)
 
-Today:
-- You open a dozen tabs for flights, hotels, and "what should we do", then lose track of trade-offs, fees, and cancellation rules.
+### 1) Thread -> coverage comparison + timeline
 
-Laika:
-- Finds options that match your constraints, prices them with explicit assumptions, and turns the research into a shareable itinerary with links (and "what to verify" notes).
+Collect (from a thread/feed/search page):
+- "Collect the links I selected into a new collection called 'Model release coverage'."
 
-You get:
-- A saved plan: options table + itinerary + "what to verify" checklist.
+Ask:
+- "How do these outlets differ in their claims? Quote or paraphrase with citations."
 
-Try it:
-- "Plan a 5-day Kyoto trip in April for two adults: find 3 hotels near Gion under $250/night, suggest a simple day-by-day itinerary, and save it. Ask before booking anything."
+Transform:
+- "Create a comparison table with columns: outlet, main claim, evidence, link."
+- "Create a timeline of events mentioned across sources, with citations."
 
-### 4) Health research: from web reading to a cited brief
+### 2) Study mode: reading list -> flashcards + quiz
 
-Today:
-- You skim contradictory pages, miss key caveats, and still don't know what to ask next.
+Collect (tabs or search):
+- "Search for 'backpropagation intuition' and collect 10 good explanations."
 
-Laika:
-- Searches credible sources, extracts evidence with citations, highlights red flags/contraindications, and drafts questions to bring to a clinician.
+Transform:
+- "Create 20 flashcards (question/answer) focused on misconceptions."
+- "Generate a 10-question quiz and include explanations."
 
-You get:
-- A one-page brief with sources + a question list (research support, not medical advice).
+### 3) Vendor due diligence -> decision memo
 
-Try it:
-- "Research evidence-backed options for chronic migraine: summarize what helps, what the evidence says, and what questions I should ask my doctor. Include citations and save a one-page brief."
+Collect:
+- "Collect these vendor docs: pricing, security page, DPA, and support terms into a collection called 'Vendor X'."
 
-### 5) Subscriptions, refunds, and "what did I actually agree to?"
+Compare:
+- "Compare Vendor X vs Vendor Y on data retention, SSO, audit logs, and pricing."
 
-Today:
-- You hunt for the one paragraph that matters, then try to find the "cancel" button, then wonder if you'll be charged anyway (or lose access immediately).
+Transform:
+- "Write a one-page decision memo with a 'what we know' and 'what to verify' section, with citations."
 
-Laika:
-- Finds the exact refund/cancellation language, locates the cancellation path, and (if you ask) navigates to the final cancel/review screen and stops. It can also draft a short message that cites the relevant terms.
+### 4) Trip planning -> options table + itinerary
 
-You get:
-- A checklist of what to verify, plus a ready-to-send draft and saved evidence when applicable.
+Collect (search-first):
+- "Search for hotels near Gion under $250/night and collect 10 options."
 
-Try it:
-- "Find the refund/cancellation terms, take me to the final cancellation review screen and stop, and draft a short refund request message citing the terms. Ask before submitting anything."
+Transform:
+- "Make a comparison table (price, cancellation, walkability, notes) and recommend 2 with tradeoffs."
+- "Draft a simple 5-day itinerary and a checklist of what to verify before booking."
 
-### 6) Credit cards: suspicious charge -> dispute-ready packet
+### 5) Writing mode: sources -> outline -> brief -> email
 
-Today:
-- You spot a charge you don't recognize, click through transaction details, and assemble evidence manually while the clock is ticking.
+Collect:
+- "Collect these 8 sources into a collection called 'Q1 market update'."
 
-Laika:
-- Looks into the charge, totals similar charges, finds refund/cancellation paths, and drafts a dispute packet and support message.
+Transform:
+- "Create a detailed outline for a 1,000 word report with section headings and citations."
+- "Write an executive brief (one page) with a risks/open-questions section."
+- "Rewrite the brief as a short email update for leadership."
 
-You get:
-- A dispute-ready packet (timeline, amounts, links/evidence) you can save and reuse.
+### 6) Shopping shortlist -> total cost comparison (with guardrails)
 
-Try it:
-- "Look into this charge, total similar charges in the last 90 days, and draft a dispute packet with evidence links plus a message to the merchant. Save a redacted version and ask before emailing anything."
+Collect (search-first):
+- "Search for 5 options that match my criteria and collect the product pages."
 
-### 7) Insurance claims: denial -> appeal letter + attachment checklist
+Compare/Transform:
+- "Build a table with base price, shipping, tax estimate, warranty, return window, and order links."
+- "Recommend one and list what I should verify at checkout."
 
-Today:
-- You bounce between the portal and a policy PDF, unsure what matters, and you risk missing a deadline or required attachment.
+### 7) Visual sources -> explain diagram + integrate
 
-Laika:
-- Finds the denial reason, pulls the relevant policy language, suggests an appeal strategy, and drafts an appeal letter with a checklist.
+Collect:
+- Add a screenshot/diagram as a source alongside articles.
 
-You get:
-- A complete appeal packet you can review and submit with confidence.
+Ask:
+- "Explain what the diagram shows and how it relates to the claims in the text sources. Cite the sources you use."
 
-Try it:
-- "Figure out why this claim was denied, find the relevant policy language, and draft an appeal letter with an attachment checklist. Ask before submitting anything."
+## Why It Feels Trustworthy
 
-### 8) Apartment hunting: from messy listings to a shareable shortlist
+- **Grounded by default**: answers and artifacts are linked back to sources with citations.
+- **Web content is untrusted input**: page text is treated as evidence, not instructions.
+- **Clear safety boundary**: read-only workflows (collect/query/transform) are distinct from write/egress actions.
+- **Private by default**: on-device inference is the default posture; optional cloud models are BYO and use redacted context packs.
+- **Measurable**: track what was run (and optionally tokens/cost when using cloud models) so teams can reason about usage.
 
-Today:
-- You doomscroll listings, lose track of favorites, and keep re-evaluating the same trade-offs (and worrying about scams and hidden fees).
+## Where Laika Is Heading
 
-Laika:
-- Applies your criteria, estimates total monthly cost, flags obvious red flags, and produces a ranked shortlist with links and notes you can share.
+- **Fortress-first**: collections, citations, transforms, and a viewer for saved artifacts.
+- **Optional operator mode**: when you explicitly ask, Laika can help with browser actions (forms/checkout) with hard stops and approvals.
 
-You get:
-- A decision-ready shortlist instead of a pile of tabs.
+For design details: `docs/LaikaOverview.md`, `docs/laika_vocabulary.md`, and `docs/laika_ui.md`.
 
-Try it:
-- "Find 2BRs under $3500 in Mission or Noe with in-unit laundry and cats allowed. Estimate total monthly cost and make a ranked shortlist with links and dealbreakers. Save it."
+## References
 
-### 9) Government + identity forms: applications -> submission-ready packet
-
-Today:
-- You bounce between requirements pages, PDFs, and form portals, and you still miss a document or a deadline.
-
-Laika:
-- Finds the requirements for your situation, builds a checklist, and helps fill the form up to the final review screen (then stops). It can assemble a submission-ready packet with links and notes.
-
-You get:
-- A submission-ready packet (checklist + draft form answers + links + "what to verify"), without surprise submissions.
-
-Try it:
-- "Help me apply for Global Entry: find the requirements, draft my answers, and take me to the final review screen without submitting. Save a checklist of what I need and ask before any submission."
-
-### 10) Vendor due diligence: trust center -> decision memo
-
-Today:
-- You chase SOC 2s, DPAs, subprocessor lists, retention terms, and security FAQs across a dozen pages, then still need something you can send to stakeholders.
-
-Laika:
-- Builds a dossier of the vendor's security and privacy posture, extracts the terms that matter, and drafts a decision memo with a verification checklist.
-
-You get:
-- A procurement-ready memo with "what we know" vs. "what to verify."
-
-Try it:
-- "Review this vendor's trust center. Summarize security posture, data retention, subprocessors, and compliance claims. Draft a decision memo and list what we still need to verify."
-
-### 11) Weekly ops: turn browsing into a workflow (Sheets/Slack/Notion)
-
-Today:
-- You repeat the same web work every week and manually retype it somewhere else, and it never quite stays consistent.
-
-Laika:
-- Finds the weekly updates, compiles a table, and (if you ask) exports to your tools with a preview and an audit trail.
-
-You get:
-- A repeatable workflow with less busywork.
-
-Try it:
-- "Find new postings that match my criteria from the last 7 days, build a table (company, role, location, link, notes), and ask before exporting it to my tracker and sharing a summary."
-
-## What makes Laika feel trustworthy
-
-- It treats websites as untrusted input: it should not follow hidden instructions from pages.
-- It asks before irreversible actions: purchases, submissions, messages, uploads, permission grants.
-- It keeps you oriented: previews, checkpoints, and a run log so you can audit what happened.
-
-## Under the hood (planning + tools)
-
-Laika stays reliable and reviewable by separating:
-
-- **Untrusted input**: web content (evidence only).
-- **Trusted actions**: typed tool calls that Policy Gate can allow/ask/deny.
-
-Internally, Laika currently uses a small set of intent labels for planning and UI:
-
-`Search, Summarize, Find, Save, Share, Invoke`
-
-For multi-source “browser as workshop” workflows (collections, transforms like comparison tables/timelines, and opening results in a new viewer tab), see `docs/LaikaOverview.md` (Use Case Walkthroughs) and `src/laika/PLAN.md` (P0 scenarios + phases).
-
-## What to validate with users (fast)
-
-- Trust boundary: what are the first workflows they would trust on-device vs cloud, and why?
-- Stop points: where should Laika always pause (pay, submit, send, upload, accept terms), and what preview makes them comfortable?
-- Artifacts: which outputs they actually want to keep/share (tables, packets, drafts, checklists), and what "done" looks like.
-- Time-to-value: how many minutes saved per workflow, and what failure modes make them abandon.
-- Privacy expectations: what data they consider too sensitive to ever leave the device.
-
-## Research notes (sources that shaped this pitch)
-
-These are useful reads on the current state of agentic browsing and why safety and privacy are hard problems:
-
-- Anthropic: "Computer use tool" (risks + precautions, prompt injection notes) - https://docs.anthropic.com/en/docs/build-with-claude/computer-use
-- Brave: "Agentic Browser Security: Indirect Prompt Injection in Perplexity Comet" (Aug 20, 2025) - https://brave.com/blog/comet-prompt-injection/
-- Guardio Labs: "Scamlexity" (agentic AI browsers interacting with scams) (Aug 20, 2025) - https://guard.io/labs/scamlexity-we-put-agentic-ai-browsers-to-the-test-they-clicked-they-paid-they-failed
-- LayerX: "CometJacking: How One Click Can Turn Perplexity's Comet AI Browser Against You" (Oct 4, 2025) - https://layerxsecurity.com/blog/cometjacking-how-one-click-can-turn-perplexitys-comet-ai-browser-against-you/
-- The Register: "Perplexity's Comet browser prompt injection" (Aug 20, 2025) - https://www.theregister.com/2025/08/20/perplexity_comet_browser_prompt_injection/
-- PCMag: "I Switched to Perplexity's AI Comet Browser for a Week. Is It the Future?" (review) - https://www.pcmag.com/opinions/i-switched-to-perplexitys-ai-comet-browser-for-a-week-is-it-the-future
-- ZDNet: "Perplexity's Comet AI browser could expose your private data" (Aug 2025) - https://www.zdnet.com/article/perplexitys-comet-ai-browser-could-expose-your-data-to-attackers-heres-how/
-- StatCounter: browser market share snapshots (Dec 2025) - https://gs.statcounter.com/browser-market-share/mobile/worldwide and https://gs.statcounter.com/browser-market-share/desktop/worldwide
+- "If NotebookLM Was a Web Browser" (inspiration for browser-native source collection workflows): https://aifoc.us/if-notebooklm-was-a-web-browser/
+- Google: NotebookLM "Discover sources" (search-first source gathering): https://blog.google/technology/google-labs/notebooklm-discover-sources/
+- Perplexity: Introducing Comet (session-native AI browsing direction): https://www.perplexity.ai/hub/blog/introducing-comet
+- Microsoft: Copilot Mode in Edge (tabs/history as context): https://www.microsoft.com/edge/copilot-mode
+- TechCrunch: Copilot Mode in Edge (summary + framing): https://techcrunch.com/2025/07/28/microsoft-edge-is-now-an-ai-browser-with-launch-of-copilot-mode/

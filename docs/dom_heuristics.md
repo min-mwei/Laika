@@ -36,7 +36,7 @@ This note captures practical heuristics for walking DOM trees, extracting text, 
 
 ## Structured context for LLMs
 
-- **Line-preserved text** with prefixes: `H2:`, `- `, `> `, `Code:`.
+- **Markdown (canonical)**: headings (`#`), lists (`-`/`1.`), blockquotes (`>`), code fences (```), tables (GFM) when feasible.
 - **Outline**: headings + small list items with levels.
 - **Items**: `{title, url, snippet, linkCandidates[]}` for list-like pages.
 - **Comments**: `{author, age, score, text, depth}` for discussion pages.
@@ -70,5 +70,6 @@ Laika’s “browser as workshop” workflow (see `docs/LaikaOverview.md` and `s
 
 Extraction implications:
 - Prefer capturing a **stable, normalized representation** per source (primary text + outline) rather than raw HTML.
+- Convert extracted main-content HTML into **bounded Markdown** (Readability when possible; heuristics otherwise).
 - Extract outbound links (URL + anchor text + short surrounding context) when feasible; this enables “suggested links” and follow-up expansion without re-scanning the whole DOM.
 - Support “links in selection” as a separate, narrow helper (`browser.get_selection_links`) so users can add many links from a thread/feed in one action.

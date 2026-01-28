@@ -174,7 +174,7 @@ Add fixture-backed scenarios (names illustrative; keep them deterministic):
 
 - `transform_comparison_table.json`
   - Uses a small collection of sources.
-  - Validates: `transform.run(type=comparison)` produces an artifact that renders via `assistant.render` table nodes (no markdown tables).
+  - Validates: `transform.run(type=comparison)` produces an artifact that renders as Markdown (including a table) via the shared Markdown renderer.
 
 - `transform_timeline.json`
   - Uses sources with dates.
