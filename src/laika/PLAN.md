@@ -10,10 +10,11 @@ Primary inspirations (conceptual/UI):
 
 Related Laika docs:
 - `docs/Laika_pitch.md` (product narrative)
-- `docs/LaikaOverview.md` (architecture + safety posture)
+- `docs/LaikaArch.md` (architecture + safety posture)
 - `docs/laika_vocabulary.md` (Collect/Ask/Transform pipeline)
 - `docs/laika_ui.md` (UI layouts + flows; created in this refactor)
 - `docs/llm_context_protocol.md` (LLMCP protocol + tool schemas)
+- `docs/logging.md` (logging + audit: JSONL event taxonomy + redaction policy)
 - `docs/safehtml_mark.md` (Safe HTML <-> Markdown: capture + rendering + sanitization)
 - `docs/automation.md` (Safari end-to-end harness)
 
@@ -69,6 +70,7 @@ The point is not "chat about the web". The point is "turn browsing into reliable
 - Keep Policy Gate authoritative for risky actions and explicit egress.
 - Prefer safe rendering (Markdown -> sanitized HTML). No direct raw HTML injection.
 - Keep automation harness runnable and meaningful (fixture-first).
+- Keep logs privacy-first by default (redacted, structured JSONL; no raw HTML/cookies; previews only via explicit opt-in). See `docs/logging.md`.
 
 Non-goals (P0):
 - Fully agentic browsing that clicks around the web by default.
@@ -126,23 +128,149 @@ We change:
 
 ---
 
-## Frontend/build choice (direction)
+## Frontend/build choice (P0 decision)
 
-The vNext UI is no longer a “chat box”. It’s a small app (tabs, lists, modals, background statuses, artifact viewer).
+The vNext UI is no longer a "chat box". It's a small app (tabs, lists, modals, background statuses, artifact viewer).
 
-Recommendation:
-- Build the UI in **TypeScript** with a small UI framework (e.g. **Preact**) and a bundler (e.g. **Vite**).
+Decision:
+- UI: **Preact + TypeScript**
+- Build: **Vite**
 - Keep the extension background + content script in plain JS initially if that reduces migration risk, then convert when stable.
 
 Why:
 - easier to build and maintain a multi-pane UI (state, routing, components)
-- easy to adopt “boring good” libraries:
+- easy to adopt "boring good" libraries:
   - Markdown rendering + sanitization (`markdown-it`/`marked` + DOMPurify)
   - DOM -> Markdown capture (`@mozilla/readability` + Turndown)
 - enables unit tests for renderer/extractor logic in a normal Node test runner
 
 Packaging constraint:
-- the Safari extension ultimately ships static JS/CSS assets; the build should emit into `src/laika/extension/` (or a committed `dist/` folder) so Xcode can bundle it.
+- the Safari extension ships static JS/CSS assets; Vite should emit into a deterministic folder inside `src/laika/extension/` so Xcode can bundle it.
+
+Repository layout (proposed):
+- UI source: `src/laika/extension/ui/`
+- Built assets: `src/laika/extension/ui_dist/` (either committed, or built as part of `src/laika_build.sh`)
+
+Security constraint:
+- production bundles must be CSP-compatible (no `eval`/`new Function`; no remote code).
+
+---
+
+## Decisions to lock (before coding)
+
+These are the choices that keep the implementation from drifting.
+
+As of 2026-01-29, we are treating the following as confirmed/locked for Phase 0:
+
+- Storage ownership: native SQLite is the source of truth; extension storage is for prefs/flags/small caches only (never source bodies).
+- Capture bounds: captured sources are stored as bounded Markdown; default `maxMarkdownChars = 24_000` with explicit truncation markers.
+- Citation schema: structured citations with `source_id` (or `doc_id` for single-page), `url`, `quote` (+ optional `locator`, `confidence`).
+- Search extraction: "collect top N" uses `browser.observe_dom` items with guardrails (http(s) only, dedupe by normalized URL, skip noise links, optional host diversity cap).
+- Renderer: Markdown is canonical; render with `markdown-it` (no raw HTML passthrough) + DOMPurify allowlist + safe link post-processing.
+- Tool schema versioning: one schema version per release; strict validation; reject unknown tool names/extra keys; add harness coverage for new tools.
+
+### Persistence boundaries (source of truth)
+
+P0 decision: **native SQLite is the source of truth** for user data.
+
+- Native app (SQLite): `Collection`, `Source` (including `captureMarkdown`), `Artifact`, `ChatEvent`, capture jobs/queue, usage records.
+- Extension storage: UI prefs (sidecar placement, last active collection per window), automation flags, small caches (never source bodies).
+- Viewer tabs/windows: read artifacts from native SQLite (via native messaging), not from page state.
+- Schema reference: `docs/sqlite_schema_v1.sql` (tables + indexes).
+
+Sync (P0):
+- No cross-device sync.
+- Multiple UI surfaces (sidecar/panel/viewer) share state by talking to the same native store.
+
+### IDs + schema conventions
+
+P0 decision: **string IDs with a type prefix + UUID**.
+
+- `Collection.id`: `col_<uuid>`
+- `Source.id`: `src_<uuid>`
+- `Artifact.id`: `art_<uuid>`
+- `ChatEvent.id`: `chat_<uuid>`
+- `CaptureJob.id`: `job_<uuid>`
+
+Source fields to add early (for dedupe + recapture):
+- `normalizedUrl` (for URL sources)
+- `contentHash` (hash of `captureMarkdown`)
+- `captureVersion` (int; bump when capture algorithm changes)
+- `captureError` (string; last failure reason for UI)
+
+Indexing (SQLite):
+- `(collectionId, createdAt)` and `(collectionId, updatedAt)` on collections/artifacts/chat
+- `(collectionId, capturedAt)` on sources
+- `normalizedUrl` (unique per collection, or unique globally depending on future UX)
+
+### Capture limits (what "bounded" means)
+
+P0 capture contract:
+- Store bounded **Markdown** per source: `captureMarkdown`.
+- Default cap: `maxMarkdownChars = 24_000` (tunable).
+- Truncation strategy: keep head + tail and insert an explicit truncation marker:
+  - `...\\n\\n[Truncated: captured first N chars and last M chars]`
+- Optional chunking (if needed for large sources):
+  - `chunkSize = 8_000`, `maxChunks = 6` (stored as separate rows or a side table).
+
+### Search extraction (top N results)
+
+P0 decision: for "collect top 10" on search pages:
+- Use `browser.observe_dom` and prefer `observation.items[]` (already tuned for list/search pages).
+- Extract up to N URLs with guardrails:
+  - http(s) only
+  - dedupe by `normalizedUrl`
+  - skip obvious noise links (login/privacy/terms/share/rss/etc.)
+  - keep lightweight diversity (cap same-host results, e.g. max 2 per host) when the user asks for "good sources"
+
+Engines (P0):
+- Support at least the engines already detected by the current extractor (Google/Bing/DuckDuckGo).
+- Treat per-engine selectors as an optimization; keep a generic fallback that works on fixture pages.
+
+### Citation model (concrete contract)
+
+P0 citation object must be sufficient for a user to verify a claim quickly:
+- `source_id` (preferred for collections) or `doc_id` (single-page)
+- `url`
+- `quote` (short excerpt)
+- optional: `locator` (text fragment or section hint) and `confidence` (0..1)
+
+### Renderer choice (single shared pipeline)
+
+P0 decision:
+- Markdown renderer: **markdown-it**
+- Sanitizer: **DOMPurify** with a strict allowlist
+- One shared config/module used by sidecar + panel + viewer so outputs are consistent.
+
+### Tool schema versioning + rollout
+
+P0 decision:
+- Tool schemas are versioned and validated in trusted code.
+- Unknown tool names/extra keys are rejected at the boundary (validator is authoritative).
+- Rolling out a new tool requires:
+  - adding it to the schema + validator,
+  - updating the system prompt that enumerates allowed tools,
+  - adding at least one harness scenario that exercises it.
+
+### Concurrency + dedupe (soft locks)
+
+P0 decision: avoid double-running captures/transforms by treating "background work" as durable jobs.
+
+Guidance:
+- Prefer soft locks: persisted job status + best-effort in-process de-dupe sets.
+- Never assume a lock survived restart. On startup:
+  - reset `capture_jobs.status` from `running` -> `queued` and resume,
+  - reset `artifacts.status` from `running` -> `pending` and resume or mark failed with a reason.
+
+Capture de-dupe (direction):
+- De-dupe by `(collectionId, normalizedUrl, captureVersion)`.
+- Implementation: compute a stable `capture_jobs.dedupe_key = sha256("capture:" + collectionId + ":" + normalizedUrl + ":" + captureVersion)`.
+- Enforce "only one active capture job at a time" (unique partial index) and short-circuit if an identical job is already queued/running.
+
+Transform de-dupe (direction):
+- De-dupe by `(collectionId, transformType, sourceIds hash, config hash)`.
+- Implementation: compute `artifacts.dedupe_key = sha256("transform:" + collectionId + ":" + transformType + ":" + sourceIdsHash + ":" + configHash)`.
+- Enforce "only one active transform per dedupe key" (unique partial index) to avoid duplicate artifacts and confusing UI.
 
 ---
 
@@ -156,8 +284,12 @@ Minimum entities (no compat required):
 - Source
   - `id`, `collectionId`
   - `kind`: `url` | `note` | `image`
-  - `url?`, `title?`, `capturedAt`
+  - `url?`, `title?`, `capturedAt`, `updatedAt`
+  - `normalizedUrl?`
   - `captureStatus`: `pending` | `captured` | `failed`
+  - `captureVersion` (int)
+  - `contentHash` (hash of `captureMarkdown`)
+  - `captureError` (string; last failure)
   - `captureSummary` (short)
   - `captureMarkdown` (bounded; may be chunked)
   - `links[]` (extracted outbound links; optional P0)
@@ -166,8 +298,15 @@ Minimum entities (no compat required):
   - `id`, `collectionId`, `role`, `contentMarkdown`, `citations[]`, `createdAt`
 
 - Artifact
-  - `id`, `collectionId`, `type`, `title`, `contentMarkdown`, `sourceIds[]`, `createdAt`, `updatedAt`
+  - `id`, `collectionId`, `type`, `title`, `contentMarkdown`, `sourceIds[]`, `citations[]`, `createdAt`, `updatedAt`
   - `status` for background transforms: `pending` | `running` | `completed` | `failed` | `cancelled`
+  - `dedupeKey` (stable hash; prevents duplicate active runs)
+
+ - CaptureJob (recommended P0)
+  - `id`, `collectionId`, `sourceId`, `url`
+  - `status`: `queued` | `running` | `succeeded` | `failed` | `cancelled`
+  - `attemptCount`, `maxAttempts`, `lastError`, `createdAt`, `updatedAt`
+  - `dedupeKey` (stable hash; prevents duplicate active runs)
 
 ---
 
@@ -211,6 +350,21 @@ Citations contract (P0):
 
 ---
 
+## Key risks (P0) and mitigations
+
+- Safari background capture reliability: background tabs may not fully render.
+  - Mitigate with: wait-for-ready + timeouts, retries, and "capture from existing tab if already open" preference.
+- Large source payloads (storage + LLM context limits).
+  - Mitigate with: bounded `captureMarkdown`, relevance ranking before `web.answer`, and per-source summaries for mid-tier sources.
+- Multi-surface UI state drift (sidecar/panel/viewer disagree on active collection).
+  - Mitigate with: one "active collection" source of truth in native store + a small shared state subscription API.
+- Privacy invariants drift over time.
+  - Mitigate with: boundary validators (no raw HTML/cookies), unit tests that assert sanitization and redaction, and harness scenarios that catch regressions.
+- Concurrency hazards (double-running captures/transforms; confusing status/UI).
+  - Mitigate with: explicit job statuses + dedupe keys in SQLite, partial unique indexes for "active" jobs, and restart-safe resumption rules.
+
+---
+
 ## UI work (P0)
 
 See `docs/laika_ui.md` for detailed layout and flows.
@@ -231,7 +385,20 @@ Key UI features:
 
 ## Implementation phases
 
-### Phase 0 — Reset + foundations (1-2 weeks)
+## Recommended early implementation sequence (vertical slice)
+
+We should build vNext as a single end-to-end slice before expanding breadth:
+
+1) Phase 0 UI shell + shared Markdown renderer (tables + sanitization).
+2) Minimal persistence (collections + sources + artifacts) in native SQLite.
+3) Collect flow v1: current tab + selection links + capture status UI.
+4) Capture pipeline v1: Readability -> Turndown -> bounded `captureMarkdown` (+ retry).
+5) `web.answer` with citations over a small, fixed top-N source set.
+6) First artifact: `comparison` transform + viewer (Markdown table).
+
+This aligns the codebase, docs, and harness around one "real" workflow early.
+
+### Phase 0 - Reset + foundations (1-2 weeks)
 
 Goal: make the codebase ready for collection-centric work.
 
@@ -247,7 +414,7 @@ Exit criteria:
 - Renderer supports tables and is shared across surfaces.
 - Tool validation accepts P0 tool names (even if handlers are stubbed).
 
-### Phase 1 — Collections + Sources UI (2-3 weeks)
+### Phase 1 - Collections + Sources UI (2-3 weeks)
 
 Goal: users can create collections and add sources from session/search.
 
@@ -266,14 +433,15 @@ Exit criteria:
 - Scenario 1 collection creation + adding selected links works.
 - Scenario 2 collect top results works (at least for fixture search pages).
 
-### Phase 2 — Source capture pipeline (2-3 weeks)
+### Phase 2 - Source capture pipeline (2-3 weeks)
 
-Goal: sources have usable text snapshots for Q&A and transforms.
+Goal: sources have usable Markdown snapshots for Q&A and transforms.
 
 - Implement `source.capture`:
   - open URL in background tab (or capture from existing tab if already open)
-  - run `browser.observe_dom` with detail options
-  - normalize into bounded `captureMarkdown` (+ optional chunks)
+  - run content-script capture (Readability -> Turndown -> bounded Markdown)
+  - fallback to `browser.observe_dom` -> best-effort Markdown when direct capture fails
+  - persist `captureVersion` + `contentHash` and set `captureError` on failures
   - extract outbound links list (optional P0)
 - Persist captured sources (SQLite in native host preferred; extension storage only for small metadata).
 - Implement refresh/retry semantics.
@@ -282,7 +450,7 @@ Exit criteria:
 - Captured sources have consistent bounded Markdown.
 - Capture failures are visible and recoverable.
 
-### Phase 3 — Collection-scoped Chat (Ask/Summarize/Compare) (2-3 weeks)
+### Phase 3 - Collection-scoped Chat (Ask/Summarize/Compare) (2-3 weeks)
 
 Goal: ask questions over the collection with citations.
 
@@ -300,7 +468,7 @@ Exit criteria:
 - Scenario 1 question produces cited synthesis across sources.
 - Chat history persists and renders safely (including tables in answers).
 
-### Phase 4 — Transforms + Artifacts + Viewer (3-4 weeks)
+### Phase 4 - Transforms + Artifacts + Viewer (3-4 weeks)
 
 Goal: transform outputs are durable and viewable.
 
@@ -323,7 +491,7 @@ Exit criteria:
 - Scenario 1 transforms run and open in viewer.
 - Artifacts persist across restarts.
 
-### Phase 5 — Discover (Suggested Links) (P1)
+### Phase 5 - Discover (Suggested Links) (P1)
 
 Goal: recommend what to add next.
 
@@ -335,7 +503,7 @@ Exit criteria:
 - Suggested links appears when sources contain links.
 - Adding suggestions expands the collection and triggers capture.
 
-### Phase 6 — Settings: models, privacy, usage (P1)
+### Phase 6 - Settings: models, privacy, usage (P1)
 
 - Local model defaults + optional BYO cloud models (explicit opt-in).
 - Usage tracking (tokens/cost) when using cloud models.
@@ -351,6 +519,7 @@ We will extend the existing harness rather than replace it.
 - Renderer tests:
   - markdown table rendering
   - link sanitization
+  - sanitizer strips disallowed tags/attrs (script/iframe/on*)
 - Extractor tests:
   - selection links dedupe
   - search result extraction for fixture pages
@@ -377,3 +546,19 @@ We will not migrate existing chat history keys or UI behavior. Instead:
 - introduce new storage keys / SQLite schema
 - replace the current popover UI and plan loop entrypoints
 - keep the old code only as reference until the new path is stable, then delete
+
+---
+
+## Resolved decisions (before P0 hardening)
+
+Resolved decisions (2026-01-29):
+
+- Minimum SQLite schema for P0: commit to `docs/sqlite_schema_v1.sql` core tables:
+  - `collections`, `sources`, `capture_jobs`, `chat_events`, `artifacts` (+ `meta`).
+  - `llm_runs` is optional for P1 (safe to keep in schema; not required for Phase 0).
+- Offline artifact viewing (no model calls): YES for P0. Artifact viewer loads `artifacts.content_markdown` from SQLite and renders with the shared Markdown renderer.
+- Share/export surface (P0): support `artifact.share` with:
+  - `target=clipboard` (required)
+  - `target=file` (recommended on macOS; Markdown export)
+  - `target=share_sheet` can land in P1 (especially for iOS).
+- URL de-dupe scope (P0): per-collection dedupe (unique `(collection_id, normalized_url)` for `kind='url'` sources). Global capture caching can be added later without changing UX.

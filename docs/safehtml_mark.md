@@ -36,7 +36,7 @@ Canonical stored formats:
 - Chat/assistant output: `assistant.markdown`
 - Artifacts: `artifact.contentMarkdown`
 
-“Safe HTML” is *not* a stored canonical format. It's a UI-only rendering result produced by:
+"Safe HTML" is *not* a stored canonical format. It's a UI-only rendering result produced by:
 1) parsing Markdown, and
 2) sanitizing the resulting HTML with a strict allowlist.
 
@@ -57,7 +57,9 @@ Capture happens in the **content script** (where the DOM exists and where authen
 
 3) Convert HTML -> Markdown (canonical)
    - Convert the reduced main-content HTML into Markdown.
-   - Bound it (`maxChars`) so captures are stable and predictable.
+   - Bound it (`maxMarkdownChars`) so captures are stable and predictable.
+     - Recommended P0 default: `24_000` chars (tunable).
+     - If truncating, insert an explicit marker so users know it's partial.
 
 4) Extract outbound links (for discovery)
    - Extract `{ url, text, context }` from the same reduced HTML prior to conversion.
@@ -71,7 +73,7 @@ Capture happens in the **content script** (where the DOM exists and where authen
 Follow the reference pattern in `./NotebookLM-Chrome/`:
 
 - `@mozilla/readability` for main-content extraction when possible
-- **Turndown** for HTML -> Markdown
+- **Turndown** for HTML -> Markdown (P0 choice)
 
 Why Turndown (JS) is preferred over Swift conversion:
 - The DOM and best extraction tooling exist in the content script.
@@ -93,7 +95,7 @@ Baseline rule ideas (mirrors the reference):
 ### 3.4 Notes on safety during capture
 
 - Capture treats page content as **untrusted** even after conversion.
-- We do not “execute” page content; we only read and normalize it.
+- We do not "execute" page content; we only read and normalize it.
 - Captures should be bounded and provenance-tagged so we can explain what was used.
 
 ---
@@ -105,12 +107,13 @@ Rendering happens in trusted UI surfaces (sidecar/panel/viewer).
 ### 4.1 Rendering steps (P0)
 
 1) Parse Markdown -> HTML
-   - Recommended: `markdown-it` (already vendored as `src/laika/extension/lib/vendor/markdown-it.min.js`)
-   - Configure to avoid raw HTML passthrough when possible (`html: false`).
+   - P0 choice: `markdown-it` (already vendored as `src/laika/extension/lib/vendor/markdown-it.min.js`)
+   - Configure to avoid raw HTML passthrough (`html: false`).
 
 2) Sanitize HTML with DOMPurify
    - Vendored: `src/laika/extension/lib/vendor/purify.min.js`
    - Use a strict allowlist (see 4.2).
+   - Keep the DOMPurify config in one shared module so sidecar/panel/viewer render identically.
 
 3) Post-process links
    - allow only `http`, `https`, `mailto`
@@ -159,17 +162,18 @@ Markdown remains the default/canonical artifact format; interactive output is op
 
 ## 6) Build/testing implications
 
-### 6.1 Without a bundler (current repo style)
+### 6.1 TypeScript build (vNext choice)
+
+- Use a **TypeScript + Vite** build (UI is **Preact + TS**) to import:
+  - `turndown` + `@mozilla/readability` (capture)
+  - `markdown-it` + `dompurify` (render)
+- Emit static JS/CSS assets into a deterministic folder in the extension bundle (e.g. `src/laika/extension/ui_dist/`) for Xcode to bundle.
+
+### 6.2 Without a bundler (legacy/bridge)
 
 - Vendor minified JS libs under `src/laika/extension/lib/vendor/`.
 - Keep the renderer/capture helpers as plain JS modules.
-
-### 6.2 With a TypeScript build (recommended for vNext UI)
-
-- Use a TS/Vite build to import:
-  - `turndown` + `@mozilla/readability` (capture)
-  - `markdown-it` (or `marked`) + `dompurify` (render)
-- Emit static JS/CSS assets into `src/laika/extension/` for Xcode to bundle.
+- Acceptable as an interim step, but vNext should converge on the TS/Vite pipeline so all surfaces share one implementation.
 
 ### 6.3 Tests (minimum)
 

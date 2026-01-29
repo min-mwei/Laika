@@ -1,4 +1,4 @@
-# Laika Overview: AI Fortress for Web Work (Collections + Transforms)
+# Laika Architecture: AI Fortress for Web Work (Collections + Transforms)
 
 Laika is a privacy-first **AI fortress** in **Safari (macOS + iOS)**: a protected workspace that captures your browsing session (open tabs, search results, and the pages you visit) as context and turns it into **collections** you can query, compare, and transform into durable artifacts.
 
@@ -23,6 +23,7 @@ Related docs:
 - `docs/laika_vocabulary.md` (workflow verbs)
 - `docs/laika_ui.md` (UI layouts + flows)
 - `docs/llm_context_protocol.md` (LLMCP JSON protocol + tool schemas)
+- `docs/logging.md` (logging + audit: JSONL events, redaction, correlation IDs)
 - `docs/safehtml_mark.md` (Safe HTML <-> Markdown: capture + rendering + sanitization)
 
 ---
@@ -61,7 +62,7 @@ All claims should be traceable via citations.
 Run named transforms (comparison table, timeline, brief, quiz, etc.) that produce a durable **Artifact**.
 
 ### 4) Save / Share
-Store artifacts for later and export them explicitly (clipboard/file/share sheet/integrations).
+Store artifacts for later and export them explicitly (P0: clipboard + file; P1: share sheet/integrations).
 
 ---
 
@@ -81,13 +82,16 @@ Minimum metadata:
 
 - `id`, `collectionId`
 - `kind`: url | note | image
-- `url?`, `title?`
+- `url?`, `normalizedUrl?`, `title?`
+- `captureStatus`: pending | captured | failed
 - `captureMarkdown` (bounded snapshot), `capturedAt`
+- `captureError?` (last failure reason, if any)
 - `provenance` (where it came from: tab/search/selection)
 
 Optional but valuable:
 
 - extracted outbound links (for discovery)
+- `captureVersion` + `contentHash` (for dedupe/recapture and debugging)
 - content signals (paywall/login/overlay)
 - per-source summary fields
 - image metadata (for multimodal grounding)
@@ -98,9 +102,15 @@ A saved output generated from a collection.
 Minimum metadata:
 
 - `id`, `collectionId`, `type`, `title`
-- renderable content (Markdown)
+- renderable content (Markdown; reopenable/offline with no model calls)
 - `sourceIds[]` used to generate
 - status fields for background/resumable transforms
+
+### Persistence (P0 direction)
+
+Native SQLite is the source of truth for collections/sources/chat/artifacts and capture jobs.
+
+Concrete schema + indexes: `docs/sqlite_schema_v1.sql`.
 
 ---
 
@@ -285,7 +295,7 @@ At a high level:
 
 - the Safari extension reads the page (observe) and performs allowed browser primitives
 - Agent Core packages context, runs the model, and persists collections/artifacts
-- UI renders safe documents and provides controls for collect/transform/share
+- UI is a small **Preact + TypeScript** app (built with **Vite**) that renders safe Markdown and provides controls for collect/transform/share (shared across sidecar/panel/viewer)
 
 ```text
 Untrusted Web (Safari tab)
@@ -306,6 +316,6 @@ LLM Runtime (local by default; optional BYO cloud)
 
 - "If NotebookLM Was a Web Browser" (inspiration for browser-native source collection workflows): https://aifoc.us/if-notebooklm-was-a-web-browser/
 - Google: NotebookLM "Discover sources" (search-first source gathering): https://blog.google/technology/google-labs/notebooklm-discover-sources/
-- Perplexity: Introducing Comet (session-native AI browsing direction): https://www.perplexity.ai/hub/blog/introducing-comet
+- Perplexity: Comet (session-native AI browsing direction): https://www.perplexity.ai/comet
 - Microsoft: Copilot Mode in Edge (tabs/history as context): https://www.microsoft.com/edge/copilot-mode
 - TechCrunch: Copilot Mode in Edge (summary + framing): https://techcrunch.com/2025/07/28/microsoft-edge-is-now-an-ai-browser-with-launch-of-copilot-mode/

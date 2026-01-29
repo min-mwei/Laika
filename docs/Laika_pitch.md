@@ -187,12 +187,12 @@ Ask:
 - **Fortress-first**: collections, citations, transforms, and a viewer for saved artifacts.
 - **Optional operator mode**: when you explicitly ask, Laika can help with browser actions (forms/checkout) with hard stops and approvals.
 
-For design details: `docs/LaikaOverview.md`, `docs/laika_vocabulary.md`, and `docs/laika_ui.md`.
+For design details: `docs/LaikaArch.md`, `docs/laika_vocabulary.md`, and `docs/laika_ui.md`.
 
 ## References
 
 - "If NotebookLM Was a Web Browser" (inspiration for browser-native source collection workflows): https://aifoc.us/if-notebooklm-was-a-web-browser/
 - Google: NotebookLM "Discover sources" (search-first source gathering): https://blog.google/technology/google-labs/notebooklm-discover-sources/
-- Perplexity: Introducing Comet (session-native AI browsing direction): https://www.perplexity.ai/hub/blog/introducing-comet
+- Perplexity: Comet (session-native AI browsing direction): https://www.perplexity.ai/comet
 - Microsoft: Copilot Mode in Edge (tabs/history as context): https://www.microsoft.com/edge/copilot-mode
 - TechCrunch: Copilot Mode in Edge (summary + framing): https://techcrunch.com/2025/07/28/microsoft-edge-is-now-an-ai-browser-with-launch-of-copilot-mode/

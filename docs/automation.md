@@ -156,12 +156,12 @@ Live-web smoke scenarios are suffixed with `_live.json` and are opt-in.
 
 ## Planned scenarios (source collections + transforms)
 
-The collections + transforms workflow (see `docs/LaikaOverview.md` and `src/laika/PLAN.md`) adds requirements that are best validated end-to-end in Safari (collection capture, transforms, viewer tabs).
+The collections + transforms workflow (see `docs/LaikaArch.md` and `src/laika/PLAN.md`) adds requirements that are best validated end-to-end in Safari (collection capture, transforms, viewer tabs).
 
 Add fixture-backed scenarios (names illustrative; keep them deterministic):
 
 - `collection_selection_links.json`
-  - Fixture: `fixtures/collection_selection_links.html` (auto-selects a “thread” region containing many outbound links).
+  - Fixture: `fixtures/collection_selection_links.html` (auto-selects a "thread" region containing many outbound links).
   - Validates: `browser.get_selection_links` returns stable, deduped http(s) URLs (collection ingestion validation comes later).
 
 - `collection_capture_normalization.json`
@@ -170,7 +170,7 @@ Add fixture-backed scenarios (names illustrative; keep them deterministic):
 
 - `collection_answer_differences.json`
   - Uses a small collection of sources about the same story.
-  - Validates: `web.answer` over a collection context pack produces a “key differences” synthesis with usable citations back to each source.
+  - Validates: `web.answer` over a collection context pack produces a "key differences" synthesis with usable citations back to each source.
 
 - `transform_comparison_table.json`
   - Uses a small collection of sources.
@@ -186,15 +186,15 @@ Add fixture-backed scenarios (names illustrative; keep them deterministic):
 
 - `shopping_compare_totals.json`
   - Fixture: 5 product pages with known base/shipping/tax/warranty fields.
-  - Validates: Laika produces a comparison table with order links and deterministic totals (via `app.money_calculate`) plus “what to verify”.
+  - Validates: Laika produces a comparison table with order links and deterministic totals (via `app.money_calculate`) plus "what to verify".
 
 - `shopping_stop_before_commit.json`
-  - Fixture: a checkout review page with a commit action (e.g., “Place order”).
+  - Fixture: a checkout review page with a commit action (e.g., "Place order").
   - Validates: Policy Gate blocks commit clicks unless the user explicitly changes intent; run logs record a stable reason code.
 
 ## Pitch-based workflow scenarios (fixture-backed)
 
-These scenarios mirror the “Try it” prompts in `docs/Laika_pitch.md` to keep the end-to-end harness aligned with product narratives while the underlying tools evolve.
+These scenarios mirror the "Try it" prompts in `docs/Laika_pitch.md` to keep the end-to-end harness aligned with product narratives while the underlying tools evolve.
 
 - `pitch_news_synthesis.json`
   - Fixture: a thread page with multiple outlets covering the same story plus linked outlet pages.
@@ -202,18 +202,18 @@ These scenarios mirror the “Try it” prompts in `docs/Laika_pitch.md` to keep
 
 - `pitch_shopping_constraints.json`
   - Fixture: five jacket product cards with prices, shipping, tax, warranty, and return policy fields.
-  - Validates: total-cost comparison with explicit assumptions, order links, and “verify at checkout” notes plus a stop-before-purchase reminder.
+  - Validates: total-cost comparison with explicit assumptions, order links, and "verify at checkout" notes plus a stop-before-purchase reminder.
 
 - `pitch_trip_planning.json`
   - Fixture: three Kyoto hotel options plus trip constraints and itinerary notes.
-  - Validates: options table, day-by-day itinerary, and a clear “ask before booking” checkpoint.
+  - Validates: options table, day-by-day itinerary, and a clear "ask before booking" checkpoint.
 
 ## Techmeme theme scenarios (fixture + live)
 
-These scenarios mirror a current Techmeme theme so we can validate the “thread → synthesis” flow on live news while keeping a deterministic fixture.
+These scenarios mirror a current Techmeme theme so we can validate the "thread -> synthesis" flow on live news while keeping a deterministic fixture.
 
 - `techmeme_maia_theme.json`
-  - Fixture: Techmeme-style thread about Microsoft’s Maia 200 AI accelerator launch.
+  - Fixture: Techmeme-style thread about Microsoft's Maia 200 AI accelerator launch.
   - Validates: multi-source differences summary, comparison table draft, and timeline draft (plain text until transforms land).
 
 - `techmeme_maia_theme_live.json` (opt-in)
@@ -229,6 +229,9 @@ These scenarios mirror a current Techmeme theme so we can validate the “thread
 - Optional: attach native app log excerpts for each run.
 
 ## Execution (bridge + UI test)
+
+Pre-flight:
+- If the extension UI is built via Vite (Preact + TS), ensure the built assets exist (e.g. `src/laika/extension/ui_dist/`) before running the Safari UI harness, or run the standard build script that generates them.
 
 ```bash
 # Start the harness + run the Safari UI test driver

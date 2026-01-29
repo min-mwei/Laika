@@ -2,11 +2,12 @@
 
 This document describes how Laika hosts, runs, and uses on-device models for agentic browsing in Safari, and how Laika can optionally ship improved model weights from a cloud training pipeline.
 
-Laika’s product stance is **on-device by default**: Safari talks directly to websites; Laika keeps agent decisioning and safety filtering on your Mac by default. Optional BYO cloud models are supported, but they receive only **redacted context packs** and never cookies/session tokens.
+Laika's product stance is **on-device by default**: Safari talks directly to websites; Laika keeps agent decisioning and safety filtering on your Mac by default. Optional BYO cloud models are supported, but they receive only **redacted context packs** and never cookies/session tokens.
 
 Related:
 
-- System boundaries + security posture: `docs/LaikaOverview.md`
+- System boundaries + security posture: `docs/LaikaArch.md`
+- Logging + audit design: `docs/logging.md`
 
 ---
 
@@ -22,7 +23,7 @@ Related:
   - local inference runs in sandboxed Swift processes (app and/or XPC worker),
   - inference workers can be configured with **no network entitlement**.
 - **Long-running automation support**:
-  - resumable runs (SQLite run log + checkpoints) even when Safari’s extension worker is suspended,
+  - resumable runs (SQLite run log + checkpoints) even when Safari's extension worker is suspended,
   - predictable cancellation/backpressure behavior across IPC.
 - **Model updateability**:
   - allow Laika to ship improved local models (or adapters) as signed artifacts,
@@ -33,9 +34,12 @@ Related:
 - Laika creates a `Laika/` folder with subfolders: `logs/`, `db/`, and `audit/`.
 - In sandboxed builds, the home directory resolves to the container, so logs live under `~/Library/Containers/com.laika.Laika.Extension/Data/Laika/` (Safari extension) or `~/Library/Containers/com.laika.Laika/Data/Laika/` (host app).
 - Non-sandboxed CLI/server runs default to `~/Laika/`; `LAIKA_HOME=/path/to/Laika` overrides only in those runs.
-- LLM traces are written to `<base>/logs/llm.jsonl` (JSONL, append-only).
+- LLM traces and agent events are written to `<base>/logs/llm.jsonl` (JSONL, append-only).
 - If the preferred location is blocked, Laika falls back to Application Support under the container (for example: `~/Library/Containers/<bundle-id>/Data/Library/Application Support/Laika/`).
-- Full prompt/output logging is enabled by default; set `LAIKA_LOG_FULL_LLM=0` to store only counts/metadata.
+
+Redaction posture:
+- In the current prototype, prompt/output previews may be logged; set `LAIKA_LOG_FULL_LLM=0` to store only counts/metadata.
+- For vNext/release, treat previews as an explicit opt-in (see `docs/logging.md`).
 - The automation harness uses `laika-server` (SwiftPM executable) to host the same Agent Core + ModelRunner outside Safari for test runs.
 
 ## Qwen3 output length
@@ -45,7 +49,7 @@ Related:
 
 ## Non-goals (initially)
 
-- A “general RAG product” or persistent corpus retrieval system. (Laika may compute embeddings internally for scoring/deduping/ranking, but it does not ship a user-facing retrieval subsystem.)
+- A "general RAG product" or persistent corpus retrieval system. (Laika may compute embeddings internally for scoring/deduping/ranking, but it does not ship a user-facing retrieval subsystem.)
 - Running arbitrary Hugging Face code in-process (no Python plugin system inside the app).
 - Supporting every open-weights architecture on day one; model support is gated by runtime compatibility and security review.
 
@@ -55,31 +59,31 @@ Related:
 
 ### Process placement (security + performance)
 
-Local inference must not run inside Safari’s JS extension environment. Laika runs models in Swift; the current prototype and the target architecture differ in where that Swift code lives.
+Local inference must not run inside Safari's JS extension environment. Laika runs models in Swift; the current prototype and the target architecture differ in where that Swift code lives.
 
 **Prototype (current):**
 
 ```text
-Safari WebExtension (JS) ──native messaging──▶ SafariWebExtensionHandler (Swift)
-                                               │
-                                               ├── Agent Orchestrator + SummaryService
-                                               └── ModelRunner (MLX/Qwen3)
+Safari WebExtension (JS) --native messaging--> SafariWebExtensionHandler (Swift)
+                                              |
+                                              +-- Agent Orchestrator + SummaryService
+                                              +-- ModelRunner (MLX/Qwen3)
 ```
 
 **Target (planned):**
 
 ```text
-Safari WebExtension (JS) ──native messaging──▶ Native app extension handler
-                                               │
-                                               └──IPC──▶ Agent Core (Swift)
-                                                          │
-                                                          └──XPC──▶ LLM Worker (Swift; GPU/Metal; no network)
+Safari WebExtension (JS) --native messaging--> Native app extension handler
+                                              |
+                                              +-- IPC --> Agent Core (Swift)
+                                                        |
+                                                        +-- XPC --> LLM Worker (Swift; GPU/Metal; no network)
 ```
 
 Design constraints:
 
-- **LLM Worker is the “compute boundary”**: heavy inference, tokenization, and (optional) embeddings live here.
-- **Agent Core is the “policy boundary”**: prompts, tool schemas, redaction, and Policy Gate enforcement live here.
+- **LLM Worker is the "compute boundary"**: heavy inference, tokenization, and (optional) embeddings live here.
+- **Agent Core is the "policy boundary"**: prompts, tool schemas, redaction, and Policy Gate enforcement live here.
 - **No secrets in JS**: the extension never sees cookies/session tokens, API keys, decrypted artifacts, or model weights.
 
 ### Core components
@@ -88,7 +92,7 @@ Design constraints:
   - installs/removes model packs,
   - verifies signatures/hashes,
   - tracks compatibility with tool schema versions,
-  - exposes “available models” to settings/UI.
+  - exposes "available models" to settings/UI.
 - **LLM Worker (XPC)**:
   - loads one model at a time (or a small bounded pool),
   - runs inference with streaming tokens,
@@ -96,14 +100,14 @@ Design constraints:
   - enforces strict memory/latency budgets and supports cancellation.
 - **Prompt + Context Pack Builder (Agent Core)**:
   - constructs model input from the SQLite run log/checkpoints,
-  - applies redaction and “data vs instruction” separation,
-  - strips “thinking traces” from persisted history.
+  - applies redaction and "data vs instruction" separation,
+  - strips "thinking traces" from persisted history.
 
 ---
 
 ## Model roles inside Laika
 
-Laika should treat “the model” as multiple roles with different safety/perf requirements:
+Laika should treat "the model" as multiple roles with different safety/perf requirements:
 
 1. **Guard / Policy helper (always local)**
    - Sensitive-field detection (credentials, payment, health, identifiers).
@@ -118,13 +122,13 @@ Laika should treat “the model” as multiple roles with different safety/perf 
 
 3. **Summarizer / Explainer (local by default; cloud optional)**
    - Produces user-facing explanations, citations, and audit summaries.
-   - Must be constrained to “what was observed” and “what is about to happen”.
+   - Must be constrained to "what was observed" and "what is about to happen".
 
 4. **Embeddings (optional; local)**
    - Similarity/deduping/ranking within a single run (e.g., picking candidate snippets).
    - Not a user-facing RAG system.
 
-In MVP, roles (2) and (3) can share one “main” model; roles (1) and (4) may be separate smaller models if needed for latency.
+In MVP, roles (2) and (3) can share one "main" model; roles (1) and (4) may be separate smaller models if needed for latency.
 
 ---
 
@@ -138,7 +142,7 @@ In MVP, roles (2) and (3) can share one “main” model; roles (1) and (4) may 
 
 ## Model formats and runtimes
 
-Laika should support multiple runtimes behind a single Swift protocol (e.g., `ModelRuntime`), so “model choice” doesn’t leak into the rest of the agent.
+Laika should support multiple runtimes behind a single Swift protocol (e.g., `ModelRuntime`), so "model choice" doesn't leak into the rest of the agent.
 
 ### GGUF (llama.cpp family)
 
@@ -150,7 +154,7 @@ Laika should support multiple runtimes behind a single Swift protocol (e.g., `Mo
   - quantization options (size/quality tradeoff),
   - can use Metal acceleration in llama.cpp builds.
 - Risks:
-  - runtime must support the model architecture; “GGUF exists” is not enough by itself.
+  - runtime must support the model architecture; "GGUF exists" is not enough by itself.
   - parser/loader is an attack surface; treat third-party weights as untrusted inputs.
 
 **Implementation approach**
@@ -164,12 +168,12 @@ Laika should support multiple runtimes behind a single Swift protocol (e.g., `Mo
 
 ### Core ML (.mlmodelc)
 
-**Use when:** we want the fastest and most Apple-native execution (ANE/GPU/CPU), especially for small “guard” and embedding models.
+**Use when:** we want the fastest and most Apple-native execution (ANE/GPU/CPU), especially for small "guard" and embedding models.
 
 - Benefits:
   - good sandbox story and predictable macOS deployment,
   - performance via ANE/Metal,
-  - aligns with “no network” worker configuration.
+  - aligns with "no network" worker configuration.
 - Risks:
   - not all architectures convert cleanly,
   - conversion/tooling cost (quantization, attention kernels, long-context variants).
@@ -187,24 +191,24 @@ Laika should support multiple runtimes behind a single Swift protocol (e.g., `Mo
 
 ### Default model tiers
 
-Recommend shipping 2–3 “tiers” instead of letting users pick from dozens:
+Recommend shipping 2-3 "tiers" instead of letting users pick from dozens:
 
 - **Fast (default)**: small tool-using model for local planning + guard (lowest latency).
-- **Reasoning**: medium model (3B–4B) for harder planning and longer tasks.
+- **Reasoning**: medium model (3B-4B) for harder planning and longer tasks.
 - **Cloud (optional)**: BYO OpenAI/Anthropic for maximum quality; still uses local guard + local policy enforcement.
 
 ### BYO models (advanced)
 
-Support importing models as a deliberate “advanced” flow:
+Support importing models as a deliberate "advanced" flow:
 
 - Accept:
   - local GGUF files (user-selected),
-  - optional “download from Hugging Face repo” via explicit user action.
+  - optional "download from Hugging Face repo" via explicit user action.
 - Always:
   - verify SHA-256,
   - store in app container,
   - show model provenance (repo, revision, hash),
-  - require a “model trust” confirmation for third-party weights.
+  - require a "model trust" confirmation for third-party weights.
 
 ---
 
@@ -212,7 +216,7 @@ Support importing models as a deliberate “advanced” flow:
 
 ### Tool-only contract
 
-All models must be constrained to “request tools” rather than “perform actions”.
+All models must be constrained to "request tools" rather than "perform actions".
 
 Laika should use:
 
@@ -222,14 +226,14 @@ Laika should use:
 
 ### Thinking traces
 
-If the model emits “thinking” tokens (e.g., Qwen3’s `<think>...</think>`), Laika should:
+If the model emits "thinking" tokens (e.g., Qwen3's `<think>...</think>`), Laika should:
 
 - treat them as ephemeral and never store them in SQLite run history by default,
 - store only:
   - the final tool call (structured),
   - the user-facing explanation (short and auditable).
 
-This aligns with Qwen3’s own best practice: multi-turn history should contain only the final response, not the thinking content.
+This aligns with Qwen3's own best practice: multi-turn history should contain only the final response, not the thinking content.
 
 ---
 
@@ -256,15 +260,15 @@ The Agent Core should build a per-step context pack from SQLite:
 - **Never include by default**:
   - cookies/session tokens,
   - raw form values for sensitive fields,
-  - decrypted artifacts beyond what’s needed for the current step.
+  - decrypted artifacts beyond what's needed for the current step.
 
 ### Long-context modes
 
-Provide an explicit “Long context” mode for power users and specific tasks:
+Provide an explicit "Long context" mode for power users and specific tasks:
 
 - Raise `n_ctx` (GGUF runtime) or enable YaRN/RoPE scaling (Qwen) only when needed.
-- Keep separate performance guardrails (caps on tokens, timeouts, “stop if repeating” heuristics).
-- Consider “read-only long context” (analysis/summarization) without enabling mutating tools.
+- Keep separate performance guardrails (caps on tokens, timeouts, "stop if repeating" heuristics).
+- Consider "read-only long context" (analysis/summarization) without enabling mutating tools.
 
 ---
 
@@ -283,7 +287,7 @@ Provide an explicit “Long context” mode for power users and specific tasks:
 ### Cancellation and timeouts
 
 - Every inference request has `{requestId, deadlineMs}`.
-- Cancellation propagates Agent Core → LLM Worker immediately.
+- Cancellation propagates Agent Core -> LLM Worker immediately.
 - Timeouts fail safe: if the planner times out, downgrade autonomy (Observe-only) and ask the user.
 
 ---
@@ -312,7 +316,7 @@ Source: https://huggingface.co/ai21labs/AI21-Jamba-Reasoning-3B-GGUF
 
 Key properties from the model card:
 
-- 3B parameters; hybrid Transformer–Mamba.
+- 3B parameters; hybrid Transformer-Mamba.
 - Advertised **256K context**.
 - GGUF quantizations (example sizes):
   - FP16: ~6.4 GB
@@ -322,8 +326,8 @@ Key properties from the model card:
 
 Laika guidance:
 
-- Treat this as a “Reasoning tier” local planner candidate.
-- Default to smaller practical contexts (e.g., 8K–32K) for responsiveness; enable long-context mode selectively.
+- Treat this as a "Reasoning tier" local planner candidate.
+- Default to smaller practical contexts (e.g., 8K-32K) for responsiveness; enable long-context mode selectively.
 - Prefer grammar-guided tool-call decoding to reduce invalid JSON and improve automation stability.
 
 ### Qwen3-4B
@@ -334,19 +338,19 @@ Key properties from the model card:
 
 - 4.0B parameters.
 - Context length: **32,768** natively; validated up to **131,072** tokens with YaRN (RoPE scaling).
-- “Thinking” vs “non-thinking” mode via `enable_thinking` and prompt tags (`/think`, `/no_think`).
+- "Thinking" vs "non-thinking" mode via `enable_thinking` and prompt tags (`/think`, `/no_think`).
 - Best practice: omit thinking content from multi-turn history.
 
 Laika guidance:
 
-- Treat this as a “Reasoning tier” local planner candidate with strong agent/tool capabilities.
-- Use “thinking mode” internally when planning, but persist only structured tool calls and user-facing rationales.
+- Treat this as a "Reasoning tier" local planner candidate with strong agent/tool capabilities.
+- Use "thinking mode" internally when planning, but persist only structured tool calls and user-facing rationales.
 - Enable YaRN only in explicit long-context mode (it can degrade short-context performance).
 - Use repetition guardrails (presence penalty / stop-on-repeat heuristics) when running long outputs.
 
 ---
 
-## Cloud training + fine-tuning pipeline (offline → signed updates)
+## Cloud training + fine-tuning pipeline (offline -> signed updates)
 
 Laika can improve local tool-use reliability over time via an offline cloud pipeline that produces **signed model artifacts** for download to devices.
 
@@ -371,8 +375,8 @@ Laika can improve local tool-use reliability over time via an offline cloud pipe
 ### Training approaches
 
 - **SFT (supervised fine-tuning)** on tool-call traces:
-  - focus on emitting valid schemas, correct tool selection, and safe “ask/deny” behavior.
-- **Preference optimization** (DPO/ORPO) on “good vs bad” trajectories:
+  - focus on emitting valid schemas, correct tool selection, and safe "ask/deny" behavior.
+- **Preference optimization** (DPO/ORPO) on "good vs bad" trajectories:
   - penalize unsafe actions, cross-site leakage, and invalid tool outputs.
 - **RL (later)** for robustness:
   - reward successful completion with minimal tool calls under policy constraints,
@@ -395,7 +399,7 @@ Laika can improve local tool-use reliability over time via an offline cloud pipe
   - SHA-256,
   - compatibility constraints (`minAppVersion`, `toolSchemaVersion`, runtime type).
 - Updates are staged:
-  - canary → gradual rollout → broad.
+  - canary -> gradual rollout -> broad.
 - Rollback is one click:
   - keep last known-good model and last N versions.
 
@@ -405,15 +409,15 @@ Laika can improve local tool-use reliability over time via an offline cloud pipe
 - Safety test suite:
   - prompt injection pages,
   - cross-origin data exfil attempts,
-  - “tool misuse” adversaries.
-- Regression tests on common browsing flows (observe → find → click → type → verify).
+  - "tool misuse" adversaries.
+- Regression tests on common browsing flows (observe -> find -> click -> type -> verify).
 
 ---
 
 ## Open questions / decisions to validate
 
-- Primary runtime choice for MVP: “GGUF/llama.cpp only” vs “GGUF + Core ML guard”.
-- Exact “no network” configuration feasibility for the LLM Worker under App Sandbox constraints.
+- Primary runtime choice for MVP: "GGUF/llama.cpp only" vs "GGUF + Core ML guard".
+- Exact "no network" configuration feasibility for the LLM Worker under App Sandbox constraints.
 - Practical maximum contexts on Apple Silicon (latency + memory) for:
   - Qwen3-4B at 32K+ contexts,
   - Jamba 3B at 64K/128K/256K contexts.

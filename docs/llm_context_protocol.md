@@ -1,4 +1,4 @@
-# Laika LLM Context Protocol (LLMCP) — JSON + Markdown
+# Laika LLM Context Protocol (LLMCP) - JSON + Markdown
 
 This doc defines a **versioned JSON protocol** used between **Laika Agent Core** and an LLM runtime (local or BYO cloud) for:
 
@@ -11,7 +11,8 @@ This protocol is designed for the collection-first Laika workflow (sources -> ch
 - https://aifoc.us/if-notebooklm-was-a-web-browser/
 - `./NotebookLM-Chrome/` (reference implementation patterns)
 
-Related: `docs/LaikaOverview.md`, `docs/laika_vocabulary.md`, `docs/safehtml_mark.md`, `docs/dom_heuristics.md`, `docs/local_llm.md`, `src/laika/PLAN.md`.
+Related: `docs/LaikaArch.md`, `docs/laika_vocabulary.md`, `docs/safehtml_mark.md`, `docs/dom_heuristics.md`, `docs/local_llm.md`, `src/laika/PLAN.md`.
+Also: `docs/logging.md` (logging + audit and correlation IDs).
 
 ---
 
@@ -30,11 +31,11 @@ Related: `docs/LaikaOverview.md`, `docs/laika_vocabulary.md`, `docs/safehtml_mar
 
 - Sending raw HTML (or full DOM dumps) to models.
 - Letting the model execute arbitrary HTML/CSS/JS in privileged UI.
-- A general-purpose long-term RAG/vector DB (collections can add this later, but it’s not required for LLMCP).
+- A general-purpose long-term RAG/vector DB (collections can add this later, but it's not required for LLMCP).
 
 ---
 
-## High-level flow (“summarize this page”)
+## High-level flow ("summarize this page")
 
 1) **Observe (Safari)**: content script extracts a normalized representation.
 2) **Extract Markdown (trusted)**: page content is converted to Markdown + metadata and signals.
@@ -80,8 +81,8 @@ All protocol messages are JSON objects with a stable envelope:
 Most runtimes accept strings (`system`/`user`). LLMCP is the logical payload:
 
 - **System prompt**: strict JSON-only instructions + an explicit response schema.
-- **User content**: serialized request packet (or the request packet’s `input` + `context` object).
-- **Local models**: disable “thinking” traces when possible (e.g., Qwen3 `enable_thinking=false`) so responses remain valid JSON.
+- **User content**: serialized request packet (or the request packet's `input` + `context` object).
+- **Local models**: disable "thinking" traces when possible (e.g., Qwen3 `enable_thinking=false`) so responses remain valid JSON.
 
 ---
 
@@ -269,7 +270,25 @@ Minimum recommended fields:
 - `url` (for opening the underlying source)
 - `quote` (short excerpt supporting the claim)
 
-The UI should treat citations as first-class objects, not “just text”.
+Recommended optional fields (for better UX):
+- `locator`: a best-effort hint for jumping to the evidence within the source
+  - `{"type":"text_fragment","value":"..."}`
+  - `{"type":"section_heading","value":"..."}`
+- `confidence`: number `0..1` (how confident the model is that the quote supports the nearby claim)
+
+Example:
+
+```json
+{
+  "source_id": "src_123",
+  "url": "https://example.com/story",
+  "quote": "The launch is expected in Q2.",
+  "locator": { "type": "text_fragment", "value": "launch is expected in Q2" },
+  "confidence": 0.72
+}
+```
+
+The UI should treat citations as first-class objects, not "just text".
 
 ---
 
@@ -317,7 +336,7 @@ Notes:
 ### App-level primitives (trusted local executors)
 
 - `artifact.save`: `{ "title": string, "markdown": string, "tags"?: [string], "redaction"?: "default"|"none" }`
-- `artifact.share`: `{ "artifactId": string, "format": "markdown"|"text"|"json"|"csv"|"pdf", "filename"?: string, "target"?: "share_sheet"|"clipboard"|"file" }`
+- `artifact.share`: `{ "artifactId": string, "format": "markdown"|"text"|"json"|"csv"|"pdf", "filename"?: string, "target"?: "share_sheet"|"clipboard"|"file" }` (P0: clipboard + file; share_sheet in P1)
 - `artifact.open`: `{ "artifactId": string, "target"?: "workspace"|"browser", "newTab"?: boolean }`
 - `integration.invoke`: `{ "integration": string, "operation": string, "payload": object, "idempotencyKey"?: string }`
 - `app.calculate`: `{ "expression": string, "precision"?: number }`
@@ -335,6 +354,20 @@ Transforms:
 
 ---
 
+## Tool schema versioning and rollout (recommended)
+
+Tool calling must be robust to app/extension updates.
+
+Recommendations:
+- Keep a single **tool schema version** per release (e.g., `tools.schema_version = 1`).
+- Generate the model's "available tools" system prompt from the schema (so the model only learns tools we actually support).
+- Reject unknown tool names and unknown keys at the boundary (validator is authoritative).
+- Roll out new tools by:
+  - adding schema + validator support,
+  - updating the system prompt/tool list,
+  - adding at least one automation harness scenario that exercises the new tool,
+  - gating risky tools behind Policy Gate approvals by default.
+
 ## Markdown output rules (prompt contract)
 
 System prompts for v2 must enforce:
@@ -343,7 +376,7 @@ System prompts for v2 must enforce:
 - Put all human-readable content in `assistant.markdown`.
 - Do not output raw HTML in `assistant.markdown` (Markdown only).
 - Cite sources using `assistant.citations` (and optionally inline markers like `[1]` in Markdown if helpful).
-- If sources don’t support the answer, say so and suggest what to collect next.
+- If sources don't support the answer, say so and suggest what to collect next.
 
 ---
 
@@ -371,45 +404,30 @@ Default policy should avoid persisting raw page captures inside LLM packets (ful
 - Prefer storing: digests + short previews for context documents in the conversation log
 - Store full captured source Markdown in the **collection/source store**, not in the chat log
 
-### Proposed schema (v1)
+### Concrete schema (v1)
 
-```sql
-CREATE TABLE IF NOT EXISTS conversations (
-  id TEXT PRIMARY KEY,
-  created_at TEXT NOT NULL,
-  title TEXT
-);
+The concrete schema used by Laika is defined here:
+- `docs/sqlite_schema_v1.sql`
 
-CREATE TABLE IF NOT EXISTS messages (
-  id TEXT PRIMARY KEY,
-  conversation_id TEXT NOT NULL,
-  turn INTEGER NOT NULL,
-  created_at TEXT NOT NULL,
-  sender_role TEXT NOT NULL,          -- user|agent|assistant|tool
-  packet_type TEXT NOT NULL,          -- request|response|tool (future)
-  in_reply_to_request_id TEXT,
-  model_id TEXT,
-  packet_json TEXT NOT NULL,
-  FOREIGN KEY(conversation_id) REFERENCES conversations(id)
-);
+LLMCP-related storage mapping (directionally):
+- `chat_events`: durable collection-scoped chat history (user + assistant Markdown + citations)
+- `llm_runs`: optional redacted request/response payloads + token/cost usage for audit/debugging
 
-CREATE INDEX IF NOT EXISTS idx_messages_conversation_turn
-  ON messages(conversation_id, turn);
-```
+We intentionally avoid storing full context packs (captured source Markdown) inside LLM packets by default; captured source bodies live in `sources.capture_markdown`.
 
 ---
 
 ## Robustness and safety considerations
 
 - **Instruction/data separation**: all web-derived docs are `trust="untrusted"`.
-- **Strict JSON parsing**: reject non-JSON; optionally strip code fences in a safe “repair” mode.
+- **Strict JSON parsing**: reject non-JSON; optionally strip code fences in a safe "repair" mode.
 - **Large Markdown strings**: validate output size; enforce caps; compress/summarize context before sending.
 - **Redaction**: never include cookies/session tokens; strip credential-like query params.
 - **UI safety**: never inject raw model output; always sanitize rendered HTML.
 
 ---
 
-## Example: “summarize this page” (abbreviated)
+## Example: "summarize this page" (abbreviated)
 
 ### Request
 

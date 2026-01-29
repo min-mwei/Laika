@@ -4,8 +4,9 @@
 This directory is reserved for the Safari extension, macOS companion app, and the thin model bridge that validate the AI Fortress design.
 
 ## Primary references
-- `docs/LaikaOverview.md` for architecture and safety expectations.
+- `docs/LaikaArch.md` for architecture and safety expectations.
 - `docs/automation.md` for automation harness flow, options, and scenario format.
+- `docs/logging.md` for logging/audit event design and redaction posture.
 - `src/laika/PLAN.md` for the validation plan.
 - `src/local_llm_quantizer/README.md` for MLX 4-bit model conversion details.
 

@@ -10,7 +10,8 @@ Non-goals:
 Related:
 - `docs/Laika_pitch.md` (what we are building, why it matters)
 - `docs/laika_vocabulary.md` (Collect/Ask/Summarize/Compare/Transform verbs)
-- `docs/LaikaOverview.md` (architecture + safety posture)
+- `docs/LaikaArch.md` (architecture + safety posture)
+- `docs/logging.md` (logging + audit: structured events and redaction posture)
 - `docs/safehtml_mark.md` (Safe HTML <-> Markdown: capture + rendering + sanitization)
 - `docs/llm_context_protocol.md` (LLMCP request/response + tool schemas)
 - `src/laika/PLAN.md` (implementation plan and phases)
@@ -23,7 +24,7 @@ Laika should feel like one coherent app that can render in multiple places:
 
 1) **Sidecar (attached)**
    - An in-page panel attached to the current tab.
-   - Best for “collect links from what I’m reading” and quick Q&A.
+   - Best for "collect links from what I'm reading" and quick Q&A.
 
 2) **Panel window (detached)**
    - A larger, persistent workspace window.
@@ -34,6 +35,29 @@ Laika should feel like one coherent app that can render in multiple places:
    - Uses the same safe renderer as chat.
 
 Design invariant: every surface renders only **allowlisted UI** and **sanitized rendered HTML** produced from Markdown. No raw model HTML.
+
+---
+
+## 1.5) UI implementation (tech stack + packaging)
+
+The vNext Laika UI is an app (tabs, lists, modals, background statuses), so we should build it like one.
+
+Decision:
+- UI: **Preact + TypeScript**
+- Build: **Vite**
+
+Implementation direction:
+- One UI codebase builds to static assets bundled with the Safari extension.
+- The same UI app runs in multiple surfaces, selected by a query param:
+  - `?surface=sidecar` (attached)
+  - `?surface=panel` (detached)
+  - `?surface=viewer` (artifact viewer)
+ - Proposed layout: UI source `src/laika/extension/ui/` -> build output `src/laika/extension/ui_dist/`.
+
+Packaging constraints (Safari extension):
+- No remote code or runtime fetches for UI code (everything shipped in the extension bundle).
+- Avoid `eval`/`new Function` in production bundles (CSP-compatible output).
+- Keep the Markdown pipeline shared and deterministic across surfaces (see `docs/safehtml_mark.md`).
 
 ---
 
@@ -62,7 +86,7 @@ All surfaces share the same app shell:
 ### Top bar (collection-aware)
 
 Elements:
-- **Collection switcher**: shows active collection name; dropdown to switch; quick “New collection…”.
+- **Collection switcher**: shows active collection name; dropdown to switch; quick "New collection...".
 - **Collect +**: opens the Collect modal (two entry points: session + search).
 - **Overflow menu**: rename collection, delete collection, export collection metadata, diagnostics.
 
@@ -74,7 +98,7 @@ Rules:
 
 ## 3) Sources tab (Collect + manage sources)
 
-The Sources tab is the “evidence locker” for the collection: what you have, what’s captured, what failed, what to add next.
+The Sources tab is the "evidence locker" for the collection: what you have, what's captured, what failed, what to add next.
 
 ### 3.1 Layout
 
@@ -158,7 +182,7 @@ Each URL source has a capture state:
 - `failed`: show reason code and a retry affordance
 
 Capture queue UX requirements:
-- Visible progress (e.g., “Capturing 3/10…”).
+- Visible progress (e.g., "Capturing 3/10...").
 - Per-source actions: `Retry`, `Open`, `Remove`.
 - Clear warnings for partial captures (paywall/login/overlay signals).
 
@@ -227,7 +251,7 @@ Requirements:
 
 UI pattern:
 - Inline markers in the rendered doc (e.g., `[1]`, `[2]`) are optional.
-- The durable, machine-parseable citations list lives below the message, so it can’t be “styled away”.
+- The durable, machine-parseable citations list lives below the message, so it can't be "styled away".
 
 ### 4.3 Chat result rendering (rich, safe)
 
@@ -250,7 +274,7 @@ Chat uses LLMCP tasks with collection context packs:
 Context packing (P0 direction):
 - Include one `collection.index.v1` doc (lightweight list of sources).
 - Include N `collection.source.v1` docs (bounded captured text).
-- Use heuristic or two-pass compression when N is large (see `docs/LaikaOverview.md`).
+- Use heuristic or two-pass compression when N is large (see `docs/LaikaArch.md`).
 
 Citations contract (P0):
 - Responses must include structured citations that map to sources:
@@ -260,7 +284,7 @@ Citations contract (P0):
 
 ## 5) Transforms tab (named generators -> durable artifacts)
 
-Transforms are the “repeatable output formats” layer. They create artifacts you can reopen and share.
+Transforms are the "repeatable output formats" layer. They create artifacts you can reopen and share.
 
 ### 5.1 Layout
 
@@ -291,7 +315,7 @@ Requirements:
 - Transforms are background/resumable.
 - Each run has an explicit status and a stable `artifactId`.
 - The UI always shows which collection and which sources were used.
-- Errors are actionable (“Source 4 capture failed; retry capture”).
+- Errors are actionable ("Source 4 capture failed; retry capture").
 
 ### 5.3 Artifact viewer (trusted, reopenable)
 
@@ -299,7 +323,7 @@ Artifact viewer is a dedicated surface for reading/sharing:
 
 ```text
 +--------------------------------------------------------------------------------+
-| Artifact: "Kyoto hotels comparison"   (Kyoto Trip)   [Copy] [Export] [Share]   |
+| Artifact: "Kyoto hotels comparison"   (Kyoto Trip)   [Copy] [Export]           |
 | Sources used: [1] Hotel A ...  [2] Hotel B ...  [3] Area guide ...             |
 |--------------------------------------------------------------------------------|
 | (rendered doc; tables supported; links sanitized)                               |
@@ -314,7 +338,7 @@ Artifact viewer is a dedicated surface for reading/sharing:
 - `transform.run`
 - `artifact.save` (if the transform returns a doc and we want to explicitly persist)
 - `artifact.open` (open in viewer)
-- `artifact.share` (explicit egress)
+- `artifact.share` (explicit egress; P0: clipboard + file export; P1: share sheet)
 
 Transform results should be stored as:
 - `Artifact.contentMarkdown` (Markdown)
@@ -326,7 +350,7 @@ Transform results should be stored as:
 
 ## 6) Settings tab (models, privacy, trust controls)
 
-Settings should reinforce the “fortress” posture: clear boundaries, explicit choices, auditable behavior.
+Settings should reinforce the "fortress" posture: clear boundaries, explicit choices, auditable behavior.
 
 P0 settings:
 - Active model (local default)
@@ -350,14 +374,14 @@ P1 settings:
 
 ### 7.2 Citations as first-class UI objects
 
-Citations should not be “just text”.
+Citations should not be "just text".
 
 Minimum UI representation:
 - `source_id` -> resolve to source title + URL
 - short excerpt / quote
 - click opens source URL
 
-This makes outputs reviewable and “trustable” by default.
+This makes outputs reviewable and "trustable" by default.
 
 ### 7.3 Separation of concerns (defense-in-depth)
 

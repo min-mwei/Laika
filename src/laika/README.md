@@ -51,7 +51,7 @@ By default the build script installs to `~/Applications` so Safari can see the e
 
 ## 4) Use the sidecar
 
-1. Click the Laika toolbar icon to toggle the attached sidecar panel in the current tab (scoped to the current Safari window). By default, the sidecar stays open as you switch tabs, appears on the right, and the open/closed state is saved in extension storage. If the sidecar can’t attach, Laika opens the UI as a standalone panel window.
+1. Click the Laika toolbar icon to toggle the attached sidecar panel in the current tab (scoped to the current Safari window). By default, the sidecar stays open as you switch tabs, appears on the right, and the open/closed state is saved in extension storage. If the sidecar can't attach, Laika opens the UI as a standalone panel window.
 2. Ask a question (e.g., "summarize this page") and click "Send".
 3. Approve or reject any proposed actions inline in the chat.
 4. Adjust sidecar preferences in `Safari` -> `Settings` -> `Extensions` -> `Laika` (sticky vs per-tab, left vs right).
@@ -60,7 +60,7 @@ By default the build script installs to `~/Applications` so Safari can see the e
 
 Follow this loop for any change:
 
-1. Update the relevant design doc (`src/laika/PLAN.md` or `docs/LaikaOverview.md`).
+1. Update the relevant design doc (`src/laika/PLAN.md` or `docs/LaikaArch.md`).
 2. Implement and run local tests.
 3. Run the automation harness scenarios.
 4. Verify the build + logging, then ask for manual Safari testing.

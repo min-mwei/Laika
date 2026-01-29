@@ -23,7 +23,7 @@ Users should write normal prompts. Internally, Laika can translate intent into o
 Related docs:
 
 - `docs/Laika_pitch.md` (product narrative and examples)
-- `docs/LaikaOverview.md` (architecture + safety posture)
+- `docs/LaikaArch.md` (architecture + safety posture)
 - `docs/laika_ui.md` (UI layouts + flows)
 - `docs/llm_context_protocol.md` (JSON protocol + tool schemas)
 - `docs/safehtml_mark.md` (Safe HTML <-> Markdown: capture + rendering + sanitization)
