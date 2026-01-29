@@ -91,4 +91,59 @@ final class ToolSchemaValidatorTests: XCTestCase {
         )
         XCTAssertFalse(invalid)
     }
+
+    func testValidateCollectionCreateArguments() {
+        let valid = ToolSchemaValidator.validateArguments(
+            name: .collectionCreate,
+            arguments: ["title": .string("Meta coverage"), "tags": .array([.string("news")])]
+        )
+        XCTAssertTrue(valid)
+
+        let invalid = ToolSchemaValidator.validateArguments(
+            name: .collectionCreate,
+            arguments: ["title": .string(" "), "tags": .array([.string("")])]
+        )
+        XCTAssertFalse(invalid)
+    }
+
+    func testValidateCollectionAddSourcesArguments() {
+        let sources: JSONValue = .array([
+            .object(["type": .string("url"), "url": .string("https://example.com")]),
+            .object(["type": .string("note"), "text": .string("A note")])
+        ])
+        let valid = ToolSchemaValidator.validateArguments(
+            name: .collectionAddSources,
+            arguments: ["collectionId": .string("col_123"), "sources": sources]
+        )
+        XCTAssertTrue(valid)
+
+        let invalid = ToolSchemaValidator.validateArguments(
+            name: .collectionAddSources,
+            arguments: ["collectionId": .string("col_123"), "sources": .array([])]
+        )
+        XCTAssertFalse(invalid)
+    }
+
+    func testValidateSourceCaptureArguments() {
+        let valid = ToolSchemaValidator.validateArguments(
+            name: .sourceCapture,
+            arguments: [
+                "collectionId": .string("col_123"),
+                "url": .string("https://example.com"),
+                "mode": .string("article"),
+                "maxChars": .number(24000)
+            ]
+        )
+        XCTAssertTrue(valid)
+
+        let invalid = ToolSchemaValidator.validateArguments(
+            name: .sourceCapture,
+            arguments: [
+                "collectionId": .string("col_123"),
+                "url": .string("https://example.com"),
+                "mode": .string("unknown")
+            ]
+        )
+        XCTAssertFalse(invalid)
+    }
 }

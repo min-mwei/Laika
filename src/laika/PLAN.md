@@ -398,7 +398,7 @@ We should build vNext as a single end-to-end slice before expanding breadth:
 
 This aligns the codebase, docs, and harness around one "real" workflow early.
 
-### Phase 0 - Reset + foundations (1-2 weeks)
+### Phase 0 — Reset + foundations (1-2 weeks)
 
 Goal: make the codebase ready for collection-centric work.
 
@@ -406,8 +406,15 @@ Goal: make the codebase ready for collection-centric work.
 - Extract a shared Markdown renderer (Markdown -> sanitized HTML) from the UI and add:
   - table support
   - better link styling and copy affordances
+- Wire the shared renderer into the current UI surfaces (popover sidecar/panel) for Markdown output rendering.
 - Define the new persistence interfaces (Swift + JS) for collections/sources/artifacts.
 - Update tool schema snapshots / validators to include P0 tool names and reject unknown keys.
+- Establish a shared renderer module and tests:
+  - `src/laika/extension/lib/markdown_renderer.js` as the canonical Markdown -> safe HTML path.
+  - Unit tests under `src/laika/extension/tests/markdown_renderer.test.js` (tables, links, HTML passthrough disabled).
+- Update validator + snapshot to match `docs/llm_context_protocol.md`:
+  - `src/laika/extension/lib/plan_validator.js`
+  - `src/laika/shared/Tests/LaikaSharedTests/Resources/tool_schema_snapshot.json`
 
 Exit criteria:
 - UI shell loads in both sidecar and panel window.

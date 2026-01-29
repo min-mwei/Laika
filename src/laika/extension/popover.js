@@ -10,6 +10,27 @@ var clearButton = document.getElementById("clear-chat");
 var openPanelButton = document.getElementById("open-panel");
 var isPanelWindow = false;
 
+var collectionSelect = document.getElementById("collection-select");
+var newCollectionButton = document.getElementById("new-collection");
+var deleteCollectionButton = document.getElementById("delete-collection");
+var tabButtons = document.querySelectorAll(".tab-button");
+var tabPanels = document.querySelectorAll(".tab-panel");
+var addCurrentTabButton = document.getElementById("add-current-tab");
+var addSelectedLinksButton = document.getElementById("add-selected-links");
+var pasteUrlsButton = document.getElementById("paste-urls");
+var addNoteButton = document.getElementById("add-note");
+var selectionPreview = document.getElementById("selection-preview");
+var selectionSummary = document.getElementById("selection-summary");
+var selectionList = document.getElementById("selection-list");
+var selectionAddButton = document.getElementById("selection-add");
+var selectionCancelButton = document.getElementById("selection-cancel");
+var pasteUrlsForm = document.getElementById("paste-urls-form");
+var pasteUrlsInput = document.getElementById("paste-urls-input");
+var pasteUrlsAddButton = document.getElementById("paste-urls-add");
+var pasteUrlsCancelButton = document.getElementById("paste-urls-cancel");
+var sourcesStatus = document.getElementById("sources-status");
+var sourcesList = document.getElementById("sources-list");
+
 var DEFAULT_MAX_TOKENS = 3072;
 var MAX_TOKENS_CAP = 8192;
 var maxTokensSetting = DEFAULT_MAX_TOKENS;
@@ -33,8 +54,16 @@ var chatHistory = [];
 var chatHistoryLoaded = false;
 var chatHistoryTombstone = 0;
 
+var collections = [];
+var activeCollectionId = null;
+var sources = [];
+var selectionUrls = [];
+
 var MESSAGE_FORMAT_PLAIN = "plain";
 var MESSAGE_FORMAT_RENDER = "render";
+var MESSAGE_FORMAT_MARKDOWN = "markdown";
+
+var markdownRenderer = null;
 
 var MAX_AGENT_STEPS = 6;
 var DEFAULT_OBSERVE_OPTIONS = {
@@ -157,6 +186,469 @@ function setStatus(text) {
   logDebug("status: " + output);
 }
 
+function setActiveTab(tabName) {
+  if (!tabButtons || !tabPanels) {
+    return;
+  }
+  var index = 0;
+  for (index = 0; index < tabButtons.length; index += 1) {
+    var button = tabButtons[index];
+    var target = button.getAttribute("data-tab");
+    if (target === tabName) {
+      button.classList.add("active");
+    } else {
+      button.classList.remove("active");
+    }
+  }
+  for (index = 0; index < tabPanels.length; index += 1) {
+    var panel = tabPanels[index];
+    if (panel && panel.id === "tab-" + tabName) {
+      panel.classList.add("active");
+    } else if (panel) {
+      panel.classList.remove("active");
+    }
+  }
+}
+
+function setupTabs() {
+  if (!tabButtons) {
+    return;
+  }
+  var index = 0;
+  for (index = 0; index < tabButtons.length; index += 1) {
+    tabButtons[index].addEventListener("click", function (event) {
+      var target = event.currentTarget && event.currentTarget.getAttribute
+        ? event.currentTarget.getAttribute("data-tab")
+        : null;
+      if (target) {
+        setActiveTab(target);
+      }
+    });
+  }
+}
+
+async function sendCollectionMessage(action, payload) {
+  return await sendNativeMessage({
+    type: "collection",
+    action: action,
+    payload: payload || {}
+  });
+}
+
+function unwrapNativeResult(response) {
+  if (response && response.ok && response.result && response.result.status === "ok") {
+    return response.result;
+  }
+  if (response && response.result && response.result.error) {
+    throw new Error(response.result.error);
+  }
+  if (response && response.error) {
+    throw new Error(response.error);
+  }
+  throw new Error("native_error");
+}
+
+async function loadCollections() {
+  if (!collectionSelect) {
+    return;
+  }
+  try {
+    var response = await sendCollectionMessage("list");
+    var result = unwrapNativeResult(response);
+    collections = Array.isArray(result.collections) ? result.collections : [];
+    activeCollectionId = typeof result.activeCollectionId === "string" ? result.activeCollectionId : null;
+    renderCollections();
+    await loadSources();
+  } catch (error) {
+    setSourcesStatus("Failed to load collections.");
+  }
+}
+
+function renderCollections() {
+  if (!collectionSelect) {
+    return;
+  }
+  collectionSelect.innerHTML = "";
+  if (!collections || collections.length === 0) {
+    var emptyOption = document.createElement("option");
+    emptyOption.value = "";
+    emptyOption.textContent = "No collections yet";
+    collectionSelect.appendChild(emptyOption);
+    collectionSelect.value = "";
+    activeCollectionId = null;
+    if (deleteCollectionButton) {
+      deleteCollectionButton.disabled = true;
+    }
+    return;
+  }
+  collections.forEach(function (collection) {
+    var option = document.createElement("option");
+    option.value = collection.id;
+    option.textContent = collection.title || collection.id;
+    collectionSelect.appendChild(option);
+  });
+  if (!activeCollectionId || !collections.some(function (collection) { return collection.id === activeCollectionId; })) {
+    activeCollectionId = collections[0].id;
+  }
+  collectionSelect.value = activeCollectionId || "";
+  if (deleteCollectionButton) {
+    deleteCollectionButton.disabled = !activeCollectionId;
+  }
+}
+
+async function setActiveCollection(collectionId) {
+  if (!collectionId) {
+    return;
+  }
+  try {
+    var response = await sendCollectionMessage("set_active", { collectionId: collectionId });
+    var result = unwrapNativeResult(response);
+    activeCollectionId = typeof result.activeCollectionId === "string" ? result.activeCollectionId : collectionId;
+    await loadSources();
+  } catch (error) {
+    setSourcesStatus("Failed to switch collection.");
+  }
+}
+
+async function ensureActiveCollection() {
+  if (activeCollectionId) {
+    return activeCollectionId;
+  }
+  var title = window.prompt("Create a collection name:", "New collection");
+  if (!title) {
+    return null;
+  }
+  try {
+    var response = await sendCollectionMessage("create", { title: title });
+    var result = unwrapNativeResult(response);
+    if (result.collection) {
+      collections.unshift(result.collection);
+      activeCollectionId = result.collection.id;
+    } else if (typeof result.activeCollectionId === "string") {
+      activeCollectionId = result.activeCollectionId;
+    }
+    renderCollections();
+    await loadSources();
+    return activeCollectionId;
+  } catch (error) {
+    setSourcesStatus("Failed to create collection.");
+    return null;
+  }
+}
+
+async function createNewCollection() {
+  activeCollectionId = null;
+  return await ensureActiveCollection();
+}
+
+async function deleteActiveCollection() {
+  if (!activeCollectionId) {
+    return;
+  }
+  var confirmed = window.confirm("Delete this collection and all its sources?");
+  if (!confirmed) {
+    return;
+  }
+  try {
+    var response = await sendCollectionMessage("delete", { collectionId: activeCollectionId });
+    unwrapNativeResult(response);
+    await loadCollections();
+  } catch (error) {
+    setSourcesStatus("Failed to delete collection.");
+  }
+}
+
+function setSourcesStatus(text) {
+  if (sourcesStatus) {
+    sourcesStatus.textContent = text || "";
+  }
+}
+
+async function loadSources() {
+  if (!activeCollectionId) {
+    sources = [];
+    renderSources();
+    return;
+  }
+  try {
+    var response = await sendCollectionMessage("list_sources", { collectionId: activeCollectionId });
+    var result = unwrapNativeResult(response);
+    sources = Array.isArray(result.sources) ? result.sources : [];
+    renderSources();
+  } catch (error) {
+    setSourcesStatus("Failed to load sources.");
+  }
+}
+
+function renderSources() {
+  if (!sourcesList) {
+    return;
+  }
+  sourcesList.innerHTML = "";
+  if (!activeCollectionId) {
+    setSourcesStatus("No collection selected.");
+    return;
+  }
+  if (!sources || sources.length === 0) {
+    setSourcesStatus("No sources yet. Add a tab or selected links.");
+    return;
+  }
+  var capturedCount = sources.filter(function (source) { return source.captureStatus === "captured"; }).length;
+  var pendingCount = sources.filter(function (source) { return source.captureStatus === "pending"; }).length;
+  var failedCount = sources.filter(function (source) { return source.captureStatus === "failed"; }).length;
+  setSourcesStatus("Sources: " + sources.length +
+    " (captured " + capturedCount + ", pending " + pendingCount + ", failed " + failedCount + ")");
+
+  sources.forEach(function (source) {
+    var item = document.createElement("div");
+    item.className = "source-item";
+    var header = document.createElement("div");
+    header.className = "source-header";
+    var title = document.createElement("div");
+    title.className = "source-title";
+    var label = source.title || source.url || source.id;
+    title.textContent = label;
+    var removeButton = document.createElement("button");
+    removeButton.className = "source-remove";
+    removeButton.type = "button";
+    removeButton.textContent = "×";
+    removeButton.addEventListener("click", function () {
+      deleteSource(source.id);
+    });
+    header.appendChild(title);
+    header.appendChild(removeButton);
+    var meta = document.createElement("div");
+    meta.className = "source-meta";
+    var badge = document.createElement("span");
+    var status = source.captureStatus || "pending";
+    badge.className = "badge " + status;
+    badge.textContent = status;
+    meta.appendChild(badge);
+    if (source.kind) {
+      var kind = document.createElement("span");
+      kind.textContent = source.kind;
+      meta.appendChild(kind);
+    }
+    if (source.url) {
+      var host = document.createElement("span");
+      try {
+        host.textContent = new URL(source.url).hostname;
+      } catch (error) {
+        host.textContent = source.url;
+      }
+      meta.appendChild(host);
+    }
+    item.appendChild(header);
+    item.appendChild(meta);
+    sourcesList.appendChild(item);
+  });
+}
+
+function resetSelectionPreview() {
+  selectionUrls = [];
+  if (selectionList) {
+    selectionList.innerHTML = "";
+  }
+  if (selectionSummary) {
+    selectionSummary.textContent = "";
+  }
+  if (selectionPreview) {
+    selectionPreview.classList.add("hidden");
+  }
+}
+
+function showSelectionPreview(urls) {
+  if (!selectionPreview || !selectionList || !selectionSummary) {
+    return;
+  }
+  selectionUrls = urls.slice();
+  selectionList.innerHTML = "";
+  selectionSummary.textContent = "Selected links (" + urls.length + ")";
+  urls.forEach(function (url) {
+    var item = document.createElement("li");
+    var checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.dataset.url = url;
+    var label = document.createElement("code");
+    label.textContent = url;
+    item.appendChild(checkbox);
+    item.appendChild(label);
+    selectionList.appendChild(item);
+  });
+  selectionPreview.classList.remove("hidden");
+}
+
+function hidePasteUrlsForm() {
+  if (pasteUrlsForm) {
+    pasteUrlsForm.classList.add("hidden");
+  }
+  if (pasteUrlsInput) {
+    pasteUrlsInput.value = "";
+  }
+}
+
+function showPasteUrlsForm() {
+  if (pasteUrlsForm) {
+    pasteUrlsForm.classList.remove("hidden");
+  }
+  if (pasteUrlsInput) {
+    pasteUrlsInput.focus();
+  }
+}
+
+function parseUrls(text) {
+  if (!text) {
+    return [];
+  }
+  var lines = text.split(/\s+/).map(function (line) {
+    return line.trim();
+  }).filter(Boolean);
+  var seen = new Set();
+  var urls = [];
+  lines.forEach(function (line) {
+    if (!/^https?:/i.test(line)) {
+      return;
+    }
+    if (seen.has(line)) {
+      return;
+    }
+    seen.add(line);
+    urls.push(line);
+  });
+  return urls;
+}
+
+async function addSourcesToCollection(sourceInputs) {
+  var collectionId = await ensureActiveCollection();
+  if (!collectionId) {
+    return;
+  }
+  try {
+    var response = await sendCollectionMessage("add_sources", {
+      collectionId: collectionId,
+      sources: sourceInputs
+    });
+    var result = unwrapNativeResult(response);
+    if (result.dedupedCount || result.ignoredCount) {
+      setSourcesStatus("Added with " + (result.dedupedCount || 0) +
+        " duplicate(s) and " + (result.ignoredCount || 0) + " ignored.");
+    }
+    await loadSources();
+  } catch (error) {
+    setSourcesStatus("Failed to add sources.");
+  }
+}
+
+async function addCurrentTab() {
+  try {
+    var context = await observePage();
+    if (!context || !context.observation) {
+      setSourcesStatus("No page context found.");
+      return;
+    }
+    var url = context.observation.url || "";
+    if (!url) {
+      setSourcesStatus("No page URL found.");
+      return;
+    }
+    var title = context.observation.title || "";
+    await addSourcesToCollection([{ type: "url", url: url, title: title }]);
+  } catch (error) {
+    setSourcesStatus("Failed to add current tab.");
+  }
+}
+
+async function requestSelectionLinks() {
+  try {
+    var result = await browser.runtime.sendMessage({
+      type: "laika.tool",
+      toolName: "browser.get_selection_links",
+      args: { maxLinks: 50 }
+    });
+    if (!result || result.status !== "ok") {
+      setSourcesStatus("Failed to get selected links.");
+      return;
+    }
+    var urls = Array.isArray(result.urls) ? result.urls : [];
+    if (urls.length === 0) {
+      setSourcesStatus("No links found in the current selection.");
+      return;
+    }
+    showSelectionPreview(urls);
+  } catch (error) {
+    setSourcesStatus("Failed to read selection.");
+  }
+}
+
+async function addSelectedLinks() {
+  if (!selectionList) {
+    return;
+  }
+  var selected = [];
+  var inputs = selectionList.querySelectorAll("input[type='checkbox']");
+  for (var index = 0; index < inputs.length; index += 1) {
+    var checkbox = inputs[index];
+    if (checkbox.checked && checkbox.dataset && checkbox.dataset.url) {
+      selected.push(checkbox.dataset.url);
+    }
+  }
+  if (selected.length === 0) {
+    setSourcesStatus("No links selected.");
+    return;
+  }
+  var sourceInputs = selected.map(function (url) {
+    return { type: "url", url: url };
+  });
+  await addSourcesToCollection(sourceInputs);
+  resetSelectionPreview();
+}
+
+async function addPastedUrls() {
+  if (!pasteUrlsInput) {
+    return;
+  }
+  var urls = parseUrls(pasteUrlsInput.value);
+  if (urls.length === 0) {
+    setSourcesStatus("No valid URLs found.");
+    return;
+  }
+  var sourceInputs = urls.map(function (url) {
+    return { type: "url", url: url };
+  });
+  await addSourcesToCollection(sourceInputs);
+  hidePasteUrlsForm();
+}
+
+async function addNote() {
+  var text = window.prompt("Note text:");
+  if (!text) {
+    return;
+  }
+  var title = window.prompt("Optional note title:");
+  await addSourcesToCollection([{
+    type: "note",
+    text: text,
+    title: title || ""
+  }]);
+}
+
+async function deleteSource(sourceId) {
+  if (!activeCollectionId || !sourceId) {
+    return;
+  }
+  try {
+    var response = await sendCollectionMessage("delete_source", {
+      collectionId: activeCollectionId,
+      sourceId: sourceId
+    });
+    unwrapNativeResult(response);
+    await loadSources();
+  } catch (error) {
+    setSourcesStatus("Failed to remove source.");
+  }
+}
+
 function labelForRole(role) {
   if (role === "user") {
     return "you";
@@ -173,6 +665,9 @@ function labelForRole(role) {
 function normalizeMessageFormat(format) {
   if (format === MESSAGE_FORMAT_RENDER) {
     return MESSAGE_FORMAT_RENDER;
+  }
+  if (format === MESSAGE_FORMAT_MARKDOWN) {
+    return MESSAGE_FORMAT_MARKDOWN;
   }
   return MESSAGE_FORMAT_PLAIN;
 }
@@ -379,15 +874,44 @@ function renderDocumentFingerprint(doc) {
   }
 }
 
+function getMarkdownRenderer() {
+  if (markdownRenderer) {
+    return markdownRenderer;
+  }
+  if (typeof window === "undefined" || !window.LaikaMarkdownRenderer || typeof window.LaikaMarkdownRenderer.createMarkdownRenderer !== "function") {
+    return null;
+  }
+  try {
+    markdownRenderer = window.LaikaMarkdownRenderer.createMarkdownRenderer({});
+  } catch (error) {
+    markdownRenderer = null;
+  }
+  return markdownRenderer;
+}
+
+function renderMarkdown(body, markdownText) {
+  var renderer = getMarkdownRenderer();
+  var source = typeof markdownText === "string" ? markdownText : "";
+  if (!renderer) {
+    body.textContent = source;
+    return;
+  }
+  body.innerHTML = renderer.render(source);
+}
+
 function renderMessageBody(body, text, format) {
   if (!body) {
     return;
   }
   var normalizedFormat = normalizeMessageFormat(format);
   var output = typeof text === "string" ? text : text;
-  body.classList.toggle("render", normalizedFormat === MESSAGE_FORMAT_RENDER);
+  body.classList.toggle("render", normalizedFormat !== MESSAGE_FORMAT_PLAIN);
   if (normalizedFormat === MESSAGE_FORMAT_RENDER) {
     renderDocument(body, output);
+    return;
+  }
+  if (normalizedFormat === MESSAGE_FORMAT_MARKDOWN) {
+    renderMarkdown(body, output);
     return;
   }
   body.textContent = typeof output === "string" ? output : String(output || "");
@@ -410,6 +934,14 @@ function assistantPayloadFromPlan(plan) {
       format: MESSAGE_FORMAT_RENDER,
       content: renderDoc,
       fingerprint: renderDocumentFingerprint(renderDoc)
+    };
+  }
+  if (plan.assistant && typeof plan.assistant.markdown === "string" && plan.assistant.markdown.trim()) {
+    var markdown = plan.assistant.markdown.trim();
+    return {
+      format: MESSAGE_FORMAT_MARKDOWN,
+      content: markdown,
+      fingerprint: markdown
     };
   }
   if (typeof plan.summary === "string" && plan.summary.trim()) {
@@ -453,7 +985,13 @@ function historyEntryContent(entry) {
   if (entry && entry.format === MESSAGE_FORMAT_RENDER && isDocument(entry.render)) {
     return entry.render;
   }
-  return entry && typeof entry.text === "string" ? entry.text : "";
+  if (entry && typeof entry.text === "string") {
+    return entry.text;
+  }
+  if (entry && typeof entry.markdown === "string") {
+    return entry.markdown;
+  }
+  return "";
 }
 
 function historyEntryKey(entry) {
@@ -591,11 +1129,16 @@ function normalizeHistoryEntries(entries) {
       normalized.render = entry.render;
     } else {
       var text = typeof entry.text === "string" ? entry.text : "";
+      if (!text && typeof entry.markdown === "string") {
+        text = entry.markdown;
+      }
       if (!text && isDocument(entry.render)) {
         text = plainTextFromDocument(entry.render);
       }
       normalized.text = text;
-      normalized.format = MESSAGE_FORMAT_PLAIN;
+      normalized.format = format === MESSAGE_FORMAT_MARKDOWN && text
+        ? MESSAGE_FORMAT_MARKDOWN
+        : MESSAGE_FORMAT_PLAIN;
     }
     filtered.push(normalized);
   }
@@ -797,6 +1340,9 @@ function appendMessage(role, text, options) {
   if (format === MESSAGE_FORMAT_RENDER && !isDocument(text)) {
     format = MESSAGE_FORMAT_PLAIN;
   }
+  if (format === MESSAGE_FORMAT_MARKDOWN && typeof text !== "string") {
+    format = MESSAGE_FORMAT_PLAIN;
+  }
   var content = format === MESSAGE_FORMAT_PLAIN && typeof text !== "string" ? String(text || "") : text;
   renderMessageBody(body, content, format);
   message.appendChild(label);
@@ -813,6 +1359,9 @@ function appendMessage(role, text, options) {
     };
     if (format === MESSAGE_FORMAT_RENDER && isDocument(content)) {
       entry.render = content;
+    } else if (format === MESSAGE_FORMAT_MARKDOWN && typeof content === "string") {
+      entry.text = content;
+      entry.format = MESSAGE_FORMAT_MARKDOWN;
     } else {
       entry.text = typeof content === "string" ? content : String(content || "");
       entry.format = MESSAGE_FORMAT_PLAIN;
@@ -1360,6 +1909,7 @@ sendButton.addEventListener("click", async function () {
   }
   await loadChatHistory();
   await loadMaxTokens();
+  setupTabs();
   if (browser.storage && browser.storage.onChanged) {
     browser.storage.onChanged.addListener(function (changes, areaName) {
       if (areaName !== "local" || !changes) {
@@ -1395,5 +1945,41 @@ sendButton.addEventListener("click", async function () {
   if (closeButton) {
     closeButton.addEventListener("click", closeSidecar);
   }
-  checkNative();
+  if (collectionSelect) {
+    collectionSelect.addEventListener("change", function () {
+      setActiveCollection(collectionSelect.value);
+    });
+  }
+  if (newCollectionButton) {
+    newCollectionButton.addEventListener("click", createNewCollection);
+  }
+  if (deleteCollectionButton) {
+    deleteCollectionButton.addEventListener("click", deleteActiveCollection);
+  }
+  if (addCurrentTabButton) {
+    addCurrentTabButton.addEventListener("click", addCurrentTab);
+  }
+  if (addSelectedLinksButton) {
+    addSelectedLinksButton.addEventListener("click", requestSelectionLinks);
+  }
+  if (selectionAddButton) {
+    selectionAddButton.addEventListener("click", addSelectedLinks);
+  }
+  if (selectionCancelButton) {
+    selectionCancelButton.addEventListener("click", resetSelectionPreview);
+  }
+  if (pasteUrlsButton) {
+    pasteUrlsButton.addEventListener("click", showPasteUrlsForm);
+  }
+  if (pasteUrlsAddButton) {
+    pasteUrlsAddButton.addEventListener("click", addPastedUrls);
+  }
+  if (pasteUrlsCancelButton) {
+    pasteUrlsCancelButton.addEventListener("click", hidePasteUrlsForm);
+  }
+  if (addNoteButton) {
+    addNoteButton.addEventListener("click", addNote);
+  }
+  await checkNative();
+  await loadCollections();
 })();

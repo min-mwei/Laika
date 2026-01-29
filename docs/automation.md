@@ -220,6 +220,10 @@ These scenarios mirror a current Techmeme theme so we can validate the "thread -
   - Live: Techmeme homepage or snapshot containing the Maia 200 AI accelerator coverage block.
   - Validates: identifies the theme and lists outlet perspectives without opening unrelated tabs.
 
+- `techmeme_meta_coverage_live.json` (opt-in)
+  - Live: Techmeme homepage coverage block about Meta's 2025 results/2026 spending.
+  - Validates: collects specific Meta story links into a collection, captures sources, and answers with outlet differences + citations.
+
 ## Runner outputs
 
 - JSON file with:

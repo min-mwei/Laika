@@ -14,6 +14,17 @@ public enum ToolName: String, Codable, CaseIterable, Sendable {
     case browserSelect = "browser.select"
     case search = "search"
     case appCalculate = "app.calculate"
+    case collectionCreate = "collection.create"
+    case collectionAddSources = "collection.add_sources"
+    case collectionListSources = "collection.list_sources"
+    case sourceCapture = "source.capture"
+    case sourceRefresh = "source.refresh"
+    case transformListTypes = "transform.list_types"
+    case transformRun = "transform.run"
+    case artifactSave = "artifact.save"
+    case artifactOpen = "artifact.open"
+    case artifactShare = "artifact.share"
+    case integrationInvoke = "integration.invoke"
 }
 
 public struct ToolCall: Codable, Equatable, Sendable {

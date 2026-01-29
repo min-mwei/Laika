@@ -184,3 +184,165 @@ test("validatePlanResponse rejects calculate with invalid precision", () => {
   const result = validator.validatePlanResponse(payload);
   assert.equal(result.ok, false);
 });
+
+test("validatePlanResponse accepts collection.create with tags", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "collection.create",
+          arguments: { title: "My collection", tags: ["research", "2026"] }
+        },
+        policy: { decision: "allow", reasonCode: "collection_allowed" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, true);
+});
+
+test("validatePlanResponse rejects collection.create without title", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "collection.create",
+          arguments: { tags: ["missing-title"] }
+        },
+        policy: { decision: "allow", reasonCode: "collection_allowed" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, false);
+});
+
+test("validatePlanResponse accepts collection.add_sources url and note", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "collection.add_sources",
+          arguments: {
+            collectionId: "col_123",
+            sources: [
+              { type: "url", url: "https://example.com", title: "Example" },
+              { type: "note", title: "Note", text: "Remember this" }
+            ]
+          }
+        },
+        policy: { decision: "allow", reasonCode: "collection_allowed" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, true);
+});
+
+test("validatePlanResponse rejects collection.add_sources with unknown keys", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "collection.add_sources",
+          arguments: {
+            collectionId: "col_123",
+            sources: [
+              { type: "url", url: "https://example.com", extra: "nope" }
+            ]
+          }
+        },
+        policy: { decision: "allow", reasonCode: "collection_allowed" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, false);
+});
+
+test("validatePlanResponse accepts source.capture with mode and maxChars", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "source.capture",
+          arguments: { collectionId: "col_123", url: "https://example.com", mode: "article", maxChars: 1200 }
+        },
+        policy: { decision: "allow", reasonCode: "capture_allowed" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, true);
+});
+
+test("validatePlanResponse rejects source.capture with invalid mode", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "source.capture",
+          arguments: { collectionId: "col_123", url: "https://example.com", mode: "invalid" }
+        },
+        policy: { decision: "allow", reasonCode: "capture_allowed" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, false);
+});
+
+test("validatePlanResponse accepts artifact.save and rejects invalid redaction", () => {
+  const validPayload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "artifact.save",
+          arguments: { title: "Brief", markdown: "# Hello", redaction: "default" }
+        },
+        policy: { decision: "allow", reasonCode: "artifact_allowed" }
+      }
+    ]
+  };
+  const validResult = validator.validatePlanResponse(validPayload);
+  assert.equal(validResult.ok, true);
+
+  const invalidPayload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "artifact.save",
+          arguments: { title: "Brief", markdown: "# Hello", redaction: "bad" }
+        },
+        policy: { decision: "allow", reasonCode: "artifact_allowed" }
+      }
+    ]
+  };
+  const invalidResult = validator.validatePlanResponse(invalidPayload);
+  assert.equal(invalidResult.ok, false);
+});
+
+test("validatePlanResponse rejects transform.run with non-object config", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "transform.run",
+          arguments: { collectionId: "col_123", type: "comparison", config: "nope" }
+        },
+        policy: { decision: "allow", reasonCode: "transform_allowed" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, false);
+});

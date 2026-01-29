@@ -70,6 +70,18 @@ public final class PolicyGate: Sendable {
             return PolicyResult(decision: .ask, reasonCode: "assist_requires_approval")
         case .appCalculate:
             return PolicyResult(decision: .allow, reasonCode: "calculate_allowed")
+        case .collectionCreate,
+             .collectionAddSources,
+             .collectionListSources,
+             .sourceCapture,
+             .sourceRefresh,
+             .transformListTypes,
+             .transformRun,
+             .artifactSave,
+             .artifactOpen:
+            return PolicyResult(decision: .allow, reasonCode: "collection_allowed")
+        case .artifactShare, .integrationInvoke:
+            return PolicyResult(decision: .ask, reasonCode: "share_requires_approval")
         }
     }
 

@@ -1,4 +1,4 @@
-# Laika UI: Collections + Sources + Chat + Transforms
+# Laika UI: Collections + Sources + Chat
 
 Purpose: define the UI surfaces, layouts, and interaction flows for the **collection-first** Laika (Safari). This doc is intentionally practical: it maps user-visible actions to the underlying **tools** and **LLM tasks** (LLMCP), and it specifies what must be rendered safely.
 
@@ -66,20 +66,20 @@ Packaging constraints (Safari extension):
 All surfaces share the same app shell:
 
 - Top bar: collection switcher + global actions
-- Primary nav: `Sources | Chat | Transforms | Settings`
+- Primary nav: `Sources | History`
 - Content area: tab-specific UI
 
 ```text
 +--------------------------------------------------------------------------------+
 |  Laika  |  Collection: [ Kyoto Trip Planning v ]   [ Collect + ]   [ ... ]     |
 |--------------------------------------------------------------------------------|
-|   Sources   |   Chat   |   Transforms   |   Settings                           |
+|   Sources   |   History                                                   |
 |--------------------------------------------------------------------------------|
 |                                                                                |
 |   (active tab content)                                                         |
 |                                                                                |
 |--------------------------------------------------------------------------------|
-|   (contextual footer; e.g. chat composer on Chat tab)                           |
+|   (chat composer always visible on Sources tab)                                |
 +--------------------------------------------------------------------------------+
 ```
 
@@ -161,6 +161,11 @@ Also
 --------------------------------------------------------------------------------
 ```
 
+Implementation note (Phase 1): the popover/panel UI ships a collection selector above the tab bar,
+and the Sources tab includes **Add current tab** + **Add selected links** + **Paste URLs** + **Add note**
+as the initial collect affordances. For this phase, newly added URL sources are marked `pending` and
+queued for capture; capture execution lands in Phase 2.
+
 #### Collect from selected links (preview + confirm)
 
 Because selection link extraction is heuristic, show a preview list with checkboxes:
@@ -218,14 +223,15 @@ browser.observe_dom(root=search-results)
 
 ---
 
-## 4) Chat tab (Ask / Summarize / Compare with citations)
+## 4) Chat workflow (Ask / Summarize / Compare with citations)
 
 Chat is always scoped to the active collection. The default behavior is grounded synthesis with citations.
+The chat composer lives on the Sources tab; the History tab shows the full conversation log.
 
 ### 4.1 Layout
 
 ```text
-Chat (Kyoto Trip)   Context: 10 sources (8 captured, 2 pending)
+History (Kyoto Trip)   Context: 10 sources (8 captured, 2 pending)
 
 --------------------------------------------------------------------------------
 You: Compare these 10 hotels on price, cancellation, walkability, and notes.
@@ -239,6 +245,7 @@ Laika:
     [7] Hotel B cancellation policy
 --------------------------------------------------------------------------------
 
+Composer appears on the Sources tab:
 [ Ask about this collection...                                      ] [Send]
 ```
 
@@ -264,7 +271,7 @@ P0 renderer must support:
 
 Rendering must follow the Markdown -> safe HTML pipeline in `docs/safehtml_mark.md`.
 
-### 4.4 LLM tasks used by Chat tab
+### 4.4 LLM tasks used by Chat
 
 Chat uses LLMCP tasks with collection context packs:
 
@@ -282,14 +289,15 @@ Citations contract (P0):
 
 ---
 
-## 5) Transforms tab (named generators -> durable artifacts)
+## 5) Transforms (invoked from Chat)
 
 Transforms are the "repeatable output formats" layer. They create artifacts you can reopen and share.
+For now, transforms are invoked from chat prompts rather than a dedicated tab.
 
 ### 5.1 Layout
 
 ```text
-Transforms (Kyoto Trip)
+Transforms (Kyoto Trip) — invoked from chat
 
 Pick a transform
   [ Comparison table ] [ Timeline ] [ Executive brief ] [ Flashcards ] [ Quiz ]
@@ -332,7 +340,7 @@ Artifact viewer is a dedicated surface for reading/sharing:
 +--------------------------------------------------------------------------------+
 ```
 
-### 5.4 Tools used by Transforms tab
+### 5.4 Tools used by Transforms
 
 - `transform.list_types`
 - `transform.run`
@@ -348,7 +356,7 @@ Transform results should be stored as:
 
 ---
 
-## 6) Settings tab (models, privacy, trust controls)
+## 6) Settings (future)
 
 Settings should reinforce the "fortress" posture: clear boundaries, explicit choices, auditable behavior.
 

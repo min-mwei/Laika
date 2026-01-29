@@ -56,10 +56,219 @@
         color: #4a5b70;
         padding: 8px 12px 0;
       }
+      .collection-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px 10px;
+        border-bottom: 1px solid #d6e2f1;
+        background: #f7f9fc;
+        font-size: 12px;
+      }
+      .collection-bar label {
+        font-weight: 600;
+        color: #2c3a4b;
+      }
+      .collection-bar select {
+        flex: 1;
+        border: 1px solid #c9d7e7;
+        border-radius: 6px;
+        padding: 4px 6px;
+        font-size: 12px;
+        background: #ffffff;
+      }
+      .collection-bar button {
+        border: 1px solid #c2cfde;
+        background: #ffffff;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .collection-bar button.danger {
+        border-color: #f0b7bc;
+        color: #8a2c35;
+      }
+      .tabs {
+        display: flex;
+        gap: 6px;
+        padding: 6px 12px 0;
+        background: #f7f9fc;
+      }
+      .tab-button {
+        flex: 1;
+        border: 1px solid #d0dced;
+        border-bottom: 2px solid transparent;
+        background: #ffffff;
+        border-radius: 8px 8px 0 0;
+        padding: 6px 8px;
+        font-size: 12px;
+        cursor: pointer;
+        color: #2c3a4b;
+      }
+      .tab-button.active {
+        border-color: #1b78ff;
+        border-bottom-color: #ffffff;
+        color: #1b78ff;
+        font-weight: 600;
+      }
+      .tab-panels {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: #f7f9fc;
+      }
+      .tab-panel {
+        display: none;
+        flex: 1;
+        flex-direction: column;
+        gap: 10px;
+        padding: 8px 12px 12px;
+        overflow: hidden;
+      }
+      .tab-panel.active {
+        display: flex;
+      }
+      .card {
+        background: #ffffff;
+        border: 1px solid #d8e2ee;
+        border-radius: 8px;
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .card-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: #2c3a4b;
+      }
+      .button-row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+      }
+      .button-row button {
+        border: 1px solid #c2cfde;
+        background: #ffffff;
+        border-radius: 6px;
+        padding: 6px 8px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .selection-preview,
+      .inline-form {
+        border: 1px dashed #d0dced;
+        border-radius: 6px;
+        padding: 8px;
+        background: #f9fbff;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .selection-preview ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        max-height: 160px;
+        overflow: auto;
+      }
+      .selection-preview li {
+        display: flex;
+        align-items: flex-start;
+        gap: 6px;
+        font-size: 11px;
+        color: #1f2a3a;
+      }
+      .selection-preview code {
+        font-size: 11px;
+        background: #eef3fb;
+        padding: 2px 4px;
+        border-radius: 4px;
+      }
+      .sources-card {
+        flex: 1;
+        overflow: hidden;
+      }
+      .sources-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        overflow: auto;
+        padding-right: 4px;
+      }
+      .source-item {
+        border: 1px solid #e2eaf4;
+        border-radius: 6px;
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .source-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .source-title {
+        font-size: 12px;
+        color: #1f2a3a;
+        font-weight: 600;
+        word-break: break-word;
+      }
+      .source-remove {
+        border: none;
+        background: transparent;
+        color: #8a2c35;
+        font-size: 14px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .source-meta {
+        display: flex;
+        gap: 6px;
+        font-size: 11px;
+        color: #5c6b80;
+      }
+      .badge {
+        padding: 1px 6px;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+      }
+      .badge.pending {
+        background: #fff3cd;
+        color: #8a6d3b;
+      }
+      .badge.captured {
+        background: #d4edda;
+        color: #2f6b3f;
+      }
+      .badge.failed {
+        background: #f8d7da;
+        color: #8a2c35;
+      }
+      .muted {
+        font-size: 11px;
+        color: #5c6b80;
+      }
+      .hidden {
+        display: none;
+      }
+      .placeholder {
+        font-size: 12px;
+        color: #5c6b80;
+        padding: 12px;
+        border: 1px dashed #d0dced;
+        border-radius: 8px;
+        background: #ffffff;
+      }
       #chat-log {
         border: 1px solid #d8e2ee;
         padding: 10px;
-        margin: 8px 12px 0;
         flex: 1;
         overflow: auto;
         background: #ffffff;
@@ -130,6 +339,22 @@
         padding: 0;
         background: transparent;
       }
+      .message-body table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 8px 0;
+        font-size: 11px;
+      }
+      .message-body th,
+      .message-body td {
+        border: 1px solid #d6e2f1;
+        padding: 4px 6px;
+        text-align: left;
+        vertical-align: top;
+      }
+      .message-body thead {
+        background: #f0f5fb;
+      }
       .message-body a {
         color: #1b78ff;
         text-decoration: none;
@@ -138,9 +363,9 @@
         text-decoration: underline;
       }
       .composer {
-        padding: 10px 12px 12px;
+        padding: 10px 0 0;
         border-top: 1px solid #d8e2ee;
-        background: #f7f9fc;
+        background: transparent;
       }
       textarea {
         width: 100%;
@@ -194,11 +419,64 @@
       </div>
     </div>
     <div class="status" id="agent-status">Status: unknown</div>
-    <div id="chat-log"></div>
-    <div class="composer">
-      <textarea id="goal" placeholder="Ask about this page..."></textarea>
-      <button id="send">Send</button>
+    <div class="collection-bar">
+      <label for="collection-select">Collection</label>
+      <select id="collection-select"></select>
+      <button id="new-collection" type="button">New</button>
+      <button id="delete-collection" type="button" class="danger">Delete</button>
     </div>
+    <div class="tabs">
+      <button class="tab-button active" data-tab="sources" type="button">Sources</button>
+      <button class="tab-button" data-tab="history" type="button">History</button>
+    </div>
+    <div class="tab-panels">
+      <section class="tab-panel active" id="tab-sources">
+        <div class="card">
+          <div class="card-title">Collect</div>
+          <div class="button-row">
+            <button id="add-current-tab" type="button">Add current tab</button>
+            <button id="add-selected-links" type="button">Add selected links</button>
+            <button id="paste-urls" type="button">Paste URLs</button>
+            <button id="add-note" type="button">Add note</button>
+          </div>
+          <div id="selection-preview" class="selection-preview hidden">
+            <div class="muted" id="selection-summary"></div>
+            <ul id="selection-list"></ul>
+            <div class="action-buttons">
+              <button id="selection-add" type="button">Add to collection</button>
+              <button id="selection-cancel" type="button">Cancel</button>
+            </div>
+          </div>
+          <div id="paste-urls-form" class="inline-form hidden">
+            <div class="muted">Paste one URL per line.</div>
+            <textarea id="paste-urls-input" placeholder="https://example.com"></textarea>
+            <div class="action-buttons">
+              <button id="paste-urls-add" type="button">Add URLs</button>
+              <button id="paste-urls-cancel" type="button">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div class="card sources-card">
+          <div class="card-title">Sources</div>
+          <div class="muted" id="sources-status">No collection selected.</div>
+          <div class="sources-list" id="sources-list"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Chat</div>
+          <div class="muted">Use chat to ask, collect, or transform this collection.</div>
+          <div class="composer">
+            <textarea id="goal" placeholder="Ask about this collection..."></textarea>
+            <button id="send">Send</button>
+          </div>
+        </div>
+      </section>
+      <section class="tab-panel" id="tab-history">
+        <div id="chat-log"></div>
+      </section>
+    </div>
+    <script src="lib/vendor/markdown-it.min.js"></script>
+    <script src="lib/vendor/purify.min.js"></script>
+    <script src="lib/markdown_renderer.js"></script>
     <script src="lib/plan_validator.js"></script>
     <script src="popover.js"></script>
   </body>

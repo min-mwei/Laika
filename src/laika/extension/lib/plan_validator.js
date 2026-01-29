@@ -36,7 +36,33 @@
     "browser.refresh": { required: {}, optional: {} },
     "browser.select": { required: { handleId: "string", value: "string" }, optional: {} },
     "search": { required: { query: "string" }, optional: { engine: "string", newTab: "bool" } },
-    "app.calculate": { required: { expression: "string" }, optional: { precision: "number" } }
+    "app.calculate": { required: { expression: "string" }, optional: { precision: "number" } },
+    "artifact.save": {
+      required: { title: "string", markdown: "string" },
+      optional: { tags: "array", redaction: "string" }
+    },
+    "artifact.open": {
+      required: { artifactId: "string" },
+      optional: { target: "string", newTab: "bool" }
+    },
+    "artifact.share": {
+      required: { artifactId: "string", format: "string" },
+      optional: { filename: "string", target: "string" }
+    },
+    "integration.invoke": {
+      required: { integration: "string", operation: "string", payload: "object" },
+      optional: { idempotencyKey: "string" }
+    },
+    "collection.create": { required: { title: "string" }, optional: { tags: "array" } },
+    "collection.add_sources": { required: { collectionId: "string", sources: "array" }, optional: {} },
+    "collection.list_sources": { required: { collectionId: "string" }, optional: {} },
+    "source.capture": {
+      required: { collectionId: "string", url: "string" },
+      optional: { mode: "string", maxChars: "number" }
+    },
+    "source.refresh": { required: { sourceId: "string" }, optional: {} },
+    "transform.list_types": { required: {}, optional: {} },
+    "transform.run": { required: { collectionId: "string", type: "string" }, optional: { config: "object" } }
   };
 
   function getAllowedKeys(schema) {
@@ -76,6 +102,23 @@
     }
     function isFiniteNumber(value) {
       return typeof value === "number" && isFinite(value);
+    }
+    function isString(value) {
+      return typeof value === "string" && value.length > 0;
+    }
+    function isStringArray(value) {
+      if (!Array.isArray(value)) {
+        return false;
+      }
+      for (var index = 0; index < value.length; index += 1) {
+        if (typeof value[index] !== "string") {
+          return false;
+        }
+      }
+      return true;
+    }
+    function isPlainObject(value) {
+      return isObject(value);
     }
     function hasOnlyKeys(allowed) {
       for (var key in args) {
@@ -205,7 +248,7 @@
       if (!hasOnlyKeys(getAllowedKeys(schema))) {
         return "calculate has unknown arguments";
       }
-      if (typeof args.expression !== "string" || !args.expression) {
+      if (!isString(args.expression)) {
         return "calculate.expression required";
       }
       if (typeof args.precision !== "undefined") {
@@ -215,6 +258,214 @@
         if (Math.floor(args.precision) !== args.precision || args.precision < 0 || args.precision > 6) {
           return "calculate.precision must be integer 0..6";
         }
+      }
+      return null;
+    }
+
+    if (toolCall.name === "artifact.save") {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
+        return "artifact.save has unknown arguments";
+      }
+      if (!isString(args.title)) {
+        return "artifact.save.title required";
+      }
+      if (!isString(args.markdown)) {
+        return "artifact.save.markdown required";
+      }
+      if (typeof args.tags !== "undefined" && !isStringArray(args.tags)) {
+        return "artifact.save.tags must be string[]";
+      }
+      if (typeof args.redaction !== "undefined") {
+        if (args.redaction !== "default" && args.redaction !== "none") {
+          return "artifact.save.redaction invalid";
+        }
+      }
+      return null;
+    }
+
+    if (toolCall.name === "artifact.open") {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
+        return "artifact.open has unknown arguments";
+      }
+      if (!isString(args.artifactId)) {
+        return "artifact.open.artifactId required";
+      }
+      if (typeof args.target !== "undefined") {
+        if (args.target !== "workspace" && args.target !== "browser") {
+          return "artifact.open.target invalid";
+        }
+      }
+      if (typeof args.newTab !== "undefined" && typeof args.newTab !== "boolean") {
+        return "artifact.open.newTab must be boolean";
+      }
+      return null;
+    }
+
+    if (toolCall.name === "artifact.share") {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
+        return "artifact.share has unknown arguments";
+      }
+      if (!isString(args.artifactId)) {
+        return "artifact.share.artifactId required";
+      }
+      if (!isString(args.format)) {
+        return "artifact.share.format required";
+      }
+      var allowedFormats = ["markdown", "text", "json", "csv", "pdf"];
+      if (allowedFormats.indexOf(args.format) === -1) {
+        return "artifact.share.format invalid";
+      }
+      if (typeof args.filename !== "undefined" && !isString(args.filename)) {
+        return "artifact.share.filename must be string";
+      }
+      if (typeof args.target !== "undefined") {
+        var allowedTargets = ["share_sheet", "clipboard", "file"];
+        if (allowedTargets.indexOf(args.target) === -1) {
+          return "artifact.share.target invalid";
+        }
+      }
+      return null;
+    }
+
+    if (toolCall.name === "integration.invoke") {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
+        return "integration.invoke has unknown arguments";
+      }
+      if (!isString(args.integration)) {
+        return "integration.invoke.integration required";
+      }
+      if (!isString(args.operation)) {
+        return "integration.invoke.operation required";
+      }
+      if (!isPlainObject(args.payload)) {
+        return "integration.invoke.payload required";
+      }
+      if (typeof args.idempotencyKey !== "undefined" && !isString(args.idempotencyKey)) {
+        return "integration.invoke.idempotencyKey must be string";
+      }
+      return null;
+    }
+
+    if (toolCall.name === "collection.create") {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
+        return "collection.create has unknown arguments";
+      }
+      if (!isString(args.title)) {
+        return "collection.create.title required";
+      }
+      if (typeof args.tags !== "undefined" && !isStringArray(args.tags)) {
+        return "collection.create.tags must be string[]";
+      }
+      return null;
+    }
+
+    if (toolCall.name === "collection.add_sources") {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
+        return "collection.add_sources has unknown arguments";
+      }
+      if (!isString(args.collectionId)) {
+        return "collection.add_sources.collectionId required";
+      }
+      if (!Array.isArray(args.sources)) {
+        return "collection.add_sources.sources required";
+      }
+      for (var sourceIndex = 0; sourceIndex < args.sources.length; sourceIndex += 1) {
+        var sourceItem = args.sources[sourceIndex];
+        if (!isPlainObject(sourceItem)) {
+          return "collection.add_sources.sources invalid";
+        }
+        if (sourceItem.type === "url") {
+          if (!isString(sourceItem.url)) {
+            return "collection.add_sources.url required";
+          }
+          if (typeof sourceItem.title !== "undefined" && !isString(sourceItem.title)) {
+            return "collection.add_sources.title must be string";
+          }
+          var urlKeys = Object.keys(sourceItem);
+          for (var urlKeyIndex = 0; urlKeyIndex < urlKeys.length; urlKeyIndex += 1) {
+            var urlKey = urlKeys[urlKeyIndex];
+            if (["type", "url", "title"].indexOf(urlKey) === -1) {
+              return "collection.add_sources has unknown source keys";
+            }
+          }
+        } else if (sourceItem.type === "note") {
+          if (!isString(sourceItem.text)) {
+            return "collection.add_sources.text required";
+          }
+          if (typeof sourceItem.title !== "undefined" && !isString(sourceItem.title)) {
+            return "collection.add_sources.title must be string";
+          }
+          var noteKeys = Object.keys(sourceItem);
+          for (var noteKeyIndex = 0; noteKeyIndex < noteKeys.length; noteKeyIndex += 1) {
+            var noteKey = noteKeys[noteKeyIndex];
+            if (["type", "text", "title"].indexOf(noteKey) === -1) {
+              return "collection.add_sources has unknown source keys";
+            }
+          }
+        } else {
+          return "collection.add_sources.type invalid";
+        }
+      }
+      return null;
+    }
+
+    if (toolCall.name === "collection.list_sources") {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
+        return "collection.list_sources has unknown arguments";
+      }
+      if (!isString(args.collectionId)) {
+        return "collection.list_sources.collectionId required";
+      }
+      return null;
+    }
+
+    if (toolCall.name === "source.capture") {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
+        return "source.capture has unknown arguments";
+      }
+      if (!isString(args.collectionId)) {
+        return "source.capture.collectionId required";
+      }
+      if (!isString(args.url)) {
+        return "source.capture.url required";
+      }
+      if (typeof args.mode !== "undefined") {
+        if (args.mode !== "auto" && args.mode !== "article" && args.mode !== "list") {
+          return "source.capture.mode invalid";
+        }
+      }
+      if (typeof args.maxChars !== "undefined" && !isFiniteNumber(args.maxChars)) {
+        return "source.capture.maxChars must be number";
+      }
+      return null;
+    }
+
+    if (toolCall.name === "source.refresh") {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
+        return "source.refresh has unknown arguments";
+      }
+      if (!isString(args.sourceId)) {
+        return "source.refresh.sourceId required";
+      }
+      return null;
+    }
+
+    if (toolCall.name === "transform.list_types") {
+      return Object.keys(args).length === 0 ? null : "transform.list_types has unknown arguments";
+    }
+
+    if (toolCall.name === "transform.run") {
+      if (!hasOnlyKeys(getAllowedKeys(schema))) {
+        return "transform.run has unknown arguments";
+      }
+      if (!isString(args.collectionId)) {
+        return "transform.run.collectionId required";
+      }
+      if (!isString(args.type)) {
+        return "transform.run.type required";
+      }
+      if (typeof args.config !== "undefined" && !isPlainObject(args.config)) {
+        return "transform.run.config must be object";
       }
       return null;
     }

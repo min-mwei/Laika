@@ -8,7 +8,12 @@ let package = Package(
         .library(name: "LaikaShared", targets: ["LaikaShared"])
     ],
     targets: [
-        .target(name: "LaikaShared"),
+        .target(
+            name: "LaikaShared",
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
+            ]
+        ),
         .testTarget(
             name: "LaikaSharedTests",
             dependencies: ["LaikaShared"],

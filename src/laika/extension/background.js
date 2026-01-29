@@ -229,7 +229,32 @@ var ALLOWED_TOOLS = {
   "browser.refresh": true,
   "browser.select": true,
   "search": true,
-  "app.calculate": true
+  "app.calculate": true,
+  "collection.create": true,
+  "collection.add_sources": true,
+  "collection.list_sources": true,
+  "source.capture": true,
+  "source.refresh": true,
+  "transform.list_types": true,
+  "transform.run": true,
+  "artifact.save": true,
+  "artifact.open": true,
+  "artifact.share": true,
+  "integration.invoke": true
+};
+
+var NATIVE_TOOLS = {
+  "collection.create": true,
+  "collection.add_sources": true,
+  "collection.list_sources": true,
+  "source.capture": true,
+  "source.refresh": true,
+  "transform.list_types": true,
+  "transform.run": true,
+  "artifact.save": true,
+  "artifact.open": true,
+  "artifact.share": true,
+  "integration.invoke": true
 };
 
 var ToolErrorCode = {
@@ -258,6 +283,42 @@ var AUTOMATION_ALLOWED_HOSTS = {
 };
 var AUTOMATION_RUNS = {};
 var AUTOMATION_PORTS = {};
+
+async function sendNativeMessage(payload) {
+  if (typeof browser === "undefined" || !browser.runtime || !browser.runtime.sendNativeMessage) {
+    throw new Error("native_messaging_unavailable");
+  }
+  try {
+    return await browser.runtime.sendNativeMessage(payload);
+  } catch (error) {
+    if (!NATIVE_APP_ID) {
+      throw error;
+    }
+    return await browser.runtime.sendNativeMessage(NATIVE_APP_ID, payload);
+  }
+}
+
+async function runNativeTool(toolName, args) {
+  try {
+    var response = await sendNativeMessage({
+      type: "tool",
+      toolName: toolName,
+      arguments: args || {}
+    });
+    if (response && response.ok && response.result && typeof response.result.status === "string") {
+      return response.result;
+    }
+    if (response && response.result && response.result.error) {
+      return { status: "error", error: response.result.error };
+    }
+    if (response && response.error) {
+      return { status: "error", error: response.error };
+    }
+    return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
+  } catch (error) {
+    return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
+  }
+}
 var AUTOMATION_ENABLED_KEY = "automationEnabled";
 var AUTOMATION_ENABLED_DEFAULT = false;
 var automationEnabledCache = null;
@@ -1716,6 +1777,9 @@ async function closePanelWindow(sender, ownerWindowOverride) {
 async function handleTool(toolName, args, sender, tabOverride) {
   if (!ALLOWED_TOOLS[toolName]) {
     return { status: "error", error: ToolErrorCode.UNSUPPORTED_TOOL };
+  }
+  if (NATIVE_TOOLS[toolName]) {
+    return await runNativeTool(toolName, args);
   }
   if (toolName === "browser.observe_dom") {
     function clampInt(value, min, max) {

@@ -1639,6 +1639,28 @@ public final class AgentOrchestrator: @unchecked Sendable {
                 }
             }
             return "Calculating the requested expression."
+        case .collectionCreate:
+            return "Creating a new collection."
+        case .collectionAddSources:
+            return "Adding sources to the collection."
+        case .collectionListSources:
+            return "Listing the collection sources."
+        case .sourceCapture:
+            return "Capturing the source content."
+        case .sourceRefresh:
+            return "Refreshing the captured source."
+        case .transformListTypes:
+            return "Listing available transforms."
+        case .transformRun:
+            return "Running the requested transform."
+        case .artifactSave:
+            return "Saving the artifact."
+        case .artifactOpen:
+            return "Opening the artifact."
+        case .artifactShare:
+            return "Sharing the artifact."
+        case .integrationInvoke:
+            return "Running the requested integration."
         }
     }
 

@@ -73,6 +73,10 @@ final class ToolSchemaSnapshotTests: XCTestCase {
                 return .string("example search")
             case "value":
                 return .string("option")
+            case "mode":
+                return .string("auto")
+            case "target":
+                return .string("viewer")
             default:
                 return .string("value")
             }
@@ -89,6 +93,27 @@ final class ToolSchemaSnapshotTests: XCTestCase {
             return .number(1200)
         case "bool":
             return .bool(true)
+        case "array":
+            if key == "tags" {
+                return .array([.string("tag")])
+            }
+            if key == "sources" {
+                return .array([
+                    .object([
+                        "type": .string("url"),
+                        "url": .string("https://example.com")
+                    ])
+                ])
+            }
+            return .array([])
+        case "object":
+            if key == "payload" {
+                return .object(["value": .string("ok")])
+            }
+            if key == "config" {
+                return .object(["mode": .string("default")])
+            }
+            return .object([:])
         default:
             return .string("value")
         }
@@ -101,6 +126,10 @@ final class ToolSchemaSnapshotTests: XCTestCase {
         case "number":
             return .string("bad")
         case "bool":
+            return .string("bad")
+        case "array":
+            return .string("bad")
+        case "object":
             return .string("bad")
         default:
             return .string("bad")

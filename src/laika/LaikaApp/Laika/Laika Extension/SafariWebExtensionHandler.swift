@@ -13,6 +13,7 @@ import os.log
 
 private let log = OSLog(subsystem: "com.laika.Laika", category: "native")
 private let sharedAgent = NativeAgent()
+private let sharedCollections = CollectionStore()
 
 private actor NativeAgent {
     private var modelURL: URL?
@@ -199,6 +200,14 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             return ["ok": true, "status": "ready"]
         }
 
+        if type == "collection" {
+            return await handleCollectionMessage(dict)
+        }
+
+        if type == "tool" {
+            return await handleToolMessage(dict)
+        }
+
         guard type == "plan" else {
             os_log("Unsupported native message type=%{public}@", log: log, type: .error, type)
             return ["ok": false, "error": "unsupported_type"]
@@ -275,4 +284,194 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             return ["ok": false, "error": error.localizedDescription]
         }
     }
+
+    private func handleCollectionMessage(_ message: [String: Any]) async -> [String: Any] {
+        guard let action = message["action"] as? String else {
+            return ["ok": false, "error": "missing_action"]
+        }
+        let payload = message["payload"] ?? message
+        return await handleCollectionAction(action: action, payload: payload)
+    }
+
+    private func handleToolMessage(_ message: [String: Any]) async -> [String: Any] {
+        guard let toolNameRaw = message["toolName"] as? String,
+              let toolName = ToolName(rawValue: toolNameRaw) else {
+            return ["ok": false, "error": "unknown_tool"]
+        }
+        let arguments = message["arguments"] ?? [:]
+        do {
+            let argumentsData = try encodeJSONPayload(arguments)
+            let decodedArguments = try JSONDecoder().decode([String: JSONValue].self, from: argumentsData)
+            if !ToolSchemaValidator.validateArguments(name: toolName, arguments: decodedArguments) {
+                return ["ok": false, "error": "invalid_arguments"]
+            }
+            switch toolName {
+            case .collectionCreate:
+                let payload = try JSONDecoder().decode(CollectionCreatePayload.self, from: argumentsData)
+                return await handleCollectionAction(action: "create", payload: payload)
+            case .collectionAddSources:
+                let payload = try JSONDecoder().decode(CollectionAddSourcesPayload.self, from: argumentsData)
+                return await handleCollectionAction(action: "add_sources", payload: payload)
+            case .collectionListSources:
+                let payload = try JSONDecoder().decode(CollectionListSourcesPayload.self, from: argumentsData)
+                return await handleCollectionAction(action: "list_sources", payload: payload)
+            case .sourceCapture:
+                return ["ok": true, "result": ["status": "error", "error": "not_implemented"]]
+            case .sourceRefresh:
+                return ["ok": true, "result": ["status": "error", "error": "not_implemented"]]
+            case .transformListTypes:
+                return ["ok": true, "result": ["status": "ok", "types": []]]
+            case .transformRun:
+                return ["ok": true, "result": ["status": "error", "error": "not_implemented"]]
+            case .artifactSave:
+                return ["ok": true, "result": ["status": "error", "error": "not_implemented"]]
+            case .artifactOpen:
+                return ["ok": true, "result": ["status": "error", "error": "not_implemented"]]
+            case .artifactShare:
+                return ["ok": true, "result": ["status": "error", "error": "not_implemented"]]
+            case .integrationInvoke:
+                return ["ok": true, "result": ["status": "error", "error": "not_implemented"]]
+            default:
+                return ["ok": false, "error": "unsupported_tool"]
+            }
+        } catch {
+            return ["ok": false, "error": error.localizedDescription]
+        }
+    }
+
+    private func handleCollectionAction(action: String, payload: Any) async -> [String: Any] {
+        do {
+            switch action {
+            case "list":
+                let result = try await sharedCollections.listCollections()
+                let collections = result.collections.map { collectionPayload($0) }
+                var response: [String: Any] = ["status": "ok", "collections": collections]
+                if let activeId = result.activeCollectionId {
+                    response["activeCollectionId"] = activeId
+                }
+                return ["ok": true, "result": response]
+            case "create":
+                let payload = try decodePayload(CollectionCreatePayload.self, from: payload)
+                let record = try await sharedCollections.createCollection(title: payload.title, tags: payload.tags ?? [])
+                let result: [String: Any] = [
+                    "status": "ok",
+                    "collection": collectionPayload(record),
+                    "activeCollectionId": record.id
+                ]
+                return ["ok": true, "result": result]
+            case "set_active":
+                let payload = try decodePayload(CollectionSetActivePayload.self, from: payload)
+                try await sharedCollections.setActiveCollection(payload.collectionId)
+                var result: [String: Any] = ["status": "ok"]
+                if let activeId = payload.collectionId {
+                    result["activeCollectionId"] = activeId
+                }
+                return ["ok": true, "result": result]
+            case "list_sources":
+                let payload = try decodePayload(CollectionListSourcesPayload.self, from: payload)
+                let sources = try await sharedCollections.listSources(collectionId: payload.collectionId)
+                let result: [String: Any] = [
+                    "status": "ok",
+                    "sources": sources.map { sourcePayload($0) }
+                ]
+                return ["ok": true, "result": result]
+            case "add_sources":
+                let payload = try decodePayload(CollectionAddSourcesPayload.self, from: payload)
+                let resultValue = try await sharedCollections.addSources(collectionId: payload.collectionId, sources: payload.sources)
+                let result: [String: Any] = [
+                    "status": "ok",
+                    "sources": resultValue.sources.map { sourcePayload($0) },
+                    "ignoredCount": resultValue.ignoredCount,
+                    "dedupedCount": resultValue.dedupedCount
+                ]
+                return ["ok": true, "result": result]
+            case "delete":
+                let payload = try decodePayload(CollectionDeletePayload.self, from: payload)
+                let nextActive = try await sharedCollections.deleteCollection(collectionId: payload.collectionId)
+                var result: [String: Any] = ["status": "ok"]
+                if let nextActive {
+                    result["activeCollectionId"] = nextActive
+                }
+                return ["ok": true, "result": result]
+            case "delete_source":
+                let payload = try decodePayload(CollectionDeleteSourcePayload.self, from: payload)
+                try await sharedCollections.deleteSource(collectionId: payload.collectionId, sourceId: payload.sourceId)
+                return ["ok": true, "result": ["status": "ok"]]
+            default:
+                return ["ok": false, "error": "unknown_action"]
+            }
+        } catch {
+            return ["ok": false, "error": error.localizedDescription]
+        }
+    }
+
+    private func collectionPayload(_ record: CollectionRecord) -> [String: Any] {
+        [
+            "id": record.id,
+            "title": record.title,
+            "tags": record.tags,
+            "createdAtMs": record.createdAtMs,
+            "updatedAtMs": record.updatedAtMs
+        ]
+    }
+
+    private func sourcePayload(_ record: SourceRecord) -> [String: Any] {
+        var payload: [String: Any] = [
+            "id": record.id,
+            "collectionId": record.collectionId,
+            "kind": record.kind.rawValue,
+            "captureStatus": record.captureStatus.rawValue,
+            "addedAtMs": record.addedAtMs,
+            "updatedAtMs": record.updatedAtMs
+        ]
+        if let url = record.url {
+            payload["url"] = url
+        }
+        if let title = record.title {
+            payload["title"] = title
+        }
+        if let capturedAtMs = record.capturedAtMs {
+            payload["capturedAtMs"] = capturedAtMs
+        }
+        return payload
+    }
+
+    private func decodePayload<T: Decodable>(_ type: T.Type, from payload: Any) throws -> T {
+        let data = try encodeJSONPayload(payload)
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    private func encodeJSONPayload(_ payload: Any) throws -> Data {
+        guard JSONSerialization.isValidJSONObject(payload) else {
+            throw CollectionStoreError.invalidRequest("invalid_payload")
+        }
+        return try JSONSerialization.data(withJSONObject: payload, options: [])
+    }
+}
+
+private struct CollectionCreatePayload: Decodable {
+    let title: String
+    let tags: [String]?
+}
+
+private struct CollectionSetActivePayload: Decodable {
+    let collectionId: String?
+}
+
+private struct CollectionListSourcesPayload: Decodable {
+    let collectionId: String
+}
+
+private struct CollectionAddSourcesPayload: Decodable {
+    let collectionId: String
+    let sources: [SourceInput]
+}
+
+private struct CollectionDeletePayload: Decodable {
+    let collectionId: String
+}
+
+private struct CollectionDeleteSourcePayload: Decodable {
+    let collectionId: String
+    let sourceId: String
 }

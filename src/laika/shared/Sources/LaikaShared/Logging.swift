@@ -84,6 +84,28 @@ public enum LaikaPaths {
         return logs.appendingPathComponent(name, isDirectory: false)
     }
 
+    public static func databaseDirectory() -> URL? {
+        guard let home = ensureHomeDirectory() else {
+            return nil
+        }
+        return home.appendingPathComponent(dbFolderName, isDirectory: true)
+    }
+
+    public static func databaseURL(_ name: String = "laika.sqlite3") -> URL? {
+        guard let dbDirectory = databaseDirectory() else {
+            return nil
+        }
+        return dbDirectory.appendingPathComponent(name, isDirectory: false)
+    }
+
+    public static func resetForTesting() {
+        cachedHomeDirectory = nil
+        lastEnsureError = nil
+        lastResolvedDirectory = nil
+        lastPreferredDirectory = nil
+        lastUsedFallback = false
+    }
+
     public static func preferredHomeDirectory() -> URL? {
         if !isSandboxed, let override = overrideDirectory() {
             return override
