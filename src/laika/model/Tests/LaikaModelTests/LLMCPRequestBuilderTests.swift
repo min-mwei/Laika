@@ -53,6 +53,33 @@ final class LLMCPRequestBuilderTests: XCTestCase {
         XCTAssertEqual(numberValue(firstObject["comment_count"]), 200)
     }
 
+    func testChunkDocumentsPreferFullTextOverPrimary() {
+        let longText = String(repeating: "A", count: 5000)
+        let primary = ObservedPrimaryContent(
+            tag: "article",
+            role: "main",
+            text: "Short excerpt.",
+            linkCount: 0,
+            linkDensity: 0
+        )
+        let observation = Observation(
+            url: "https://example.com",
+            title: "Example",
+            text: longText,
+            elements: [],
+            primary: primary
+        )
+        let context = ContextPack(
+            origin: "https://example.com",
+            mode: .assist,
+            observation: observation,
+            recentToolCalls: []
+        )
+        let request = LLMCPRequestBuilder.build(context: context, userGoal: "What is this page about?")
+        let chunkDocs = request.context.documents.filter { $0.kind == "web.observation.chunk.v1" }
+        XCTAssertFalse(chunkDocs.isEmpty)
+    }
+
     private func makeItem(title: String, commentCount: Int) -> ObservedItem {
         let commentTitle = "\(commentCount) comments"
         let links = [

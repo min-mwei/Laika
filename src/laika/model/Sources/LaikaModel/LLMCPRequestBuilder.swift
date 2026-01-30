@@ -137,23 +137,26 @@ enum LLMCPRequestBuilder {
             "title": .string(TextUtils.truncate(TextUtils.normalizeWhitespace(observation.title), maxChars: ObservationBudget.maxTitleChars))
         ]
         var discussionCandidates: [(title: String, url: String, handleId: String?, commentCount: Int)] = []
+        var summaryText: String?
         if shouldIncludeSummaryText(focus: focus, observation: observation) {
-            let summaryText = buildSummaryText(
+            let text = buildSummaryText(
                 observation: observation,
                 maxChars: summaryTextLimit(goalPlan: goalPlan, hasChunks: hasChunks)
             )
-            if !summaryText.isEmpty && (!isListObservation(observation) || observation.items.isEmpty) {
-                content["text"] = .string(summaryText)
+            if !text.isEmpty && (!isListObservation(observation) || observation.items.isEmpty) {
+                summaryText = text
             }
         }
+        var primaryText: String?
         if shouldIncludePrimary(focus: focus, observation: observation), let primary = observation.primary {
-            let primaryText = TextUtils.truncate(
+            let trimmedPrimaryText = TextUtils.truncate(
                 TextUtils.normalizePreservingNewlines(primary.text),
                 maxChars: primaryTextLimit(goalPlan: goalPlan, hasChunks: hasChunks)
             )
-            if !primaryText.isEmpty {
+            if !trimmedPrimaryText.isEmpty {
+                primaryText = trimmedPrimaryText
                 var primaryPayload: [String: JSONValue] = [
-                    "text": .string(primaryText),
+                    "text": .string(trimmedPrimaryText),
                     "tag": .string(primary.tag),
                     "role": .string(primary.role)
                 ]
@@ -161,6 +164,13 @@ enum LLMCPRequestBuilder {
                     primaryPayload["handle_id"] = .string(handleId)
                 }
                 content["primary"] = .object(primaryPayload)
+            }
+        }
+        if let summaryText, !summaryText.isEmpty {
+            let normalizedSummary = TextUtils.normalizeWhitespace(summaryText)
+            let normalizedPrimary = primaryText.map { TextUtils.normalizeWhitespace($0) } ?? ""
+            if primaryText == nil || normalizedSummary != normalizedPrimary {
+                content["text"] = .string(summaryText)
             }
         }
         let itemsForFocus = shouldIncludeItems(focus: focus, goalPlan: goalPlan)
@@ -292,12 +302,7 @@ enum LLMCPRequestBuilder {
         if wantsComments(goalPlan: goalPlan) || goalPlan.intent == .itemSummary || goalPlan.intent == .action {
             return []
         }
-        let sourceText: String
-        if let primary = observation.primary, !primary.text.isEmpty {
-            sourceText = primary.text
-        } else {
-            sourceText = observation.text
-        }
+        let sourceText = preferredObservationText(observation: observation)
         let chunks = chunkText(sourceText, maxChunkChars: ObservationBudget.maxChunkChars, maxChunks: ObservationBudget.maxChunks)
         guard chunks.count > 1 else {
             return []
@@ -342,8 +347,9 @@ enum LLMCPRequestBuilder {
             let combined = lines.joined(separator: "\n")
             return TextUtils.truncate(combined, maxChars: maxChars)
         }
-        if let primary = observation.primary, !primary.text.isEmpty {
-            let normalized = TextUtils.normalizePreservingNewlines(primary.text)
+        let preferredText = preferredObservationText(observation: observation)
+        if !preferredText.isEmpty {
+            let normalized = TextUtils.normalizePreservingNewlines(preferredText)
             return TextUtils.truncate(normalized, maxChars: maxChars)
         }
         if !observation.blocks.isEmpty {
@@ -354,6 +360,18 @@ enum LLMCPRequestBuilder {
             return TextUtils.truncate(combined, maxChars: maxChars)
         }
         return TextUtils.truncate(TextUtils.normalizePreservingNewlines(observation.text), maxChars: maxChars)
+    }
+
+    private static func preferredObservationText(observation: Observation) -> String {
+        let primaryText = observation.primary?.text ?? ""
+        let fullText = observation.text
+        if primaryText.isEmpty {
+            return fullText
+        }
+        if fullText.isEmpty {
+            return primaryText
+        }
+        return fullText.count > primaryText.count ? fullText : primaryText
     }
 
     private static func isListObservation(_ observation: Observation) -> Bool {

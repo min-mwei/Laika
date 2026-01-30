@@ -182,6 +182,9 @@ We are incorporating the review notes in `src/feedback.md` as follows:
 - **URL normalization consistency:** remove tracking parameters and normalize query ordering in the native store; apply similar normalization for pasted/selected URLs in the UI.
 - **Durable answers:** store answer events in SQLite with citations and reopen via the answer viewer (viewer falls back to stored chat events).
 - **Background capture queue:** claim `capture_jobs` in the background and run `source.capture` without requiring the sidecar UI.
+- **Read-only markdown output:** ensure `output.format="markdown"` routes through a markdown-only system prompt for collection answers.
+- **Context packing fix:** prefer `observation.text` for chunking (or whichever is longer), and avoid duplicating identical excerpts in multiple fields.
+- **Coverage retry trim:** when coverage is missing, retry with only missing sources + prior answer context (avoid resending full collection).
 
 ### P1 follow-ups (design work queued)
 - **Capture pipeline ownership:** evaluate a native-managed scheduler + retry/backoff policy now that the background queue claims jobs.

@@ -205,6 +205,7 @@ prune_extension_duplicates() {
   local derived_path
   local primary_path
   local trash_app
+  local search_roots=()
   local unique_paths
 
   if [[ -z "${keep_path}" ]]; then
@@ -235,6 +236,19 @@ prune_extension_duplicates() {
       fi
     done < <(find "${LAIKA_ROOT}" -type d -name "${APP_NAME}" -print 2>/dev/null)
   fi
+  if [[ -n "${DERIVED_DATA_PATH:-}" ]]; then
+    search_roots+=("$(dirname "${DERIVED_DATA_PATH}")")
+  fi
+  search_roots+=("/tmp/laika-automation" "/private/tmp/laika-automation")
+  for root in "${search_roots[@]}"; do
+    if [[ -n "${root}" && -d "${root}" ]]; then
+      while IFS= read -r app_path; do
+        if [[ -n "${app_path}" ]]; then
+          candidates+=("${app_path}")
+        fi
+      done < <(find "${root}" -type d -name "${APP_NAME}" -print 2>/dev/null)
+    fi
+  done
   trash_app="${HOME}/.Trash/${APP_NAME}"
   if [[ -d "${trash_app}" ]]; then
     candidates+=("${trash_app}")
@@ -382,6 +396,14 @@ should_retry_ui() {
     return 0
   fi
   if grep -q "Failed to initialize for UI testing" "${log_path}"; then
+    CLEAN_DERIVED_DATA="1"
+    return 0
+  fi
+  if grep -q "Other version in use" "${log_path}"; then
+    CLEAN_DERIVED_DATA="1"
+    return 0
+  fi
+  if grep -q "Invalid call to runtime.sendNativeMessage" "${log_path}"; then
     CLEAN_DERIVED_DATA="1"
     return 0
   fi

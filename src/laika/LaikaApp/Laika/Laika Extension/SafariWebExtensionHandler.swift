@@ -517,7 +517,8 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                         let repairQuestion = prepareCoverageRepairQuestion(
                             original: question,
                             sources: capturedSources,
-                            missing: missing
+                            missing: missing,
+                            previousAnswer: assistantMarkdown
                         )
                         LaikaLogger.logAgentEvent(
                             type: "native.collection_answer_retry",
@@ -526,6 +527,7 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                             maxSteps: nil,
                             payload: [
                                 "missingCount": .number(Double(missing.count)),
+                                "retrySourceCount": .number(Double(missing.count)),
                                 "missingTitles": .array(missing.prefix(10).map {
                                     let title = $0.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                                     return .string(LaikaLogger.preview(title.isEmpty ? $0.url : title, maxChars: 120))
@@ -534,14 +536,15 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                         )
                         let (retryRequest, retryLogContext, retryCitationMap) = buildCollectionAnswerRequest(
                             collection: collection,
-                            sources: capturedSources,
+                            sources: missing,
                             question: repairQuestion,
                             runId: runId,
                             turn: turn
                         )
                         let retryResponse = try await agent.answer(request: retryRequest, logContext: retryLogContext, maxTokens: payload.maxTokens)
                         response = retryResponse
-                        citationsPayload = buildCitationPayload(response: retryResponse, sourceURLMap: retryCitationMap)
+                        let retryCitations = buildCitationPayload(response: retryResponse, sourceURLMap: retryCitationMap)
+                        citationsPayload = mergeCitations(existing: citationsPayload, additional: retryCitations)
                         assistantMarkdown = retryResponse.assistant.render.markdown()
                         if let rawMarkdown = retryResponse.rawMarkdown,
                            !rawMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -681,7 +684,8 @@ Each bullet must cite that source. If a source adds no new info, still include i
     private func prepareCoverageRepairQuestion(
         original: String,
         sources: [SourceSnapshot],
-        missing: [SourceSnapshot]
+        missing: [SourceSnapshot],
+        previousAnswer: String
     ) -> String {
         let missingTitles = missing.prefix(collectionSummaryMaxSources).map { source in
             let raw = source.title?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -691,16 +695,56 @@ Each bullet must cite that source. If a source adds no new info, still include i
             return TextUtils.truncate(TextUtils.normalizeWhitespace(source.url), maxChars: 120)
         }
         let missingList = missingTitles.map { "- \($0)" }.joined(separator: "\n")
-        let base = prepareCollectionQuestion(original, sources: sources)
+        let clippedAnswer = TextUtils.truncate(
+            TextUtils.normalizePreservingNewlines(previousAnswer),
+            maxChars: 4000
+        )
+        let base = """
+The user asked: \(original)
+
+Keep the previous answer verbatim. Then append coverage for the missing sources only.
+Do not rewrite or remove existing content. If the original answer used bullets per source, append bullets for missing sources.
+"""
         if missingList.isEmpty {
             return base
         }
         return """
 \(base)
 
-Your previous answer missed these sources. You must include them now:
+Previous answer:
+\(clippedAnswer)
+
+Missing sources to add:
 \(missingList)
 """
+    }
+
+    private func mergeCitations(existing: [[String: Any]], additional: [[String: Any]]) -> [[String: Any]] {
+        guard !existing.isEmpty else {
+            return additional
+        }
+        guard !additional.isEmpty else {
+            return existing
+        }
+        var seen: Set<String> = []
+        var merged: [[String: Any]] = []
+        for entry in existing + additional {
+            let key = citationKey(entry)
+            if seen.contains(key) {
+                continue
+            }
+            seen.insert(key)
+            merged.append(entry)
+        }
+        return merged
+    }
+
+    private func citationKey(_ entry: [String: Any]) -> String {
+        let sourceId = (entry["source_id"] as? String) ?? ""
+        let url = (entry["url"] as? String) ?? ""
+        let quote = (entry["quote"] as? String) ?? ""
+        let locator = (entry["locator"] as? String) ?? ""
+        return "\(sourceId)|\(url)|\(quote)|\(locator)"
     }
 
     private func shouldEnforceCoverage(question: String) -> Bool {
