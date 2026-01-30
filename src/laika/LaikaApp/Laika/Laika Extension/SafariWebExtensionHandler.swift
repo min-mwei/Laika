@@ -499,6 +499,9 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                 var response = try await agent.answer(request: request, logContext: logContext, maxTokens: payload.maxTokens)
                 var citationsPayload = buildCitationPayload(response: response, sourceURLMap: citationMap)
                 var assistantMarkdown = response.assistant.render.markdown()
+                if let rawMarkdown = response.rawMarkdown, !rawMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    assistantMarkdown = rawMarkdown
+                }
                 if assistantMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     let summary = response.summary.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !summary.isEmpty {
@@ -540,6 +543,10 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                         response = retryResponse
                         citationsPayload = buildCitationPayload(response: retryResponse, sourceURLMap: retryCitationMap)
                         assistantMarkdown = retryResponse.assistant.render.markdown()
+                        if let rawMarkdown = retryResponse.rawMarkdown,
+                           !rawMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            assistantMarkdown = rawMarkdown
+                        }
                         if assistantMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             let summary = retryResponse.summary.trimmingCharacters(in: .whitespacesAndNewlines)
                             assistantMarkdown = summary.isEmpty ? "Answer unavailable." : summary
@@ -767,7 +774,7 @@ Your previous answer missed these sources. You must include them now:
             sender: LLMCPSender(role: "agent"),
             input: input,
             context: LLMCPContext(documents: documents),
-            output: LLMCPOutputSpec(format: "json"),
+            output: LLMCPOutputSpec(format: "markdown"),
             trace: nil
         )
         let logContext = AnswerLogContext(

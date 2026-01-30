@@ -17,11 +17,17 @@ public struct ModelResponse: Codable, Equatable, Sendable {
     public let toolCalls: [ToolCall]
     public let summary: String
     public let assistant: AssistantMessage
+    public let rawMarkdown: String?
 
     public init(toolCalls: [ToolCall], assistant: AssistantMessage, summary: String? = nil) {
+        self.init(toolCalls: toolCalls, assistant: assistant, summary: summary, rawMarkdown: nil)
+    }
+
+    public init(toolCalls: [ToolCall], assistant: AssistantMessage, summary: String? = nil, rawMarkdown: String?) {
         self.toolCalls = toolCalls
         self.assistant = assistant
         self.summary = summary ?? assistant.render.plainText()
+        self.rawMarkdown = rawMarkdown
     }
 }
 

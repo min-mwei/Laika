@@ -347,6 +347,9 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
 
     public func generateAnswer(request: LLMCPRequest, logContext: AnswerLogContext) async throws -> ModelResponse {
         let container = try await store.container(for: modelURL)
+        if request.output.format == "markdown" {
+            return try await generateMarkdownAnswer(request: request, logContext: logContext, container: container)
+        }
         let systemPrompt = PromptBuilder.systemPrompt()
         let userPrompt = PromptBuilder.userPrompt(request: request, runId: logContext.runId, step: logContext.step, maxSteps: logContext.maxSteps)
         let requestId = UUID().uuidString
@@ -443,6 +446,136 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         }
     }
 
+    private func generateMarkdownAnswer(
+        request: LLMCPRequest,
+        logContext: AnswerLogContext,
+        container: ModelContainer
+    ) async throws -> ModelResponse {
+        let systemPrompt = PromptBuilder.markdownSystemPrompt()
+        let userPrompt = PromptBuilder.userPrompt(request: request, runId: logContext.runId, step: logContext.step, maxSteps: logContext.maxSteps)
+        let requestId = UUID().uuidString
+        let attempt = GenerationAttempt(temperature: 0.2, topP: 0.7, enableThinking: false)
+        let maxOutputChars = 28_000
+        let answerMaxTokens = answerMaxTokens(sourceCount: logContext.sourceCount)
+
+        LaikaLogger.logLLMEvent(.request(
+            id: requestId,
+            runId: logContext.runId,
+            step: logContext.step,
+            maxSteps: logContext.maxSteps,
+            goal: request.input.userMessage.text,
+            origin: logContext.origin,
+            pageURL: logContext.pageURL,
+            pageTitle: logContext.pageTitle,
+            recentToolCallsCount: 0,
+            modelPath: modelURL.lastPathComponent,
+            maxTokens: answerMaxTokens,
+            temperature: Double(attempt.temperature),
+            topP: Double(attempt.topP),
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            observationChars: logContext.contextChars,
+            elementCount: 0,
+            blockCount: 0,
+            itemCount: 0,
+            outlineCount: 0,
+            primaryChars: 0,
+            commentCount: 0,
+            tabCount: 0,
+            recentToolName: nil,
+            recentToolArgumentsPreview: nil,
+            recentToolResultStatus: nil,
+            recentToolResultPreview: nil,
+            stage: "collection_answer"
+        ))
+
+        let startedAt = Date()
+        do {
+            let result = try await generateTextResponse(
+                container: container,
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                attempt: attempt,
+                maxOutputChars: maxOutputChars,
+                maxTokensOverride: answerMaxTokens
+            )
+            let output = result.output
+            let cleaned = cleanMarkdownOutput(output)
+            if let jsonCandidate = extractLLMCPJSON(from: output) {
+                let outcome = LLMCPResponseParser.parseWithOutcome(jsonCandidate)
+                let parsed = outcome.response
+                let rendered = parsed.assistant.render.markdown()
+                let durationMs = max(0, Date().timeIntervalSince(startedAt) * 1000)
+                logParseOutcome(outcome, logContext: logContext, stage: "collection_answer", outputChars: output.count)
+                LaikaLogger.logLLMEvent(.response(
+                    id: requestId,
+                    runId: logContext.runId,
+                    step: logContext.step,
+                    maxSteps: logContext.maxSteps,
+                    modelPath: modelURL.lastPathComponent,
+                    maxTokens: answerMaxTokens,
+                    temperature: Double(attempt.temperature),
+                    topP: Double(attempt.topP),
+                    output: output,
+                    toolCallsCount: parsed.toolCalls.count,
+                    summary: rendered,
+                    error: nil,
+                    durationMs: durationMs,
+                    stage: "collection_answer",
+                    firstTokenMs: result.firstTokenMs,
+                    firstJSONMs: result.firstJSONMs,
+                    captureMode: result.captureMode,
+                    outputTruncated: result.outputTruncated
+                ))
+                return ModelResponse(toolCalls: [], assistant: parsed.assistant, summary: rendered, rawMarkdown: rendered)
+            }
+
+            let markdown = cleaned.isEmpty ? output.trimmingCharacters(in: .whitespacesAndNewlines) : cleaned
+            let assistant = AssistantMessage(render: Document.paragraph(text: markdown))
+            let durationMs = max(0, Date().timeIntervalSince(startedAt) * 1000)
+            LaikaLogger.logLLMEvent(.response(
+                id: requestId,
+                runId: logContext.runId,
+                step: logContext.step,
+                maxSteps: logContext.maxSteps,
+                modelPath: modelURL.lastPathComponent,
+                maxTokens: answerMaxTokens,
+                temperature: Double(attempt.temperature),
+                topP: Double(attempt.topP),
+                output: output,
+                toolCallsCount: 0,
+                summary: markdown,
+                error: nil,
+                durationMs: durationMs,
+                stage: "collection_answer",
+                firstTokenMs: result.firstTokenMs,
+                firstJSONMs: result.firstJSONMs,
+                captureMode: result.captureMode,
+                outputTruncated: result.outputTruncated
+            ))
+            return ModelResponse(toolCalls: [], assistant: assistant, summary: markdown, rawMarkdown: markdown)
+        } catch {
+            let durationMs = max(0, Date().timeIntervalSince(startedAt) * 1000)
+            LaikaLogger.logLLMEvent(.response(
+                id: requestId,
+                runId: logContext.runId,
+                step: logContext.step,
+                maxSteps: logContext.maxSteps,
+                modelPath: modelURL.lastPathComponent,
+                maxTokens: answerMaxTokens,
+                temperature: Double(attempt.temperature),
+                topP: Double(attempt.topP),
+                output: "",
+                toolCallsCount: nil,
+                summary: nil,
+                error: error.localizedDescription,
+                durationMs: durationMs,
+                stage: "collection_answer"
+            ))
+            throw error
+        }
+    }
+
     private func generateJSONResponse(
         container: ModelContainer,
         systemPrompt: String,
@@ -513,6 +646,87 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
             captureMode: "full_output",
             outputTruncated: false
         )
+    }
+
+    private func generateTextResponse(
+        container: ModelContainer,
+        systemPrompt: String,
+        userPrompt: String,
+        attempt: GenerationAttempt,
+        maxOutputChars: Int,
+        maxTokensOverride: Int? = nil
+    ) async throws -> GenerationResult {
+        let tokenLimit = maxTokensOverride ?? maxTokens
+        let parameters = GenerateParameters(
+            maxTokens: tokenLimit,
+            temperature: attempt.temperature,
+            topP: attempt.topP
+        )
+        let additionalContext: [String: any Sendable]? =
+            attempt.enableThinking ? nil : ["enable_thinking": false]
+        let session = ChatSession(
+            container,
+            instructions: systemPrompt,
+            generateParameters: parameters,
+            additionalContext: additionalContext
+        )
+
+        let startedAt = Date()
+        var firstTokenAt: Date?
+        var output = ""
+        for try await chunk in session.streamResponse(to: userPrompt) {
+            if firstTokenAt == nil {
+                firstTokenAt = Date()
+            }
+            output.append(chunk)
+            if output.count >= maxOutputChars {
+                let firstTokenMs = firstTokenAt.map { $0.timeIntervalSince(startedAt) * 1000 }
+                return GenerationResult(
+                    output: output,
+                    firstTokenMs: firstTokenMs,
+                    firstJSONMs: nil,
+                    captureMode: "truncated",
+                    outputTruncated: true
+                )
+            }
+        }
+
+        let firstTokenMs = firstTokenAt.map { $0.timeIntervalSince(startedAt) * 1000 }
+        return GenerationResult(
+            output: output,
+            firstTokenMs: firstTokenMs,
+            firstJSONMs: nil,
+            captureMode: "full_output",
+            outputTruncated: false
+        )
+    }
+
+    private func cleanMarkdownOutput(_ output: String) -> String {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("```"), trimmed.hasSuffix("```") else {
+            return trimmed
+        }
+        guard let firstBreak = trimmed.firstIndex(of: "\n") else {
+            return trimmed
+        }
+        let endIndex = trimmed.index(trimmed.endIndex, offsetBy: -3)
+        guard firstBreak < endIndex else {
+            return trimmed
+        }
+        let inner = trimmed[trimmed.index(after: firstBreak)..<endIndex]
+        return inner.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func extractLLMCPJSON(from text: String) -> String? {
+        guard let json = ModelOutputParser.extractJSONObject(from: text)
+            ?? ModelOutputParser.extractJSONObjectRelaxed(from: text) else {
+            return nil
+        }
+        let lower = json.lowercased()
+        guard lower.contains("\"protocol\""), lower.contains("\"assistant\"") else {
+            return nil
+        }
+        return json
     }
 
     public func streamText(_ request: StreamRequest) -> AsyncThrowingStream<String, Error> {

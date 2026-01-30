@@ -129,6 +129,15 @@ Notes:
 - `trust="untrusted"` is required for any document derived from web content.
 - `output.format` may be `"json"` (default) or `"markdown"` for read-only tasks.
 
+### Markdown-only output (read-only tasks)
+
+For collection answering and other read-only workflows, Laika can set `output.format="markdown"`.
+In this mode:
+- The model returns a single Markdown response with **no JSON envelope**.
+- Tool calls are **not allowed**; if tools are needed, use `output.format="json"`.
+- The host may still accept JSON if the model ignores instructions, but Markdown is the canonical
+  response format.
+
 ---
 
 ## Context documents (v1)
