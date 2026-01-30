@@ -14,6 +14,9 @@ import os.log
 private let log = OSLog(subsystem: "com.laika.Laika", category: "native")
 private let sharedAgent = NativeAgent()
 private let sharedCollections = CollectionStore()
+private let collectionContextMaxChars = 80_000
+private let collectionSourceMaxChars = 8_000
+private let collectionSummaryMaxSources = 12
 
 private actor NativeAgent {
     private var modelURL: URL?
@@ -386,6 +389,14 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                     "sources": sources.map { sourcePayload($0) }
                 ]
                 return ["ok": true, "result": result]
+            case "next_capture_job":
+                let payload = try decodePayload(CollectionNextCaptureJobPayload.self, from: payload)
+                let job = try await sharedCollections.claimNextCaptureJob(collectionId: payload.collectionId)
+                var result: [String: Any] = ["status": "ok"]
+                if let job {
+                    result["job"] = captureJobPayload(job)
+                }
+                return ["ok": true, "result": result]
             case "add_sources":
                 let payload = try decodePayload(CollectionAddSourcesPayload.self, from: payload)
                 let resultValue = try await sharedCollections.addSources(collectionId: payload.collectionId, sources: payload.sources)
@@ -451,12 +462,13 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                 guard !capturedSources.isEmpty else {
                     throw CollectionStoreError.invalidRequest("no_captured_sources")
                 }
+                let preparedQuestion = prepareCollectionQuestion(question, sources: capturedSources)
                 let runId = "collection:\(payload.collectionId)"
                 let turn = max(1, (try await sharedCollections.listChatEvents(collectionId: payload.collectionId, limit: 200).count + 1))
                 let (request, logContext, citationMap) = buildCollectionAnswerRequest(
                     collection: collection,
                     sources: capturedSources,
-                    question: question,
+                    question: preparedQuestion,
                     runId: runId,
                     turn: turn
                 )
@@ -469,17 +481,23 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                     payload: [
                         "collectionId": .string(payload.collectionId),
                         "questionPreview": .string(LaikaLogger.preview(question, maxChars: 200)),
+                        "preparedQuestionPreview": .string(LaikaLogger.preview(preparedQuestion, maxChars: 200)),
+                        "sourceIds": .array(capturedSources.prefix(12).map { .string($0.id) }),
+                        "sourceTitles": .array(capturedSources.prefix(12).map {
+                            let title = $0.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                            return .string(LaikaLogger.preview(title.isEmpty ? $0.url : title, maxChars: 120))
+                        }),
                         "sourceCount": .number(Double(capturedSources.count)),
                         "contextChars": .number(Double(logContext.contextChars))
                     ]
                 )
-                _ = try await sharedCollections.addChatEvent(
+                let userEvent = try await sharedCollections.addChatEvent(
                     collectionId: payload.collectionId,
                     role: "user",
                     markdown: question
                 )
-                let response = try await agent.answer(request: request, logContext: logContext, maxTokens: payload.maxTokens)
-                let citationsPayload = buildCitationPayload(response: response, sourceURLMap: citationMap)
+                var response = try await agent.answer(request: request, logContext: logContext, maxTokens: payload.maxTokens)
+                var citationsPayload = buildCitationPayload(response: response, sourceURLMap: citationMap)
                 var assistantMarkdown = response.assistant.render.markdown()
                 if assistantMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     let summary = response.summary.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -490,8 +508,46 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                         assistantMarkdown = fallback.isEmpty ? "Answer unavailable." : fallback
                     }
                 }
+                if shouldEnforceCoverage(question: question) {
+                    let missing = missingCoverageSources(sources: capturedSources, answerMarkdown: assistantMarkdown, citations: response.assistant.citations)
+                    if !missing.isEmpty {
+                        let repairQuestion = prepareCoverageRepairQuestion(
+                            original: question,
+                            sources: capturedSources,
+                            missing: missing
+                        )
+                        LaikaLogger.logAgentEvent(
+                            type: "native.collection_answer_retry",
+                            runId: runId,
+                            step: nil,
+                            maxSteps: nil,
+                            payload: [
+                                "missingCount": .number(Double(missing.count)),
+                                "missingTitles": .array(missing.prefix(10).map {
+                                    let title = $0.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                                    return .string(LaikaLogger.preview(title.isEmpty ? $0.url : title, maxChars: 120))
+                                })
+                            ]
+                        )
+                        let (retryRequest, retryLogContext, retryCitationMap) = buildCollectionAnswerRequest(
+                            collection: collection,
+                            sources: capturedSources,
+                            question: repairQuestion,
+                            runId: runId,
+                            turn: turn
+                        )
+                        let retryResponse = try await agent.answer(request: retryRequest, logContext: retryLogContext, maxTokens: payload.maxTokens)
+                        response = retryResponse
+                        citationsPayload = buildCitationPayload(response: retryResponse, sourceURLMap: retryCitationMap)
+                        assistantMarkdown = retryResponse.assistant.render.markdown()
+                        if assistantMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            let summary = retryResponse.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+                            assistantMarkdown = summary.isEmpty ? "Answer unavailable." : summary
+                        }
+                    }
+                }
                 let citationsJSON = encodeJSONArrayPayload(citationsPayload)
-                _ = try await sharedCollections.addChatEvent(
+                let assistantEvent = try await sharedCollections.addChatEvent(
                     collectionId: payload.collectionId,
                     role: "assistant",
                     markdown: assistantMarkdown,
@@ -514,9 +570,44 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                     "answer": [
                         "title": response.assistant.title as Any,
                         "markdown": assistantMarkdown,
-                        "citations": citationsPayload
+                        "citations": citationsPayload,
+                        "eventId": assistantEvent.id,
+                        "questionEventId": userEvent.id
                     ]
                 ]
+                return ["ok": true, "result": result]
+            case "get_chat_event":
+                let payload = try decodePayload(CollectionGetChatEventPayload.self, from: payload)
+                guard let collection = try await sharedCollections.getCollection(collectionId: payload.collectionId) else {
+                    throw CollectionStoreError.invalidRequest("collection_not_found")
+                }
+                guard let event = try await sharedCollections.getChatEvent(
+                    collectionId: payload.collectionId,
+                    eventId: payload.eventId
+                ) else {
+                    throw CollectionStoreError.invalidRequest("event_not_found")
+                }
+                var userEvent: ChatEventRecord?
+                if let questionEventId = payload.questionEventId, !questionEventId.isEmpty {
+                    userEvent = try await sharedCollections.getChatEvent(
+                        collectionId: payload.collectionId,
+                        eventId: questionEventId
+                    )
+                }
+                if userEvent == nil {
+                    userEvent = try await sharedCollections.getLatestUserEvent(
+                        collectionId: payload.collectionId,
+                        before: event.createdAtMs
+                    )
+                }
+                var result: [String: Any] = [
+                    "status": "ok",
+                    "collection": collectionPayload(collection),
+                    "event": chatEventPayload(event)
+                ]
+                if let userEvent {
+                    result["userEvent"] = chatEventPayload(userEvent)
+                }
                 return ["ok": true, "result": result]
             case "list_chat":
                 let payload = try decodePayload(CollectionListChatPayload.self, from: payload)
@@ -548,6 +639,109 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             }
             return ["ok": false, "error": message]
         }
+    }
+
+    private func prepareCollectionQuestion(_ question: String, sources: [SourceSnapshot]) -> String {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return trimmed
+        }
+        if !isSummaryQuestion(trimmed) {
+            return trimmed
+        }
+        let titles = sources.prefix(collectionSummaryMaxSources).map { source in
+            let raw = source.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let raw, !raw.isEmpty {
+                return TextUtils.truncate(TextUtils.normalizeWhitespace(raw), maxChars: 120)
+            }
+            return TextUtils.truncate(TextUtils.normalizeWhitespace(source.url), maxChars: 120)
+        }
+        let bulletList = titles.map { "- \($0)" }.joined(separator: "\n")
+        let expectedCount = min(sources.count, collectionSummaryMaxSources)
+        let intro = """
+Summarize this collection using every source.
+First write 2-3 sentences of overall context.
+Then provide exactly \(expectedCount) bullet(s), one per source, using the titles below.
+Each bullet must start with the exact title in quotes (verbatim) and be 1-2 sentences.
+Each bullet must cite that source. If a source adds no new info, still include it and say so.
+"""
+        if bulletList.isEmpty {
+            return intro + "\nOriginal request: " + trimmed
+        }
+        return intro + "\nSource titles:\n" + bulletList + "\n\nOriginal request: " + trimmed
+    }
+
+    private func prepareCoverageRepairQuestion(
+        original: String,
+        sources: [SourceSnapshot],
+        missing: [SourceSnapshot]
+    ) -> String {
+        let missingTitles = missing.prefix(collectionSummaryMaxSources).map { source in
+            let raw = source.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let raw, !raw.isEmpty {
+                return TextUtils.truncate(TextUtils.normalizeWhitespace(raw), maxChars: 120)
+            }
+            return TextUtils.truncate(TextUtils.normalizeWhitespace(source.url), maxChars: 120)
+        }
+        let missingList = missingTitles.map { "- \($0)" }.joined(separator: "\n")
+        let base = prepareCollectionQuestion(original, sources: sources)
+        if missingList.isEmpty {
+            return base
+        }
+        return """
+\(base)
+
+Your previous answer missed these sources. You must include them now:
+\(missingList)
+"""
+    }
+
+    private func shouldEnforceCoverage(question: String) -> Bool {
+        let lower = question.lowercased()
+        if isSummaryQuestion(lower) {
+            return true
+        }
+        let keywords = ["compare", "comparison", "difference", "differences", "contrast", "how does each", "how do the sources"]
+        return keywords.contains { lower.contains($0) }
+    }
+
+    private func missingCoverageSources(
+        sources: [SourceSnapshot],
+        answerMarkdown: String,
+        citations: [LLMCPCitation]
+    ) -> [SourceSnapshot] {
+        if sources.isEmpty {
+            return []
+        }
+        let normalizedAnswer = TextUtils.normalizeWhitespace(answerMarkdown).lowercased()
+        var citedSourceIds: Set<String> = []
+        for citation in citations {
+            citedSourceIds.insert(citation.docId)
+        }
+        return sources.filter { source in
+            if citedSourceIds.contains(source.id) {
+                return false
+            }
+            if let title = source.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+                let needle = TextUtils.truncate(TextUtils.normalizeWhitespace(title), maxChars: 80).lowercased()
+                if normalizedAnswer.contains(needle) {
+                    return false
+                }
+            }
+            if let host = URL(string: source.url)?.host?.lowercased(),
+               !host.isEmpty,
+               normalizedAnswer.contains(host) {
+                return false
+            }
+            return true
+        }
+    }
+
+    private func isSummaryQuestion(_ question: String) -> Bool {
+        let lower = question.lowercased()
+        let hasSummary = lower.contains("summarize") || lower.contains("summarise") || lower.contains("summary")
+        let hasCollection = lower.contains("collection") || lower.contains("sources")
+        return hasSummary && hasCollection
     }
 
     private func buildCollectionAnswerRequest(
@@ -597,21 +791,38 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         var citationMap: [String: String] = [:]
         var contextChars = 0
 
-        let indexDoc = collectionIndexDocument(collection: collection, sources: sources)
-        documents.append(indexDoc)
-
+        var includedSources: [SourceSnapshot] = []
         for source in sources {
+            let trimmed = source.captureMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                continue
+            }
+            let boundedMarkdown = TextUtils.truncate(trimmed, maxChars: collectionSourceMaxChars)
+            if !includedSources.isEmpty && contextChars + boundedMarkdown.count > collectionContextMaxChars {
+                break
+            }
             citationMap[source.id] = source.url
-            contextChars += source.captureMarkdown.count
-            documents.append(collectionSourceDocument(collection: collection, source: source))
+            contextChars += boundedMarkdown.count
+            includedSources.append(source)
+            documents.append(collectionSourceDocument(collection: collection, source: source, markdown: boundedMarkdown))
         }
+
+        let indexDoc = collectionIndexDocument(
+            collection: collection,
+            sources: includedSources,
+            contextNote: includedSources.count < sources.count
+                ? "Context trimmed to \(includedSources.count) sources to fit budget."
+                : nil
+        )
+        documents.insert(indexDoc, at: 0)
 
         return (documents, citationMap, contextChars)
     }
 
     private func collectionIndexDocument(
         collection: CollectionRecord,
-        sources: [SourceSnapshot]
+        sources: [SourceSnapshot],
+        contextNote: String?
     ) -> LLMCPDocument {
         let sourceEntries: [JSONValue] = sources.map { source in
             var entry: [String: JSONValue] = [
@@ -632,6 +843,9 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             "title": .string(collection.title),
             "sources": .array(sourceEntries)
         ]
+        if let note = contextNote, !note.isEmpty {
+            content["context_note"] = .string(note)
+        }
         if !collection.tags.isEmpty {
             content["tags"] = .array(collection.tags.map { .string($0) })
         }
@@ -646,14 +860,16 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
 
     private func collectionSourceDocument(
         collection: CollectionRecord,
-        source: SourceSnapshot
+        source: SourceSnapshot,
+        markdown: String? = nil
     ) -> LLMCPDocument {
+        let body = markdown ?? source.captureMarkdown
         var content: [String: JSONValue] = [
             "doc_type": .string("collection.source.v1"),
             "collection_id": .string(collection.id),
             "source_id": .string(source.id),
             "url": .string(source.url),
-            "markdown": .string(source.captureMarkdown)
+            "markdown": .string(body)
         ]
         if let title = source.title, !title.isEmpty {
             content["title"] = .string(title)
@@ -731,6 +947,25 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         return json
     }
 
+    private func decodeJSONArrayPayload(_ json: String) -> [[String: Any]] {
+        guard let data = json.data(using: .utf8),
+              let raw = try? JSONSerialization.jsonObject(with: data, options: []),
+              let array = raw as? [[String: Any]] else {
+            return []
+        }
+        return array
+    }
+
+    private func chatEventPayload(_ record: ChatEventRecord) -> [String: Any] {
+        [
+            "id": record.id,
+            "role": record.role,
+            "markdown": record.markdown,
+            "citations": decodeJSONArrayPayload(record.citationsJSON),
+            "createdAtMs": record.createdAtMs
+        ]
+    }
+
     private func collectionPayload(_ record: CollectionRecord) -> [String: Any] {
         [
             "id": record.id,
@@ -738,6 +973,17 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             "tags": record.tags,
             "createdAtMs": record.createdAtMs,
             "updatedAtMs": record.updatedAtMs
+        ]
+    }
+
+    private func captureJobPayload(_ record: CaptureJobRecord) -> [String: Any] {
+        [
+            "id": record.id,
+            "collectionId": record.collectionId,
+            "sourceId": record.sourceId,
+            "url": record.url,
+            "attemptCount": record.attemptCount,
+            "maxAttempts": record.maxAttempts
         ]
     }
 
@@ -788,6 +1034,10 @@ private struct CollectionListSourcesPayload: Decodable {
     let collectionId: String
 }
 
+private struct CollectionNextCaptureJobPayload: Decodable {
+    let collectionId: String?
+}
+
 private struct CollectionAddSourcesPayload: Decodable {
     let collectionId: String
     let sources: [SourceInput]
@@ -826,4 +1076,10 @@ private struct CollectionListChatPayload: Decodable {
 
 private struct CollectionClearChatPayload: Decodable {
     let collectionId: String
+}
+
+private struct CollectionGetChatEventPayload: Decodable {
+    let collectionId: String
+    let eventId: String
+    let questionEventId: String?
 }

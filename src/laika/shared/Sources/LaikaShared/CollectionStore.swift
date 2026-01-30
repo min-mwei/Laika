@@ -75,6 +75,15 @@ public struct ChatEventRecord: Codable, Equatable, Sendable {
     public let createdAtMs: Int64
 }
 
+public struct CaptureJobRecord: Codable, Equatable, Sendable {
+    public let id: String
+    public let collectionId: String
+    public let sourceId: String
+    public let url: String
+    public let attemptCount: Int
+    public let maxAttempts: Int
+}
+
 public struct SourceInput: Codable, Equatable, Sendable {
     public enum SourceType: String, Codable, Sendable {
         case url
@@ -101,6 +110,10 @@ public struct AddSourcesResult: Codable, Equatable, Sendable {
 }
 
 public actor CollectionStore {
+    private let trackingQueryKeys: Set<String> = [
+        "fbclid", "gclid", "yclid", "mc_cid", "mc_eid", "ref", "ref_src", "ref_url",
+        "referrer", "source", "spm", "igshid", "mkt_tok"
+    ]
     private let databaseURL: URL?
     private var database: SQLiteDatabase?
     private var openError: String?
@@ -232,6 +245,82 @@ public actor CollectionStore {
         return snapshots
     }
 
+    public func claimNextCaptureJob(collectionId: String? = nil) throws -> CaptureJobRecord? {
+        let trimmedCollectionId = collectionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmedCollectionId, trimmedCollectionId.isEmpty {
+            throw CollectionStoreError.invalidRequest("collection id required")
+        }
+        let db = try openDatabase()
+        let nowMs = currentTimeMs()
+        try db.exec(sql: "BEGIN IMMEDIATE;")
+        var job: CaptureJobRecord?
+        do {
+            let querySQL: String
+            if trimmedCollectionId != nil {
+                querySQL = """
+                SELECT id, collection_id, source_id, url, attempt_count, max_attempts
+                FROM capture_jobs
+                WHERE status = 'queued' AND collection_id = ?
+                ORDER BY created_at_ms ASC
+                LIMIT 1;
+                """
+            } else {
+                querySQL = """
+                SELECT id, collection_id, source_id, url, attempt_count, max_attempts
+                FROM capture_jobs
+                WHERE status = 'queued'
+                ORDER BY created_at_ms ASC
+                LIMIT 1;
+                """
+            }
+            let statement = try db.prepare(querySQL)
+            defer { sqlite3_finalize(statement) }
+            if let trimmedCollectionId {
+                sqlite3_bind_text(statement, 1, trimmedCollectionId, -1, SQLITE_TRANSIENT)
+            }
+            if sqlite3_step(statement) == SQLITE_ROW {
+                let jobId = db.columnText(statement, index: 0)
+                let collectionId = db.columnText(statement, index: 1)
+                let sourceId = db.columnText(statement, index: 2)
+                let url = db.columnText(statement, index: 3)
+                let attemptCount = Int(sqlite3_column_int(statement, 4))
+                let maxAttempts = Int(sqlite3_column_int(statement, 5))
+                job = CaptureJobRecord(
+                    id: jobId,
+                    collectionId: collectionId,
+                    sourceId: sourceId,
+                    url: url,
+                    attemptCount: attemptCount,
+                    maxAttempts: maxAttempts
+                )
+            }
+
+            if let claimedJob = job {
+                let updateSQL = """
+                UPDATE capture_jobs
+                SET status = 'running',
+                    updated_at_ms = ?,
+                    started_at_ms = COALESCE(started_at_ms, ?)
+                WHERE id = ? AND status = 'queued';
+                """
+                let updateStatement = try db.prepare(updateSQL)
+                defer { sqlite3_finalize(updateStatement) }
+                sqlite3_bind_int64(updateStatement, 1, nowMs)
+                sqlite3_bind_int64(updateStatement, 2, nowMs)
+                sqlite3_bind_text(updateStatement, 3, claimedJob.id, -1, SQLITE_TRANSIENT)
+                try db.step(updateStatement)
+                if db.changes() == 0 {
+                    job = nil
+                }
+            }
+            try db.exec(sql: "COMMIT;")
+        } catch {
+            try? db.exec(sql: "ROLLBACK;")
+            throw error
+        }
+        return job
+    }
+
     public func addChatEvent(
         collectionId: String,
         role: String,
@@ -315,6 +404,76 @@ public actor CollectionStore {
             ))
         }
         return events
+    }
+
+    public func getChatEvent(collectionId: String, eventId: String) throws -> ChatEventRecord? {
+        let trimmedCollectionId = collectionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEventId = eventId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCollectionId.isEmpty, !trimmedEventId.isEmpty else {
+            throw CollectionStoreError.invalidRequest("collection id and event id required")
+        }
+        let db = try openDatabase()
+        let querySQL = """
+        SELECT id, role, markdown, citations_json, created_at_ms
+        FROM chat_events
+        WHERE collection_id = ? AND id = ?
+        LIMIT 1;
+        """
+        let statement = try db.prepare(querySQL)
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, trimmedCollectionId, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(statement, 2, trimmedEventId, -1, SQLITE_TRANSIENT)
+        if sqlite3_step(statement) == SQLITE_ROW {
+            let id = db.columnText(statement, index: 0)
+            let role = db.columnText(statement, index: 1)
+            let markdown = db.columnText(statement, index: 2)
+            let citationsJSON = db.columnText(statement, index: 3)
+            let createdAt = sqlite3_column_int64(statement, 4)
+            return ChatEventRecord(
+                id: id,
+                collectionId: trimmedCollectionId,
+                role: role,
+                markdown: markdown,
+                citationsJSON: citationsJSON,
+                createdAtMs: createdAt
+            )
+        }
+        return nil
+    }
+
+    public func getLatestUserEvent(collectionId: String, before timestampMs: Int64) throws -> ChatEventRecord? {
+        let trimmedCollectionId = collectionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCollectionId.isEmpty else {
+            throw CollectionStoreError.invalidRequest("collection id required")
+        }
+        let db = try openDatabase()
+        let querySQL = """
+        SELECT id, role, markdown, citations_json, created_at_ms
+        FROM chat_events
+        WHERE collection_id = ? AND role = 'user' AND created_at_ms <= ?
+        ORDER BY created_at_ms DESC
+        LIMIT 1;
+        """
+        let statement = try db.prepare(querySQL)
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, trimmedCollectionId, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_int64(statement, 2, timestampMs)
+        if sqlite3_step(statement) == SQLITE_ROW {
+            let id = db.columnText(statement, index: 0)
+            let role = db.columnText(statement, index: 1)
+            let markdown = db.columnText(statement, index: 2)
+            let citationsJSON = db.columnText(statement, index: 3)
+            let createdAt = sqlite3_column_int64(statement, 4)
+            return ChatEventRecord(
+                id: id,
+                collectionId: trimmedCollectionId,
+                role: role,
+                markdown: markdown,
+                citationsJSON: citationsJSON,
+                createdAtMs: createdAt
+            )
+        }
+        return nil
     }
 
     public func clearChatEvents(collectionId: String) throws {
@@ -424,10 +583,12 @@ public actor CollectionStore {
                 if insertResult != SQLITE_DONE {
                     throw CollectionStoreError.sqliteFailure(db.lastErrorMessage())
                 }
+                let dedupeKey = "\(collectionId):\(normalized)"
                 try queueCaptureJob(
                     sourceId: sourceId,
                     collectionId: collectionId,
                     url: url,
+                    dedupeKey: dedupeKey,
                     nowMs: nowMs,
                     db: db
                 )
@@ -703,6 +864,7 @@ public actor CollectionStore {
         sourceId: String,
         collectionId: String,
         url: String,
+        dedupeKey: String,
         nowMs: Int64,
         db: SQLiteDatabase
     ) throws {
@@ -712,7 +874,7 @@ public actor CollectionStore {
           id, collection_id, source_id, url, dedupe_key,
           status, attempt_count, max_attempts,
           created_at_ms, updated_at_ms
-        ) VALUES (?, ?, ?, ?, '', 'queued', 0, 3, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, 'queued', 0, 3, ?, ?);
         """
         let statement = try db.prepare(insertSQL)
         defer { sqlite3_finalize(statement) }
@@ -720,8 +882,9 @@ public actor CollectionStore {
         sqlite3_bind_text(statement, 2, collectionId, -1, SQLITE_TRANSIENT)
         sqlite3_bind_text(statement, 3, sourceId, -1, SQLITE_TRANSIENT)
         sqlite3_bind_text(statement, 4, url, -1, SQLITE_TRANSIENT)
-        sqlite3_bind_int64(statement, 5, nowMs)
+        sqlite3_bind_text(statement, 5, dedupeKey, -1, SQLITE_TRANSIENT)
         sqlite3_bind_int64(statement, 6, nowMs)
+        sqlite3_bind_int64(statement, 7, nowMs)
         try db.step(statement)
     }
 
@@ -754,7 +917,7 @@ public actor CollectionStore {
         UPDATE capture_jobs
         SET status = ?,
             last_error = ?,
-            attempt_count = CASE WHEN attempt_count < 1 THEN 1 ELSE attempt_count END,
+            attempt_count = MIN(attempt_count + 1, max_attempts),
             updated_at_ms = ?,
             finished_at_ms = ?,
             started_at_ms = COALESCE(started_at_ms, ?)
@@ -818,7 +981,29 @@ public actor CollectionStore {
         components.fragment = nil
         components.scheme = components.scheme?.lowercased()
         components.host = components.host?.lowercased()
-        let normalized = components.url?.absoluteString ?? raw
+        if let items = components.queryItems, !items.isEmpty {
+            let filtered = items.filter { item in
+                let key = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                if key.isEmpty {
+                    return false
+                }
+                let lower = key.lowercased()
+                if lower.hasPrefix("utm_") {
+                    return false
+                }
+                return !trackingQueryKeys.contains(lower)
+            }.sorted { lhs, rhs in
+                if lhs.name == rhs.name {
+                    return (lhs.value ?? "") < (rhs.value ?? "")
+                }
+                return lhs.name < rhs.name
+            }
+            components.queryItems = filtered.isEmpty ? nil : filtered
+        }
+        var normalized = components.url?.absoluteString ?? raw
+        while normalized.count > 1 && normalized.hasSuffix("/") {
+            normalized.removeLast()
+        }
         return normalized.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 

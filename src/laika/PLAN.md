@@ -169,6 +169,25 @@ As of 2026-01-29, we are treating the following as confirmed/locked for Phase 0:
 - Renderer: Markdown is canonical; render with `markdown-it` (no raw HTML passthrough) + DOMPurify allowlist + safe link post-processing.
 - Tool schema versioning: one schema version per release; strict validation; reject unknown tool names/extra keys; add harness coverage for new tools.
 
+---
+
+## Feedback integration (2026-01-30)
+
+We are incorporating the review notes in `src/feedback.md` as follows:
+
+### Immediate P0 actions (this iteration)
+- **Tool surface gating:** expose only tools with end-to-end implementations; reject stubbed transforms/artifacts/integrations in plan validation and background allowlist until implemented.
+- **Collection context budgeting:** cap per-source markdown and overall context size to keep answers stable as collections grow.
+- **Capture bookkeeping fixes:** populate `capture_jobs.dedupe_key`, increment `attempt_count` on each attempt, and fix relative link extraction.
+- **URL normalization consistency:** remove tracking parameters and normalize query ordering in the native store; apply similar normalization for pasted/selected URLs in the UI.
+- **Durable answers:** store answer events in SQLite with citations and reopen via the answer viewer (viewer falls back to stored chat events).
+- **Background capture queue:** claim `capture_jobs` in the background and run `source.capture` without requiring the sidecar UI.
+
+### P1 follow-ups (design work queued)
+- **Capture pipeline ownership:** evaluate a native-managed scheduler + retry/backoff policy now that the background queue claims jobs.
+- **On-demand content scripts:** avoid heavy global injection (Readability/Turndown) and only inject when capture is requested.
+- **Collection answer ranking/compression:** add ranking + summary compression to keep citations stable within budget.
+
 ### Persistence boundaries (source of truth)
 
 P0 decision: **native SQLite is the source of truth** for user data.

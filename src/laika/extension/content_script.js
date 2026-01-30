@@ -3575,15 +3575,21 @@
     var pageNormalized = normalizeCaptureUrl(pageUrl || "");
     for (var i = 0; i < anchors.length; i += 1) {
       var anchor = anchors[i];
-      var href = anchor.href;
+      var rawHref = anchor.getAttribute("href");
       var text = (anchor.textContent || "").trim();
-      if (!href || !text) {
+      if (!rawHref || !text) {
         continue;
       }
-      if (!/^https?:/i.test(href)) {
+      var resolved = null;
+      try {
+        resolved = new URL(rawHref, pageUrl || undefined).toString();
+      } catch (error) {
+        resolved = rawHref;
+      }
+      if (!/^https?:/i.test(resolved)) {
         continue;
       }
-      var normalized = normalizeCaptureUrl(href);
+      var normalized = normalizeCaptureUrl(resolved);
       if (!normalized || normalized === pageNormalized) {
         continue;
       }

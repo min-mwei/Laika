@@ -65,6 +65,40 @@
     "transform.run": { required: { collectionId: "string", type: "string" }, optional: { config: "object" } }
   };
 
+  var ENABLED_TOOLS = {
+    "browser.observe_dom": true,
+    "browser.get_selection_links": true,
+    "browser.click": true,
+    "browser.type": true,
+    "browser.scroll": true,
+    "browser.open_tab": true,
+    "browser.navigate": true,
+    "browser.back": true,
+    "browser.forward": true,
+    "browser.refresh": true,
+    "browser.select": true,
+    "search": true,
+    "app.calculate": true,
+    "collection.create": true,
+    "collection.add_sources": true,
+    "collection.list_sources": true,
+    "source.capture": true
+  };
+
+  function isToolEnabled(name) {
+    return !!ENABLED_TOOLS[name];
+  }
+
+  function enabledSchemas() {
+    var output = {};
+    Object.keys(ENABLED_TOOLS).forEach(function (name) {
+      if (TOOL_SCHEMAS[name]) {
+        output[name] = TOOL_SCHEMAS[name];
+      }
+    });
+    return output;
+  }
+
   function getAllowedKeys(schema) {
     if (!schema) {
       return [];
@@ -89,8 +123,11 @@
     if (!isObject(toolCall)) {
       return "missing toolCall";
     }
-    var schema = typeof toolCall.name === "string" ? TOOL_SCHEMAS[toolCall.name] : null;
-    if (typeof toolCall.name !== "string" || !schema) {
+    if (typeof toolCall.name !== "string" || !isToolEnabled(toolCall.name)) {
+      return "unsupported tool name";
+    }
+    var schema = TOOL_SCHEMAS[toolCall.name];
+    if (!schema) {
       return "unsupported tool name";
     }
     if (typeof toolCall.id !== "string" || toolCall.id.length < 8) {
@@ -291,7 +328,7 @@
         return "artifact.open.artifactId required";
       }
       if (typeof args.target !== "undefined") {
-        if (args.target !== "workspace" && args.target !== "browser") {
+        if (args.target !== "viewer" && args.target !== "source" && args.target !== "download") {
           return "artifact.open.target invalid";
         }
       }
@@ -319,7 +356,7 @@
         return "artifact.share.filename must be string";
       }
       if (typeof args.target !== "undefined") {
-        var allowedTargets = ["share_sheet", "clipboard", "file"];
+        var allowedTargets = ["viewer", "source", "download"];
         if (allowedTargets.indexOf(args.target) === -1) {
           return "artifact.share.target invalid";
         }
@@ -506,7 +543,7 @@
   }
 
   function getToolSchemaSnapshot() {
-    return { tools: TOOL_SCHEMAS };
+    return { tools: enabledSchemas() };
   }
 
   var api = {

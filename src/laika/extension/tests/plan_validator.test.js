@@ -298,48 +298,16 @@ test("validatePlanResponse rejects source.capture with invalid mode", () => {
   assert.equal(result.ok, false);
 });
 
-test("validatePlanResponse accepts artifact.save and rejects invalid redaction", () => {
-  const validPayload = {
-    actions: [
-      {
-        toolCall: {
-          id: "12345678-1234-1234-1234-1234567890ab",
-          name: "artifact.save",
-          arguments: { title: "Brief", markdown: "# Hello", redaction: "default" }
-        },
-        policy: { decision: "allow", reasonCode: "artifact_allowed" }
-      }
-    ]
-  };
-  const validResult = validator.validatePlanResponse(validPayload);
-  assert.equal(validResult.ok, true);
-
-  const invalidPayload = {
-    actions: [
-      {
-        toolCall: {
-          id: "12345678-1234-1234-1234-1234567890ab",
-          name: "artifact.save",
-          arguments: { title: "Brief", markdown: "# Hello", redaction: "bad" }
-        },
-        policy: { decision: "allow", reasonCode: "artifact_allowed" }
-      }
-    ]
-  };
-  const invalidResult = validator.validatePlanResponse(invalidPayload);
-  assert.equal(invalidResult.ok, false);
-});
-
-test("validatePlanResponse rejects transform.run with non-object config", () => {
+test("validatePlanResponse rejects disabled tools", () => {
   const payload = {
     actions: [
       {
         toolCall: {
           id: "12345678-1234-1234-1234-1234567890ab",
-          name: "transform.run",
-          arguments: { collectionId: "col_123", type: "comparison", config: "nope" }
+          name: "artifact.save",
+          arguments: { title: "Brief", markdown: "# Hello" }
         },
-        policy: { decision: "allow", reasonCode: "transform_allowed" }
+        policy: { decision: "allow", reasonCode: "artifact_allowed" }
       }
     ]
   };

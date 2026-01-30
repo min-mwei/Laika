@@ -18,7 +18,7 @@ Also: `docs/logging.md` (logging + audit and correlation IDs).
 
 ## Goals
 
-- **JSON-in / JSON-out**: the model must return a single JSON object (no Markdown-only replies, no code fences).
+- **JSON-in** for requests; **JSON or Markdown out** depending on task needs.
 - **Markdown is canonical**:
   - web capture is stored as Markdown (per-source)
   - assistant output and artifacts are Markdown
@@ -40,7 +40,7 @@ Also: `docs/logging.md` (logging + audit and correlation IDs).
 1) **Observe (Safari)**: content script extracts a normalized representation.
 2) **Extract Markdown (trusted)**: page content is converted to Markdown + metadata and signals.
 3) **Pack (Agent Core)**: build an LLMCP request with task + context documents.
-4) **Infer (LLM)**: model returns JSON containing `assistant.markdown` + `citations` + optional `tool_calls`.
+4) **Infer (LLM)**: model returns JSON containing `assistant.render` (Document) or `assistant.markdown` + `citations` + optional `tool_calls`.
 5) **Render (UI)**: Markdown is rendered via a safe pipeline (Markdown renderer + DOMPurify).
 6) **Persist**: store the conversation packets (redacted) and any saved artifacts.
 
@@ -54,7 +54,7 @@ All protocol messages are JSON objects with a stable envelope:
 
 ```json
 {
-  "protocol": { "name": "laika.llmcp", "version": 2 },
+  "protocol": { "name": "laika.llmcp", "version": 1 },
   "id": "uuid",
   "type": "request",
   "created_at": "2026-01-28T12:34:56.789Z",
@@ -63,10 +63,10 @@ All protocol messages are JSON objects with a stable envelope:
 }
 ```
 
-### Required fields
+### Required fields (full envelope mode)
 
 - `protocol.name`: constant `laika.llmcp`
-- `protocol.version`: integer (current: `2`)
+- `protocol.version`: integer (current: `1`)
 - `id`: UUID for this packet
 - `type`: `"request"` or `"response"`
 - `created_at`: ISO-8601 UTC timestamp
@@ -93,11 +93,11 @@ Request packets describe:
 - what the agent wants the model to do (`input.task`)
 - what evidence/context is available (`context.documents`)
 
-### Request schema (v2)
+### Request schema (v1)
 
 ```json
 {
-  "protocol": { "name": "laika.llmcp", "version": 2 },
+  "protocol": { "name": "laika.llmcp", "version": 1 },
   "id": "uuid",
   "type": "request",
   "created_at": "2026-01-28T12:34:56.789Z",
@@ -113,7 +113,7 @@ Request packets describe:
     "documents": [
       {
         "doc_id": "doc:web:summary",
-        "kind": "web.observation.summary.v2",
+        "kind": "web.observation.summary.v1",
         "trust": "untrusted",
         "source": { "browser": "safari", "tab_id": "optional" },
         "content": { "...": "typed content object" }
@@ -127,19 +127,19 @@ Request packets describe:
 
 Notes:
 - `trust="untrusted"` is required for any document derived from web content.
-- `output.format="json"` is fixed in v2.
+- `output.format` may be `"json"` (default) or `"markdown"` for read-only tasks.
 
 ---
 
-## Context documents (v2)
+## Context documents (v1)
 
-### Web observation summary (`kind: "web.observation.summary.v2"`)
+### Web observation summary (`kind: "web.observation.summary.v1"`)
 
 This is the primary page capture format for single-page workflows.
 
 ```json
 {
-  "doc_type": "web.observation.summary.v2",
+  "doc_type": "web.observation.summary.v1",
   "url": "https://example.com",
   "title": "Example",
   "captured_at": "2026-01-28T12:34:56.789Z",
@@ -157,13 +157,13 @@ Design notes:
 - `markdown` is **canonical**: this is what we persist for sources and what we send to models.
 - For feed/list/search pages, we may include additional structured fields (items/comments) for robustness, but the canonical content is still Markdown.
 
-### Observation chunks (`kind: "web.observation.chunk.v2"`) (optional)
+### Observation chunks (`kind: "web.observation.chunk.v1"`) (optional)
 
 For long pages, include additional chunk documents:
 
 ```json
 {
-  "doc_type": "web.observation.chunk.v2",
+  "doc_type": "web.observation.chunk.v1",
   "url": "https://example.com",
   "title": "Example",
   "chunk_index": 1,
@@ -218,7 +218,7 @@ Packing recommendation:
 
 ---
 
-## Tasks (recommended v2 set)
+## Tasks (recommended v1 set)
 
 Core tasks:
 - `web.summarize`: summarize a single observed/captured page (Markdown input -> Markdown output)
@@ -234,11 +234,11 @@ Transforms:
 
 Responses must be JSON-only and match the schema below.
 
-### Response schema (v2)
+### Response schema (v1)
 
 ```json
 {
-  "protocol": { "name": "laika.llmcp", "version": 2 },
+  "protocol": { "name": "laika.llmcp", "version": 1 },
   "id": "uuid",
   "type": "response",
   "created_at": "2026-01-28T12:34:57.123Z",
@@ -248,7 +248,12 @@ Responses must be JSON-only and match the schema below.
 
   "assistant": {
     "title": "Optional short title",
-    "markdown": "Markdown output as a single string...",
+    "render": {
+      "type": "doc",
+      "children": [
+        { "type": "paragraph", "children": [ { "type": "text", "text": "Markdown content..." } ] }
+      ]
+    },
     "citations": [
       { "source_id": "src:1", "url": "https://...", "quote": "short supporting excerpt" }
     ]
@@ -259,11 +264,23 @@ Responses must be JSON-only and match the schema below.
 ```
 
 Rules:
-- `assistant.markdown` is required.
+- `assistant.render` is required in JSON mode.
 - `tool_calls` is allowed but optional; it must be an array.
 - Tool calls are **proposals** only; Policy Gate is authoritative.
 
-### Citation shape (v2)
+### Markdown-only response mode (proposed fallback)
+
+For read-only tasks (summaries, comparisons, transforms without tool calls), we can request `output.format = "markdown"` and accept raw Markdown output. This avoids JSON parsing failures when local models emit code fences or malformed JSON.
+
+Recommended policy:
+- If tool calls are needed, use **JSON mode**.
+- If only Markdown output is needed, prefer **Markdown mode**.
+- If JSON parsing fails, fall back to treating the entire output as Markdown and drop tool calls/citations.
+- If `assistant.markdown` is present (but `assistant.render` is missing), accept it as a lenient fallback.
+
+This keeps the protocol **simple** while preserving strict JSON where tool safety matters.
+
+### Citation shape (v1)
 
 Minimum recommended fields:
 - `source_id` (for collection outputs) and/or `doc_id` (for single-page observations)
@@ -304,7 +321,7 @@ Tools exist for:
 
 ---
 
-## Tool call schema (v2)
+## Tool call schema (v1)
 
 Tool calls are schema-validated before execution.
 
@@ -370,11 +387,11 @@ Recommendations:
 
 ## Markdown output rules (prompt contract)
 
-System prompts for v2 must enforce:
+System prompts for v1 must enforce:
 
 - Output **only JSON** that matches the response schema.
-- Put all human-readable content in `assistant.markdown`.
-- Do not output raw HTML in `assistant.markdown` (Markdown only).
+- Put all human-readable content in `assistant.render` (Document) or `assistant.markdown` (fallback).
+- Do not output raw HTML in `assistant.render` or `assistant.markdown` (Markdown only).
 - Cite sources using `assistant.citations` (and optionally inline markers like `[1]` in Markdown if helpful).
 - If sources don't support the answer, say so and suggest what to collect next.
 
@@ -384,7 +401,7 @@ System prompts for v2 must enforce:
 
 LLMCP assumes **Markdown is canonical** for both:
 - captured sources (`*.markdown` in context docs), and
-- model outputs (`assistant.markdown` and `artifact.contentMarkdown`).
+- model outputs (`assistant.render`/`assistant.markdown` and `artifact.contentMarkdown`).
 
 The detailed, security-sensitive rules for:
 - DOM/HTML -> Markdown capture, and
@@ -433,7 +450,7 @@ We intentionally avoid storing full context packs (captured source Markdown) ins
 
 ```json
 {
-  "protocol": { "name": "laika.llmcp", "version": 2 },
+  "protocol": { "name": "laika.llmcp", "version": 1 },
   "id": "req-1",
   "type": "request",
   "created_at": "2026-01-28T12:34:56.789Z",
@@ -447,10 +464,10 @@ We intentionally avoid storing full context packs (captured source Markdown) ins
     "documents": [
       {
         "doc_id": "doc:web:summary",
-        "kind": "web.observation.summary.v2",
+        "kind": "web.observation.summary.v1",
         "trust": "untrusted",
         "content": {
-          "doc_type": "web.observation.summary.v2",
+          "doc_type": "web.observation.summary.v1",
           "url": "https://example.com",
           "title": "Example",
           "markdown": "# Example\\n\\n..."
@@ -466,7 +483,7 @@ We intentionally avoid storing full context packs (captured source Markdown) ins
 
 ```json
 {
-  "protocol": { "name": "laika.llmcp", "version": 2 },
+  "protocol": { "name": "laika.llmcp", "version": 1 },
   "id": "res-1",
   "type": "response",
   "created_at": "2026-01-28T12:34:57.123Z",

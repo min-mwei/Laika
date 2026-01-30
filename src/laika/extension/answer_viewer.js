@@ -100,6 +100,50 @@
     sourcesEl.hidden = false;
   }
 
+  function updateViewerParams(payload) {
+    if (!payload || !payload.collectionId || !payload.eventId) {
+      return;
+    }
+    try {
+      var url = new URL(window.location.href);
+      url.searchParams.set("collectionId", payload.collectionId);
+      url.searchParams.set("eventId", payload.eventId);
+      if (payload.questionEventId) {
+        url.searchParams.set("questionEventId", payload.questionEventId);
+      }
+      window.history.replaceState(null, "", url.toString());
+    } catch (error) {
+    }
+  }
+
+  async function fetchFromCollection(collectionId, eventId, questionEventId) {
+    var response = await browser.runtime.sendMessage({
+      type: "laika.collection.chat_event.get",
+      collectionId: collectionId,
+      eventId: eventId,
+      questionEventId: questionEventId || null
+    });
+    if (!response || response.status !== "ok" || !response.payload) {
+      return { status: "error", error: response && response.error ? response.error : "not_found" };
+    }
+    var payload = response.payload;
+    var event = payload.event || {};
+    var userEvent = payload.userEvent || null;
+    var collection = payload.collection || {};
+    return {
+      status: "ok",
+      payload: {
+        markdown: typeof event.markdown === "string" ? event.markdown : "",
+        citations: Array.isArray(event.citations) ? event.citations : [],
+        question: userEvent && typeof userEvent.markdown === "string" ? userEvent.markdown : "",
+        collectionId: typeof collection.id === "string" ? collection.id : collectionId,
+        collectionTitle: typeof collection.title === "string" ? collection.title : "",
+        eventId: typeof event.id === "string" ? event.id : eventId,
+        questionEventId: userEvent && typeof userEvent.id === "string" ? userEvent.id : ""
+      }
+    };
+  }
+
   async function loadPayload() {
     if (!window.browser || !browser.runtime || !browser.runtime.sendMessage) {
       showError("Unable to load answer viewer.");
@@ -107,29 +151,37 @@
     }
     var params = new URLSearchParams(window.location.search);
     var token = params.get("token");
-    if (!token) {
-      showError("Missing answer token.");
-      return;
-    }
+    var collectionId = params.get("collectionId");
+    var eventId = params.get("eventId");
+    var questionEventId = params.get("questionEventId");
     var deadline = Date.now() + 60000;
     var payload = null;
     showPending("Preparing answer...");
-    while (Date.now() < deadline) {
-      var result = await fetchPayload(token);
-      if (result.status === "ok") {
-        payload = result.payload;
-        break;
+    if (token) {
+      while (Date.now() < deadline) {
+        var result = await fetchPayload(token);
+        if (result.status === "ok") {
+          payload = result.payload;
+          break;
+        }
+        if (result.error && result.error !== "not_found") {
+          showError("Answer not found or expired.");
+          return;
+        }
+        await sleep(1000);
       }
-      if (result.error && result.error !== "not_found") {
-        showError("Answer not found or expired.");
-        return;
+    }
+    if (!payload && collectionId && eventId) {
+      var fallback = await fetchFromCollection(collectionId, eventId, questionEventId);
+      if (fallback.status === "ok") {
+        payload = fallback.payload;
       }
-      await sleep(1000);
     }
     if (!payload) {
       showError("Answer not found or expired.");
       return;
     }
+    updateViewerParams(payload);
     var collectionTitle = payload.collectionTitle || "Collection";
     var title = payload.title || "Collection Answer";
     document.title = title;

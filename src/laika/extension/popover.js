@@ -35,7 +35,6 @@ var sourcesList = document.getElementById("sources-list");
 var DEFAULT_MAX_TOKENS = 3072;
 var MAX_TOKENS_CAP = 8192;
 var maxTokensSetting = DEFAULT_MAX_TOKENS;
-var DEFAULT_CAPTURE_MAX_CHARS = 24000;
 
 var lastObservation = null;
 var lastObservationTabId = null;
@@ -61,9 +60,6 @@ var collections = [];
 var activeCollectionId = null;
 var sources = [];
 var selectionUrls = [];
-var captureQueueActive = false;
-var captureQueueRequested = false;
-var captureQueueTimer = null;
 var collectionChatLoadedId = null;
 var collectionChatLoading = false;
 
@@ -388,7 +384,7 @@ async function loadSources() {
     var result = unwrapNativeResult(response);
     sources = Array.isArray(result.sources) ? result.sources : [];
     renderSources();
-    maybeScheduleCapture();
+    maybeKickCaptureQueue();
   } catch (error) {
     setSourcesStatus("Failed to load sources.");
   }
@@ -467,84 +463,31 @@ function hasPendingUrlSources() {
   });
 }
 
-function scheduleCaptureQueue(delayMs) {
-  if (captureQueueTimer) {
-    clearTimeout(captureQueueTimer);
-  }
-  var delay = typeof delayMs === "number" && isFinite(delayMs) ? Math.max(50, Math.floor(delayMs)) : 250;
-  captureQueueTimer = setTimeout(function () {
-    captureQueueTimer = null;
-    processCaptureQueue();
-  }, delay);
-}
-
-function maybeScheduleCapture() {
-  if (captureQueueActive) {
+async function requestCaptureQueue() {
+  if (!activeCollectionId || !browser || !browser.runtime || !browser.runtime.sendMessage) {
     return;
   }
+  if (!hasPendingUrlSources()) {
+    return;
+  }
+  try {
+    await browser.runtime.sendMessage({
+      type: "laika.capture_queue.kick",
+      collectionId: activeCollectionId
+    });
+  } catch (error) {
+    logDebug("capture queue kick failed: " + String(error && error.message ? error.message : error));
+  }
+}
+
+function maybeKickCaptureQueue() {
   if (!activeCollectionId) {
     return;
   }
   if (!hasPendingUrlSources()) {
     return;
   }
-  scheduleCaptureQueue(200);
-}
-
-async function captureSource(source) {
-  if (!source || !source.url) {
-    return;
-  }
-  try {
-    var response = await browser.runtime.sendMessage({
-      type: "laika.tool",
-      toolName: "source.capture",
-      args: {
-        collectionId: source.collectionId || activeCollectionId,
-        url: source.url,
-        mode: "auto",
-        maxChars: DEFAULT_CAPTURE_MAX_CHARS
-      }
-    });
-    if (!response || response.status !== "ok") {
-      setSourcesStatus("Capture failed: " + (response && response.error ? response.error : "unknown"));
-    }
-  } catch (error) {
-    setSourcesStatus("Capture failed: " + (error && error.message ? error.message : "unknown"));
-  }
-}
-
-async function processCaptureQueue() {
-  if (captureQueueActive) {
-    captureQueueRequested = true;
-    return;
-  }
-  captureQueueActive = true;
-  try {
-    while (true) {
-      await loadSources();
-      if (!activeCollectionId) {
-        break;
-      }
-      var pending = sources.filter(function (source) {
-        return source && source.kind === "url" && (source.captureStatus === "pending" || !source.captureStatus);
-      });
-      if (pending.length === 0) {
-        break;
-      }
-      var nextSource = pending[0];
-      var label = nextSource.title || nextSource.url || "source";
-      setSourcesStatus("Capturing " + label + "…");
-      await captureSource(nextSource);
-      await sleep(200);
-    }
-  } finally {
-    captureQueueActive = false;
-  }
-  if (captureQueueRequested) {
-    captureQueueRequested = false;
-    scheduleCaptureQueue(200);
-  }
+  requestCaptureQueue();
 }
 
 function resetSelectionPreview() {
@@ -607,19 +550,37 @@ function parseUrls(text) {
   var lines = text.split(/\s+/).map(function (line) {
     return line.trim();
   }).filter(Boolean);
+  return normalizeUrlList(lines);
+}
+
+function normalizeInputUrl(url) {
+  if (!url) {
+    return "";
+  }
+  if (collectTopResultsHelper && typeof collectTopResultsHelper.normalizeUrlForDedup === "function") {
+    var normalized = collectTopResultsHelper.normalizeUrlForDedup(url);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return url;
+}
+
+function normalizeUrlList(urls) {
   var seen = new Set();
-  var urls = [];
-  lines.forEach(function (line) {
-    if (!/^https?:/i.test(line)) {
+  var output = [];
+  urls.forEach(function (line) {
+    var normalized = normalizeInputUrl(line);
+    if (!normalized || !/^https?:/i.test(normalized)) {
       return;
     }
-    if (seen.has(line)) {
+    if (seen.has(normalized)) {
       return;
     }
-    seen.add(line);
-    urls.push(line);
+    seen.add(normalized);
+    output.push(normalized);
   });
-  return urls;
+  return output;
 }
 
 async function addSourcesToCollection(sourceInputs) {
@@ -638,6 +599,7 @@ async function addSourcesToCollection(sourceInputs) {
         " duplicate(s) and " + (result.ignoredCount || 0) + " ignored.");
     }
     await loadSources();
+    await requestCaptureQueue();
   } catch (error) {
     setSourcesStatus("Failed to add sources.");
   }
@@ -734,7 +696,12 @@ async function addSelectedLinks() {
     setSourcesStatus("No links selected.");
     return;
   }
-  var sourceInputs = selected.map(function (url) {
+  var normalized = normalizeUrlList(selected);
+  if (normalized.length === 0) {
+    setSourcesStatus("No valid links selected.");
+    return;
+  }
+  var sourceInputs = normalized.map(function (url) {
     return { type: "url", url: url };
   });
   await addSourcesToCollection(sourceInputs);
@@ -1495,6 +1462,18 @@ async function loadChatHistory() {
   syncChatHistory(loaded);
 }
 
+function parseCitationsJSON(raw) {
+  if (!raw || typeof raw !== "string") {
+    return [];
+  }
+  try {
+    var parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    return [];
+  }
+}
+
 function renderCollectionChatHistory(events) {
   if (!chatLog) {
     return;
@@ -1507,10 +1486,12 @@ function renderCollectionChatHistory(events) {
     if (!event || typeof event.markdown !== "string") {
       return;
     }
+    var citations = parseCitationsJSON(event.citationsJSON);
     appendMessage(event.role || "assistant", event.markdown, {
       format: MESSAGE_FORMAT_MARKDOWN,
       save: false,
-      historyId: event.id
+      historyId: event.id,
+      citations: citations
     });
   });
 }
@@ -1566,7 +1547,7 @@ function generateAnswerViewerToken() {
   return "ans_" + String(Date.now()) + "-" + Math.random().toString(16).slice(2);
 }
 
-async function openAnswerViewerTab(token) {
+async function openAnswerViewerTab(token, options) {
   if (!token || typeof token !== "string") {
     return false;
   }
@@ -1576,7 +1557,10 @@ async function openAnswerViewerTab(token) {
   try {
     var response = await browser.runtime.sendMessage({
       type: "laika.answer_viewer.open_pending",
-      token: token
+      token: token,
+      collectionId: options && options.collectionId ? options.collectionId : null,
+      eventId: options && options.eventId ? options.eventId : null,
+      questionEventId: options && options.questionEventId ? options.questionEventId : null
     });
     if (response && response.status === "ok") {
       return true;
@@ -1588,6 +1572,15 @@ async function openAnswerViewerTab(token) {
     return false;
   }
   var viewerUrl = browser.runtime.getURL("answer_viewer.html") + "?token=" + encodeURIComponent(token);
+  if (options && options.collectionId) {
+    viewerUrl += "&collectionId=" + encodeURIComponent(options.collectionId);
+  }
+  if (options && options.eventId) {
+    viewerUrl += "&eventId=" + encodeURIComponent(options.eventId);
+  }
+  if (options && options.questionEventId) {
+    viewerUrl += "&questionEventId=" + encodeURIComponent(options.questionEventId);
+  }
   if (browser.tabs && browser.tabs.create) {
     try {
       await browser.tabs.create({ url: viewerUrl, active: true });
@@ -1669,7 +1662,7 @@ async function sendCollectionAnswer(question) {
     return;
   }
   var viewerToken = generateAnswerViewerToken();
-  var viewerOpened = await openAnswerViewerTab(viewerToken);
+  var viewerOpened = await openAnswerViewerTab(viewerToken, { collectionId: collectionId });
   if (!viewerOpened) {
     viewerToken = null;
   }
@@ -1682,7 +1675,14 @@ async function sendCollectionAnswer(question) {
   var result = unwrapNativeResult(response);
   var answer = result.answer || {};
   var markdown = typeof answer.markdown === "string" ? answer.markdown : "";
-  appendMessage("assistant", markdown, { format: MESSAGE_FORMAT_MARKDOWN, save: false });
+  var answerEventId = typeof answer.eventId === "string" ? answer.eventId : "";
+  var questionEventId = typeof answer.questionEventId === "string" ? answer.questionEventId : "";
+  var citations = Array.isArray(answer.citations) ? answer.citations : [];
+  appendMessage("assistant", markdown, {
+    format: MESSAGE_FORMAT_MARKDOWN,
+    save: false,
+    citations: citations
+  });
   await loadCollectionChatHistory(true);
   var payload = {
     markdown: markdown,
@@ -1690,7 +1690,9 @@ async function sendCollectionAnswer(question) {
     question: question,
     collectionId: collectionId,
     collectionTitle: getCollectionTitle(collectionId),
-    citations: Array.isArray(answer.citations) ? answer.citations : []
+    citations: citations,
+    eventId: answerEventId,
+    questionEventId: questionEventId
   };
   if (viewerToken) {
     var delivered = await fulfillAnswerViewer(viewerToken, payload);
@@ -1701,6 +1703,51 @@ async function sendCollectionAnswer(question) {
     return;
   }
   await openAnswerViewer(payload);
+}
+
+function buildCitationsList(citations) {
+  if (!Array.isArray(citations) || citations.length === 0) {
+    return null;
+  }
+  var list = document.createElement("ul");
+  list.className = "message-citations-list";
+  var seen = {};
+  citations.forEach(function (citation) {
+    if (!citation || !citation.url || seen[citation.url]) {
+      return;
+    }
+    seen[citation.url] = true;
+    var item = document.createElement("li");
+    var link = document.createElement("a");
+    link.href = citation.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    var label = citation.source_id || citation.doc_id || citation.url;
+    try {
+      label = new URL(citation.url).hostname;
+    } catch (error) {
+    }
+    link.textContent = label;
+    item.appendChild(link);
+    if (citation.quote) {
+      var quote = document.createElement("div");
+      quote.className = "message-citations-quote";
+      quote.textContent = citation.quote;
+      item.appendChild(quote);
+    }
+    list.appendChild(item);
+  });
+  if (!list.children.length) {
+    return null;
+  }
+  var wrapper = document.createElement("div");
+  wrapper.className = "message-citations";
+  var title = document.createElement("div");
+  title.className = "message-citations-title";
+  title.textContent = "Sources";
+  wrapper.appendChild(title);
+  wrapper.appendChild(list);
+  return wrapper;
 }
 
 function appendMessage(role, text, options) {
@@ -1722,6 +1769,12 @@ function appendMessage(role, text, options) {
   renderMessageBody(body, content, format);
   message.appendChild(label);
   message.appendChild(body);
+  if (role === "assistant" && options && Array.isArray(options.citations) && options.citations.length) {
+    var citationsBlock = buildCitationsList(options.citations);
+    if (citationsBlock) {
+      message.appendChild(citationsBlock);
+    }
+  }
   var shouldSave = !activeCollectionId;
   if (options && typeof options.save === "boolean") {
     shouldSave = options.save;

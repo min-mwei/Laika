@@ -89,45 +89,6 @@
         "precision": "number"
       }
     },
-    "artifact.save": {
-      "required": {
-        "title": "string",
-        "markdown": "string"
-      },
-      "optional": {
-        "tags": "array",
-        "redaction": "string"
-      }
-    },
-    "artifact.open": {
-      "required": {
-        "artifactId": "string"
-      },
-      "optional": {
-        "target": "string",
-        "newTab": "bool"
-      }
-    },
-    "artifact.share": {
-      "required": {
-        "artifactId": "string",
-        "format": "string"
-      },
-      "optional": {
-        "filename": "string",
-        "target": "string"
-      }
-    },
-    "integration.invoke": {
-      "required": {
-        "integration": "string",
-        "operation": "string",
-        "payload": "object"
-      },
-      "optional": {
-        "idempotencyKey": "string"
-      }
-    },
     "collection.create": {
       "required": {
         "title": "string"
@@ -157,25 +118,6 @@
       "optional": {
         "mode": "string",
         "maxChars": "number"
-      }
-    },
-    "source.refresh": {
-      "required": {
-        "sourceId": "string"
-      },
-      "optional": {}
-    },
-    "transform.list_types": {
-      "required": {},
-      "optional": {}
-    },
-    "transform.run": {
-      "required": {
-        "collectionId": "string",
-        "type": "string"
-      },
-      "optional": {
-        "config": "object"
       }
     }
   }

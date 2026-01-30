@@ -233,27 +233,13 @@ var ALLOWED_TOOLS = {
   "collection.create": true,
   "collection.add_sources": true,
   "collection.list_sources": true,
-  "source.capture": true,
-  "source.refresh": true,
-  "transform.list_types": true,
-  "transform.run": true,
-  "artifact.save": true,
-  "artifact.open": true,
-  "artifact.share": true,
-  "integration.invoke": true
+  "source.capture": true
 };
 
 var NATIVE_TOOLS = {
   "collection.create": true,
   "collection.add_sources": true,
-  "collection.list_sources": true,
-  "source.refresh": true,
-  "transform.list_types": true,
-  "transform.run": true,
-  "artifact.save": true,
-  "artifact.open": true,
-  "artifact.share": true,
-  "integration.invoke": true
+  "collection.list_sources": true
 };
 
 var ToolErrorCode = {
@@ -335,7 +321,7 @@ function openAnswerViewer(payload, sender) {
   });
 }
 
-function openAnswerViewerPending(token, sender) {
+function openAnswerViewerPending(token, sender, params) {
   if (!token || typeof token !== "string") {
     return Promise.resolve({ status: "error", error: "invalid_token" });
   }
@@ -343,6 +329,17 @@ function openAnswerViewerPending(token, sender) {
     return Promise.resolve({ status: "error", error: "tabs_unavailable" });
   }
   var url = browser.runtime.getURL("answer_viewer.html") + "?token=" + encodeURIComponent(token);
+  if (params && typeof params === "object") {
+    if (typeof params.collectionId === "string" && params.collectionId) {
+      url += "&collectionId=" + encodeURIComponent(params.collectionId);
+    }
+    if (typeof params.eventId === "string" && params.eventId) {
+      url += "&eventId=" + encodeURIComponent(params.eventId);
+    }
+    if (typeof params.questionEventId === "string" && params.questionEventId) {
+      url += "&questionEventId=" + encodeURIComponent(params.questionEventId);
+    }
+  }
   var windowId = resolveOwnerWindowId(sender, null);
   var createOptions = { url: url, active: true };
   if (isNumericId(windowId)) {
@@ -407,6 +404,9 @@ var CAPTURE_MESSAGE_TIMEOUT_MS = 20000;
 var CAPTURE_DEFAULT_MAX_CHARS = 24000;
 var CAPTURE_MIN_MAX_CHARS = 2000;
 var CAPTURE_MAX_MAX_CHARS = 120000;
+var CAPTURE_QUEUE_MAX_BATCH = 6;
+var CAPTURE_QUEUE_IDLE_DELAY_MS = 15000;
+var CAPTURE_QUEUE_STEP_DELAY_MS = 250;
 var CAPTURE_FALLBACK_OBSERVE_OPTIONS = {
   maxChars: 12000,
   maxElements: 160,
@@ -446,6 +446,10 @@ var SEARCH_LOG_ENABLED = true;
 var SEARCH_SETTINGS_KEY = "searchSettings";
 var searchSettingsCache = null;
 var searchSettingsLoadPromise = null;
+var captureQueueActive = false;
+var captureQueueRequested = false;
+var captureQueueTimer = null;
+var captureQueueCollectionId = null;
 
 function isNumericId(value) {
   return typeof value === "number" && Number.isFinite(value);
@@ -1281,6 +1285,86 @@ async function handleSourceCapture(args, sender, tabOverride) {
     return updateResult;
   }
   return { status: "ok", url: safeUrl, title: title, truncated: truncated };
+}
+
+async function claimNextCaptureJob(collectionId) {
+  var payload = {};
+  if (typeof collectionId === "string" && collectionId) {
+    payload.collectionId = collectionId;
+  }
+  var response = await sendCollectionAction("next_capture_job", payload);
+  if (!response || !response.ok || !response.result || response.result.status !== "ok") {
+    return null;
+  }
+  var job = response.result.job || null;
+  if (!job || typeof job.url !== "string" || typeof job.collectionId !== "string") {
+    return null;
+  }
+  return job;
+}
+
+function scheduleCaptureQueue(delayMs) {
+  if (captureQueueTimer) {
+    clearTimeout(captureQueueTimer);
+  }
+  var delay = typeof delayMs === "number" && isFinite(delayMs) ? Math.max(50, Math.floor(delayMs)) : 250;
+  captureQueueTimer = setTimeout(function () {
+    captureQueueTimer = null;
+    processCaptureQueue();
+  }, delay);
+}
+
+function requestCaptureQueue(collectionId, delayMs) {
+  if (typeof collectionId === "string" && collectionId) {
+    captureQueueCollectionId = collectionId;
+  }
+  if (captureQueueActive) {
+    captureQueueRequested = true;
+    return;
+  }
+  scheduleCaptureQueue(delayMs);
+}
+
+async function processCaptureQueue() {
+  if (captureQueueActive) {
+    captureQueueRequested = true;
+    return;
+  }
+  captureQueueActive = true;
+  var processed = 0;
+  try {
+    while (processed < CAPTURE_QUEUE_MAX_BATCH) {
+      var nextJob = await claimNextCaptureJob(captureQueueCollectionId);
+      if (!nextJob) {
+        break;
+      }
+      captureQueueCollectionId = null;
+      await handleSourceCapture(
+        {
+          collectionId: nextJob.collectionId,
+          url: nextJob.url,
+          mode: "auto",
+          maxChars: CAPTURE_DEFAULT_MAX_CHARS
+        },
+        null,
+        null
+      );
+      processed += 1;
+      await sleep(CAPTURE_QUEUE_STEP_DELAY_MS);
+    }
+  } finally {
+    captureQueueActive = false;
+  }
+  if (captureQueueRequested) {
+    captureQueueRequested = false;
+    scheduleCaptureQueue(200);
+    return;
+  }
+  if (processed >= CAPTURE_QUEUE_MAX_BATCH) {
+    scheduleCaptureQueue(200);
+    return;
+  }
+  scheduleCaptureQueue(CAPTURE_QUEUE_IDLE_DELAY_MS);
 }
 
 async function handleSearchTool(args, sender, tabOverride) {
@@ -2119,7 +2203,11 @@ async function handleTool(toolName, args, sender, tabOverride) {
     return { status: "error", error: ToolErrorCode.UNSUPPORTED_TOOL };
   }
   if (NATIVE_TOOLS[toolName]) {
-    return await runNativeTool(toolName, args);
+    var nativeResult = await runNativeTool(toolName, args);
+    if (toolName === "collection.add_sources" && nativeResult && nativeResult.status === "ok") {
+      requestCaptureQueue(args && args.collectionId ? args.collectionId : null, 200);
+    }
+    return nativeResult;
   }
   if (toolName === "source.capture") {
     return await handleSourceCapture(args || {}, sender, tabOverride);
@@ -2969,7 +3057,11 @@ browser.runtime.onMessage.addListener(function (message, sender) {
     return openAnswerViewer(message.payload, sender);
   }
   if (message.type === "laika.answer_viewer.open_pending") {
-    return openAnswerViewerPending(message.token, sender);
+    return openAnswerViewerPending(message.token, sender, {
+      collectionId: message.collectionId,
+      eventId: message.eventId,
+      questionEventId: message.questionEventId
+    });
   }
   if (message.type === "laika.answer_viewer.store") {
     if (!message.payload || typeof message.payload !== "object") {
@@ -2994,6 +3086,30 @@ browser.runtime.onMessage.addListener(function (message, sender) {
       return Promise.resolve({ status: "error", error: "not_found" });
     }
     return Promise.resolve({ status: "ok", payload: payload });
+  }
+  if (message.type === "laika.collection.chat_event.get") {
+    if (!message.collectionId || !message.eventId) {
+      return Promise.resolve({ status: "error", error: "missing_ids" });
+    }
+    return sendCollectionAction("get_chat_event", {
+      collectionId: message.collectionId,
+      eventId: message.eventId,
+      questionEventId: message.questionEventId || null
+    }).then(function (response) {
+      if (!response || !response.ok || !response.result) {
+        return { status: "error", error: response && response.error ? response.error : "native_error" };
+      }
+      if (response.result.status !== "ok") {
+        return { status: "error", error: response.result.error || "native_error" };
+      }
+      return { status: "ok", payload: response.result };
+    }).catch(function (error) {
+      return { status: "error", error: error && error.message ? error.message : "native_error" };
+    });
+  }
+  if (message.type === "laika.capture_queue.kick") {
+    requestCaptureQueue(message.collectionId, 200);
+    return Promise.resolve({ status: "ok" });
   }
   if (message.type === "laika.automation.enable") {
     if (!message.nonce || typeof message.nonce !== "string") {
@@ -3145,3 +3261,5 @@ if (browser.tabs && browser.tabs.onRemoved) {
     }
   });
 }
+
+scheduleCaptureQueue(2000);

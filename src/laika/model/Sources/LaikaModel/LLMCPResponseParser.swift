@@ -118,16 +118,24 @@ enum LLMCPResponseParser {
         let toolCalls = (toolParse.hasUnknownTool || toolParse.hasInvalidTool) ? [] : toolParse.toolCalls
         let assistantInfo = root["assistant"] as? [String: Any] ?? [:]
         let title = assistantInfo["title"] as? String
+        let markdown = assistantInfo["markdown"] as? String
+        let normalizedMarkdown = markdown?.trimmingCharacters(in: .whitespacesAndNewlines)
         let renderDocument = renderDocument(from: assistantInfo["render"])
         let citations = parseCitations(from: assistantInfo["citations"])
 
         let fallbackText = [
             extractText(from: assistantInfo["render"]),
+            normalizedMarkdown ?? "",
             extractText(from: assistantInfo["title"])
         ].first(where: { !$0.isEmpty }) ?? ""
 
         let summaryText = fallbackText.isEmpty ? "Unable to parse response." : fallbackText
-        let render = renderDocument ?? Document.paragraph(text: summaryText)
+        let render = renderDocument ?? {
+            if let normalizedMarkdown, !normalizedMarkdown.isEmpty {
+                return Document.paragraph(text: normalizedMarkdown)
+            }
+            return Document.paragraph(text: summaryText)
+        }()
         let assistant = AssistantMessage(title: title, render: render, citations: citations)
         return ModelResponse(toolCalls: toolCalls, assistant: assistant, summary: summaryText)
     }
@@ -140,7 +148,7 @@ enum LLMCPResponseParser {
 
     private static func fallbackSummary(from text: String) -> String {
         let target = extractJSON(from: text) ?? text
-        let candidates = extractStringValues(from: target, keys: ["summary", "text", "title"])
+        let candidates = extractStringValues(from: target, keys: ["summary", "markdown", "text", "title"])
         let trimmed = candidates.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             return truncateSummary(trimmed)
