@@ -25,6 +25,37 @@ public struct ModelResponse: Codable, Equatable, Sendable {
     }
 }
 
+public struct AnswerLogContext: Codable, Equatable, Sendable {
+    public let runId: String?
+    public let step: Int?
+    public let maxSteps: Int?
+    public let origin: String
+    public let pageURL: String
+    public let pageTitle: String
+    public let sourceCount: Int
+    public let contextChars: Int
+
+    public init(
+        runId: String?,
+        step: Int?,
+        maxSteps: Int?,
+        origin: String,
+        pageURL: String,
+        pageTitle: String,
+        sourceCount: Int,
+        contextChars: Int
+    ) {
+        self.runId = runId
+        self.step = step
+        self.maxSteps = maxSteps
+        self.origin = origin
+        self.pageURL = pageURL
+        self.pageTitle = pageTitle
+        self.sourceCount = sourceCount
+        self.contextChars = contextChars
+    }
+}
+
 public enum ModelError: Error, LocalizedError {
     case modelUnavailable(String)
     case invalidResponse(String)
@@ -42,6 +73,7 @@ public enum ModelError: Error, LocalizedError {
 public protocol ModelRunner: Sendable {
     func generatePlan(context: ContextPack, userGoal: String) async throws -> ModelResponse
     func parseGoalPlan(context: ContextPack, userGoal: String) async throws -> GoalPlan
+    func generateAnswer(request: LLMCPRequest, logContext: AnswerLogContext) async throws -> ModelResponse
 }
 
 public extension ModelRunner {

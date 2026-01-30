@@ -146,6 +146,36 @@ Keep existing JSON but allow automation options:
 }
 ```
 
+Goals can be strings (plan loop) **or** typed objects. Use typed objects to
+trigger collection-scoped actions without a plan loop:
+
+```json
+{
+  "type": "collection.answer",
+  "question": "What are the key differences in how each outlet is covering this story?",
+  "collectionId": "col_123",  // optional (defaults to active collection)
+  "maxSources": 10,            // optional
+  "maxTokens": 3072            // optional
+}
+```
+
+Use `collection.capture` when you want automation to create/select a collection,
+add a fixed set of URLs, and run `source.capture` for each URL:
+
+```json
+{
+  "type": "collection.capture",
+  "title": "Meta 2026 coverage",   // optional (creates a new collection if provided)
+  "collectionId": "col_123",       // optional (uses existing collection if set)
+  "urls": [
+    "https://investor.atmeta.com/investor-news/press-release-details/2026/Meta-Reports-Fourth-Quarter-and-Full-Year-2025-Results/default.aspx",
+    "https://techcrunch.com/2026/01/28/zuckerberg-teases-agentic-commerce-tools-and-major-ai-rollout-in-2026/",
+    "https://www.bloomberg.com/news/articles/2026-01-28/meta-says-2026-spending-will-blow-past-analysts-estimates"
+  ],
+  "maxChars": 24000               // optional per-source capture bound
+}
+```
+
 `resetStorage` defaults to `true` for automation runs; it clears automation-scoped keys and in-memory caches (not user settings). Set it to `false` if you need to keep automation state between scenarios.
 `blockedTools` is an optional list of tool names to skip when selecting the next action (useful for live tests).
 `disallowOpenTabs` is a convenience flag that adds `browser.open_tab` to `blockedTools`.

@@ -30,6 +30,10 @@ public final class ModelRouter: ModelRunner, StreamingModelRunner {
         try await runner.parseGoalPlan(context: context, userGoal: userGoal)
     }
 
+    public func generateAnswer(request: LLMCPRequest, logContext: AnswerLogContext) async throws -> ModelResponse {
+        try await runner.generateAnswer(request: request, logContext: logContext)
+    }
+
     public func streamText(_ request: StreamRequest) -> AsyncThrowingStream<String, Error> {
         guard let streaming = runner as? StreamingModelRunner else {
             return AsyncThrowingStream { continuation in

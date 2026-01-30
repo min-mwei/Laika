@@ -249,6 +249,11 @@ Composer appears on the Sources tab:
 [ Ask about this collection...                                      ] [Send]
 ```
 
+Answer delivery note (P0):
+- Large answers should open in a dedicated viewer tab for comfortable reading.
+- The viewer tab opens immediately on send (user gesture) and shows a "preparing answer" state.
+- The payload is delivered asynchronously; the sidecar stays on Sources and the History tab logs the exchange.
+
 ### 4.2 Citation UI (trust + traceability)
 
 Requirements:
@@ -262,7 +267,9 @@ UI pattern:
 
 ### 4.3 Chat result rendering (rich, safe)
 
-Chat messages render from `assistant.markdown` (canonical Markdown output).
+Chat messages render from **Markdown**. The model currently returns a structured
+`assistant.render` document; we normalize that document to Markdown for storage
+and rendering.
 
 P0 renderer must support:
 - headings, paragraphs, lists, blockquotes, code blocks
@@ -271,7 +278,14 @@ P0 renderer must support:
 
 Rendering must follow the Markdown -> safe HTML pipeline in `docs/safehtml_mark.md`.
 
-### 4.4 LLM tasks used by Chat
+### 4.4 Chat persistence + History tab
+
+- Chat history is **collection-scoped** and stored in native SQLite (`chat_events`).
+- The History tab always loads from the native store (no extension storage for
+  collection chat).
+- Clearing chat clears only the active collection history.
+
+### 4.5 LLM tasks used by Chat
 
 Chat uses LLMCP tasks with collection context packs:
 

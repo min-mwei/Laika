@@ -248,6 +248,10 @@ Tools:
 
     static func userPrompt(context: ContextPack, goal: String) -> String {
         let request = LLMCPRequestBuilder.build(context: context, userGoal: goal)
+        return userPrompt(request: request, runId: context.runId, step: context.step, maxSteps: context.maxSteps)
+    }
+
+    static func userPrompt(request: LLMCPRequest, runId: String? = nil, step: Int? = nil, maxSteps: Int? = nil) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         do {
@@ -259,9 +263,9 @@ Tools:
         } catch {
             LaikaLogger.logAgentEvent(
                 type: "llmcp.request_encode_failed",
-                runId: context.runId,
-                step: context.step,
-                maxSteps: context.maxSteps,
+                runId: runId,
+                step: step,
+                maxSteps: maxSteps,
                 payload: [
                     "error": .string(error.localizedDescription)
                 ]

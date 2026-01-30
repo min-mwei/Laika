@@ -19,6 +19,8 @@
 		6285AFA02F1AFB45004C2F8B /* SafariWebExtensionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6285AF9F2F1AFB45004C2F8B /* SafariWebExtensionHandler.swift */; };
 		6285AFB32F1AFB46004C2F8B /* background.js in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAC2F1AFB46004C2F8B /* background.js */; };
 		6285AFB42F1AFB46004C2F8B /* popover.html in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAD2F1AFB46004C2F8B /* popover.html */; };
+		9F4C9A1E2B3C4D5E6F7081A3 /* answer_viewer.html in Resources */ = {isa = PBXBuildFile; fileRef = 9F4C9A1E2B3C4D5E6F7081A2 /* answer_viewer.html */; };
+		9F4C9A1E2B3C4D5E6F7081A5 /* answer_viewer.js in Resources */ = {isa = PBXBuildFile; fileRef = 9F4C9A1E2B3C4D5E6F7081A4 /* answer_viewer.js */; };
 		6285AFB52F1AFB46004C2F8B /* tests in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAE2F1AFB46004C2F8B /* tests */; };
 		6285AFB62F1AFB46004C2F8B /* popover.js in Resources */ = {isa = PBXBuildFile; fileRef = 6285AFAF2F1AFB46004C2F8B /* popover.js */; };
 		B6F0A2C5D4E5F60718293A71 /* options.html in Resources */ = {isa = PBXBuildFile; fileRef = B6F0A2C7D4E5F60718293A71 /* options.html */; };
@@ -82,6 +84,8 @@
 		0796148E82B045A980B4A0FB /* Laika Extension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Laika Extension.entitlements"; sourceTree = "<group>"; };
 		6285AFAC2F1AFB46004C2F8B /* background.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = background.js; path = ../../../extension/background.js; sourceTree = "<group>"; };
 		6285AFAD2F1AFB46004C2F8B /* popover.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = popover.html; path = ../../../extension/popover.html; sourceTree = "<group>"; };
+		9F4C9A1E2B3C4D5E6F7081A2 /* answer_viewer.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = answer_viewer.html; path = ../../../extension/answer_viewer.html; sourceTree = "<group>"; };
+		9F4C9A1E2B3C4D5E6F7081A4 /* answer_viewer.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = answer_viewer.js; path = ../../../extension/answer_viewer.js; sourceTree = "<group>"; };
 		B6F0A2C7D4E5F60718293A71 /* options.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = options.html; path = ../../../extension/options.html; sourceTree = "<group>"; };
 		6285AFAE2F1AFB46004C2F8B /* tests */ = {isa = PBXFileReference; lastKnownFileType = folder; name = tests; path = ../../../extension/tests; sourceTree = "<group>"; };
 		6285AFAF2F1AFB46004C2F8B /* popover.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = popover.js; path = ../../../extension/popover.js; sourceTree = "<group>"; };
@@ -185,6 +189,8 @@
 			children = (
 				6285AFAC2F1AFB46004C2F8B /* background.js */,
 				6285AFAD2F1AFB46004C2F8B /* popover.html */,
+				9F4C9A1E2B3C4D5E6F7081A2 /* answer_viewer.html */,
+				9F4C9A1E2B3C4D5E6F7081A4 /* answer_viewer.js */,
 				B6F0A2C7D4E5F60718293A71 /* options.html */,
 				6285AFAE2F1AFB46004C2F8B /* tests */,
 				6285AFAF2F1AFB46004C2F8B /* popover.js */,
@@ -347,6 +353,8 @@
 				6285AFB72F1AFB46004C2F8B /* content_script.js in Resources */,
 				6285AFB52F1AFB46004C2F8B /* tests in Resources */,
 				6285AFB42F1AFB46004C2F8B /* popover.html in Resources */,
+				9F4C9A1E2B3C4D5E6F7081A3 /* answer_viewer.html in Resources */,
+				9F4C9A1E2B3C4D5E6F7081A5 /* answer_viewer.js in Resources */,
 				B6F0A2C5D4E5F60718293A71 /* options.html in Resources */,
 				B6F0A2C6D4E5F60718293A71 /* options.js in Resources */,
 				6285AFB92F1AFB46004C2F8B /* lib in Resources */,

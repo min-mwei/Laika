@@ -426,15 +426,154 @@
   }
 
   function normalizeGoals(goals, goal) {
-    if (Array.isArray(goals)) {
-      return goals.filter(function (item) {
-        return typeof item === "string" && item.trim();
-      });
+    var items = Array.isArray(goals)
+      ? goals.slice()
+      : (typeof goal === "string" && goal.trim() ? [goal] : []);
+    var normalized = [];
+    items.forEach(function (item) {
+      if (typeof item === "string" && item.trim()) {
+        normalized.push({ type: "plan", text: item.trim() });
+        return;
+      }
+      if (!isObject(item)) {
+        return;
+      }
+      var rawType = typeof item.type === "string" ? item.type.trim() : "";
+      if (rawType === "collection.answer") {
+        var question = typeof item.question === "string" ? item.question.trim() : "";
+        if (!question) {
+          return;
+        }
+        normalized.push({
+          type: "collection.answer",
+          question: question,
+          collectionId: typeof item.collectionId === "string" ? item.collectionId : null,
+          maxSources: typeof item.maxSources === "number" && isFinite(item.maxSources) ? item.maxSources : null,
+          maxTokens: typeof item.maxTokens === "number" && isFinite(item.maxTokens) ? item.maxTokens : null
+        });
+        return;
+      }
+      if (rawType === "collection.capture") {
+        var urls = [];
+        if (Array.isArray(item.urls)) {
+          urls = item.urls.slice(0);
+        } else if (Array.isArray(item.sources)) {
+          urls = item.sources.slice(0);
+        }
+        urls = urls.filter(function (value) {
+          return typeof value === "string" && value.trim();
+        }).map(function (value) {
+          return value.trim();
+        });
+        if (!urls.length) {
+          return;
+        }
+        normalized.push({
+          type: "collection.capture",
+          title: typeof item.title === "string" ? item.title.trim() : "",
+          collectionId: typeof item.collectionId === "string" ? item.collectionId : null,
+          urls: urls,
+          maxChars: typeof item.maxChars === "number" && isFinite(item.maxChars) ? item.maxChars : null
+        });
+        return;
+      }
+      if (rawType === "plan" || rawType === "goal") {
+        var text = typeof item.goal === "string" ? item.goal.trim() : "";
+        if (!text) {
+          text = typeof item.text === "string" ? item.text.trim() : "";
+        }
+        if (text) {
+          normalized.push({ type: "plan", text: text });
+        }
+      }
+    });
+    return normalized;
+  }
+
+  function dedupeUrls(urls) {
+    if (!Array.isArray(urls)) {
+      return [];
     }
-    if (typeof goal === "string" && goal.trim()) {
-      return [goal.trim()];
+    var seen = {};
+    var deduped = [];
+    urls.forEach(function (url) {
+      if (typeof url !== "string") {
+        return;
+      }
+      var trimmed = url.trim();
+      if (!trimmed) {
+        return;
+      }
+      var key = trimmed.toLowerCase();
+      if (seen[key]) {
+        return;
+      }
+      seen[key] = true;
+      deduped.push(trimmed);
+    });
+    return deduped;
+  }
+
+  async function requestCollection(action, payload, nativeAppId, timeoutMs) {
+    var message = {
+      type: "collection",
+      action: action,
+      payload: payload || {}
+    };
+    return await sendNativeMessage(message, nativeAppId, timeoutMs);
+  }
+
+  function unwrapCollectionResult(response) {
+    if (response && response.ok && response.result && response.result.status === "ok") {
+      return response.result;
     }
-    return [];
+    if (response && response.result && response.result.error) {
+      throw new Error(response.result.error);
+    }
+    if (response && response.error) {
+      throw new Error(response.error);
+    }
+    throw new Error("collection_error");
+  }
+
+  function summarizeMarkdown(text) {
+    if (typeof text !== "string") {
+      return "";
+    }
+    var trimmed = text.trim();
+    if (!trimmed) {
+      return "";
+    }
+    if (trimmed.length <= 280) {
+      return trimmed;
+    }
+    return trimmed.slice(0, 280);
+  }
+
+  async function waitForCapturedSources(collectionId, nativeAppId, timeoutMs, maxAttempts, delayMs) {
+    var attempts = typeof maxAttempts === "number" && isFinite(maxAttempts) ? Math.max(1, Math.floor(maxAttempts)) : 6;
+    var delay = typeof delayMs === "number" && isFinite(delayMs) ? Math.max(300, Math.floor(delayMs)) : 1500;
+    for (var i = 0; i < attempts; i += 1) {
+      await sleep(delay);
+      var listResponse = await requestCollection("list_sources", { collectionId: collectionId }, nativeAppId, timeoutMs);
+      var listResult = unwrapCollectionResult(listResponse);
+      var sources = Array.isArray(listResult.sources) ? listResult.sources : [];
+      var capturedCount = sources.filter(function (source) {
+        return source && source.captureStatus === "captured";
+      }).length;
+      if (capturedCount > 0) {
+        return sources;
+      }
+      var pendingCount = sources.filter(function (source) {
+        return source && source.captureStatus === "pending";
+      }).length;
+      if (pendingCount === 0) {
+        return sources;
+      }
+    }
+    var finalResponse = await requestCollection("list_sources", { collectionId: collectionId }, nativeAppId, timeoutMs);
+    var finalResult = unwrapCollectionResult(finalResponse);
+    return Array.isArray(finalResult.sources) ? finalResult.sources : [];
   }
 
   async function runAutomationGoals(config) {
@@ -452,10 +591,19 @@
       throw new Error("missing_request_plan");
     }
 
-    var goals = normalizeGoals(config.goals, config.goal);
-    if (goals.length === 0) {
+    var goalSpecs = normalizeGoals(config.goals, config.goal);
+    if (goalSpecs.length === 0) {
       throw new Error("missing_goals");
     }
+    var goals = goalSpecs.map(function (spec) {
+      if (spec.type === "collection.answer") {
+        return spec.question;
+      }
+      if (spec.type === "collection.capture") {
+        return spec.title ? "Capture sources for " + spec.title : "Capture collection sources";
+      }
+      return spec.text;
+    });
 
     var runId = config.runId || generateRunId();
     var maxSteps = typeof config.maxSteps === "number" && isFinite(config.maxSteps)
@@ -510,14 +658,178 @@
       }
 
       var results = [];
-      for (var goalIndex = 0; goalIndex < goals.length; goalIndex += 1) {
-        var goal = goals[goalIndex];
+      for (var goalIndex = 0; goalIndex < goalSpecs.length; goalIndex += 1) {
+        var goalSpec = goalSpecs[goalIndex];
+        var goal = goalSpec.type === "collection.answer"
+          ? goalSpec.question
+          : (goalSpec.type === "collection.capture"
+            ? (goalSpec.title ? "Capture sources for " + goalSpec.title : "Capture collection sources")
+            : goalSpec.text);
         var steps = [];
         var recentToolCalls = [];
         var recentToolResults = [];
         var summary = "";
         lastGoalIndex = goalIndex;
         lastGoal = goal;
+
+        if (goalSpec.type === "collection.capture") {
+          noteStatus("collection_capture");
+          lastToolCall = "collection.capture";
+
+          var collectionId = goalSpec.collectionId;
+          if (collectionId) {
+            var activateResponse = await requestCollection("set_active", { collectionId: collectionId }, config.nativeAppId, planTimeoutMs);
+            unwrapCollectionResult(activateResponse);
+          } else if (goalSpec.title) {
+            var createResponse = await requestCollection("create", { title: goalSpec.title }, config.nativeAppId, planTimeoutMs);
+            var createResult = unwrapCollectionResult(createResponse);
+            collectionId = (createResult.collection && createResult.collection.id) ? createResult.collection.id : (createResult.activeCollectionId || null);
+          } else {
+            var listResponse = await requestCollection("list", {}, config.nativeAppId, planTimeoutMs);
+            var listResult = unwrapCollectionResult(listResponse);
+            collectionId = listResult.activeCollectionId || null;
+            if (!collectionId) {
+              var fallbackResponse = await requestCollection("create", { title: "Automation collection" }, config.nativeAppId, planTimeoutMs);
+              var fallbackResult = unwrapCollectionResult(fallbackResponse);
+              collectionId = (fallbackResult.collection && fallbackResult.collection.id) ? fallbackResult.collection.id : (fallbackResult.activeCollectionId || null);
+            }
+          }
+          if (!collectionId) {
+            throw new Error("missing_collection");
+          }
+
+          var urls = dedupeUrls(goalSpec.urls);
+          if (urls.length === 0) {
+            throw new Error("missing_urls");
+          }
+          var addSourcesPayload = {
+            collectionId: collectionId,
+            sources: urls.map(function (url) {
+              return { type: "url", url: url };
+            })
+          };
+          var addResponse = await requestCollection("add_sources", addSourcesPayload, config.nativeAppId, planTimeoutMs);
+          unwrapCollectionResult(addResponse);
+
+          var maxChars = goalSpec.maxChars !== null && goalSpec.maxChars !== undefined ? Math.floor(goalSpec.maxChars) : null;
+          var captureResults = [];
+          for (var i = 0; i < urls.length; i += 1) {
+            var url = urls[i];
+            var captureArgs = { collectionId: collectionId, url: url };
+            if (typeof maxChars === "number" && isFinite(maxChars)) {
+              captureArgs.maxChars = maxChars;
+            }
+            noteStatus("capturing_sources");
+            lastToolCall = "source.capture";
+            var captureAction = { toolCall: { name: "source.capture", arguments: captureArgs } };
+            var captureResult = await deps.runTool(captureAction, tabIdForPlan);
+            captureResults.push({ url: url, result: captureResult });
+            if (captureResult && typeof captureResult.tabId === "number") {
+              tabIdForPlan = captureResult.tabId;
+            }
+          }
+
+          var sources = await waitForCapturedSources(collectionId, config.nativeAppId, planTimeoutMs);
+          var capturedCount = sources.filter(function (source) {
+            return source && source.captureStatus === "captured";
+          }).length;
+          var failedCount = sources.filter(function (source) {
+            return source && source.captureStatus === "failed";
+          }).length;
+          if (capturedCount === 0) {
+            throw new Error("no_captured_sources");
+          }
+          summary = "Captured " + capturedCount + "/" + urls.length + " sources.";
+          if (failedCount > 0) {
+            summary += " Failed: " + failedCount + ".";
+          }
+
+          var stepInfo = {
+            step: 1,
+            summary: summary,
+            action: { name: "collection.capture", arguments: { collectionId: collectionId, urls: urls, maxChars: maxChars } },
+            policy: { decision: "allow" }
+          };
+          steps.push(stepInfo);
+          if (onStep) {
+            onStep(stepInfo, { goalIndex: goalIndex, goal: goal });
+          }
+          results.push({
+            goal: goal,
+            summary: summary,
+            steps: steps,
+            collectionId: collectionId,
+            captureResults: captureResults
+          });
+          continue;
+        }
+
+        if (goalSpec.type === "collection.answer") {
+          noteStatus("collection_answer");
+          lastToolCall = "collection.answer";
+          var collectionId = goalSpec.collectionId;
+          if (!collectionId) {
+            var listResponse = await requestCollection("list", {}, config.nativeAppId, planTimeoutMs);
+            var listResult = unwrapCollectionResult(listResponse);
+            collectionId = listResult.activeCollectionId || null;
+          }
+          if (!collectionId) {
+            throw new Error("missing_collection");
+          }
+          var listResponse = await requestCollection("list_sources", { collectionId: collectionId }, config.nativeAppId, planTimeoutMs);
+          var listResult = unwrapCollectionResult(listResponse);
+          var sources = Array.isArray(listResult.sources) ? listResult.sources : [];
+          var capturedCount = sources.filter(function (source) {
+            return source && source.captureStatus === "captured";
+          }).length;
+          var pendingCount = sources.filter(function (source) {
+            return source && source.captureStatus === "pending";
+          }).length;
+          if (capturedCount === 0 && pendingCount > 0) {
+            sources = await waitForCapturedSources(collectionId, config.nativeAppId, planTimeoutMs);
+            capturedCount = sources.filter(function (source) {
+              return source && source.captureStatus === "captured";
+            }).length;
+          }
+          if (capturedCount === 0) {
+            throw new Error("no_captured_sources");
+          }
+          var answerPayload = {
+            collectionId: collectionId,
+            question: goalSpec.question
+          };
+          if (goalSpec.maxSources !== null && goalSpec.maxSources !== undefined) {
+            answerPayload.maxSources = Math.max(1, Math.floor(goalSpec.maxSources));
+          }
+          var requestedTokens = goalSpec.maxTokens !== null && goalSpec.maxTokens !== undefined
+            ? goalSpec.maxTokens
+            : maxTokens;
+          if (typeof requestedTokens === "number" && isFinite(requestedTokens)) {
+            answerPayload.maxTokens = clampMaxTokens(requestedTokens);
+          }
+          var answerResponse = await requestCollection("answer", answerPayload, config.nativeAppId, planTimeoutMs);
+          var answerResult = unwrapCollectionResult(answerResponse);
+          var answer = answerResult.answer || {};
+          summary = summarizeMarkdown(answer.markdown || "");
+          var stepInfo = {
+            step: 1,
+            summary: summary,
+            action: { name: "collection.answer", arguments: answerPayload },
+            policy: { decision: "allow" }
+          };
+          steps.push(stepInfo);
+          if (onStep) {
+            onStep(stepInfo, { goalIndex: goalIndex, goal: goal });
+          }
+          results.push({
+            goal: goal,
+            summary: summary,
+            steps: steps,
+            answer: answer,
+            collectionId: collectionId
+          });
+          continue;
+        }
 
         for (var step = 1; step <= maxSteps; step += 1) {
           lastStep = step;

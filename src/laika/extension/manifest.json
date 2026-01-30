@@ -29,14 +29,14 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["popover.html"],
+      "resources": ["popover.html", "answer_viewer.html"],
       "matches": ["<all_urls>"]
     }
   ],
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["lib/text_utils.js", "content_script.js"],
+      "js": ["lib/text_utils.js", "lib/vendor/readability.js", "lib/vendor/turndown.js", "content_script.js"],
       "run_at": "document_start"
     }
   ]

@@ -3342,6 +3342,373 @@
     return true;
   }
 
+  var DEFAULT_CAPTURE_MAX_CHARS = 24000;
+  var MIN_CAPTURE_MAX_CHARS = 2000;
+  var MAX_CAPTURE_MAX_CHARS = 120000;
+  var CAPTURE_NOISE_SELECTORS = [
+    "style",
+    "script",
+    "noscript",
+    "iframe",
+    "head",
+    "nav",
+    "footer",
+    "header",
+    "aside",
+    "form",
+    "input",
+    "button",
+    "select",
+    "textarea"
+  ];
+  var CAPTURE_NOISE_URL_PATTERNS = [
+    /privacy/i,
+    /terms/i,
+    /cookie/i,
+    /policy/i,
+    /login/i,
+    /signin/i,
+    /signup/i,
+    /register/i,
+    /account/i,
+    /subscribe/i,
+    /newsletter/i,
+    /unsubscribe/i,
+    /feedback/i,
+    /contact/i,
+    /about\/?$/i,
+    /legal/i,
+    /disclaimer/i,
+    /accessibility/i,
+    /sitemap/i,
+    /rss/i,
+    /feed/i,
+    /share/i,
+    /print/i,
+    /email.*friend/i,
+    /\.(pdf|zip|exe|dmg|pkg)$/i
+  ];
+
+  var turndownService = null;
+  if (typeof TurndownService !== "undefined") {
+    try {
+      turndownService = new TurndownService({
+        headingStyle: "atx",
+        codeBlockStyle: "fenced"
+      });
+      turndownService.addRule("remove-noise", {
+        filter: CAPTURE_NOISE_SELECTORS,
+        replacement: function () {
+          return "";
+        }
+      });
+      turndownService.addRule("flatten-links", {
+        filter: ["a"],
+        replacement: function (content) {
+          return content;
+        }
+      });
+      turndownService.addRule("remove-images", {
+        filter: ["img"],
+        replacement: function () {
+          return "";
+        }
+      });
+    } catch (error) {
+      turndownService = null;
+    }
+  }
+
+  function clampCaptureMaxChars(value) {
+    if (typeof value !== "number" || !isFinite(value)) {
+      return DEFAULT_CAPTURE_MAX_CHARS;
+    }
+    var rounded = Math.floor(value);
+    if (rounded < MIN_CAPTURE_MAX_CHARS) {
+      return MIN_CAPTURE_MAX_CHARS;
+    }
+    if (rounded > MAX_CAPTURE_MAX_CHARS) {
+      return MAX_CAPTURE_MAX_CHARS;
+    }
+    return rounded;
+  }
+
+  function normalizeCaptureMode(mode) {
+    if (mode === "article" || mode === "list") {
+      return mode;
+    }
+    return "auto";
+  }
+
+  function isDocumentNode(node) {
+    return node && node.nodeType === Node.DOCUMENT_NODE;
+  }
+
+  function tryReadability() {
+    if (typeof Readability === "undefined") {
+      return null;
+    }
+    try {
+      var cloned = document.cloneNode(true);
+      if (!isDocumentNode(cloned)) {
+        return null;
+      }
+      var reader = new Readability(cloned, { charThreshold: 100 });
+      var article = reader.parse();
+      if (article && article.content && article.textContent) {
+        var textLength = article.textContent.trim().length;
+        if (textLength > 200) {
+          return { content: article.content, title: article.title || document.title || "" };
+        }
+      }
+    } catch (error) {
+    }
+    return null;
+  }
+
+  function getMainContentFallback() {
+    var selectors = [
+      "article",
+      "main",
+      "[role='main']",
+      ".post-content",
+      ".article-content",
+      ".entry-content",
+      ".content",
+      "#content"
+    ];
+    for (var i = 0; i < selectors.length; i += 1) {
+      var element = document.querySelector(selectors[i]);
+      if (element && element.textContent && element.textContent.trim().length > 200) {
+        return element.innerHTML;
+      }
+    }
+    if (document.body) {
+      return document.body.innerHTML;
+    }
+    return "";
+  }
+
+  function cleanHtml(html) {
+    if (!html) {
+      return "";
+    }
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(html, "text/html");
+    if (!doc || !doc.querySelectorAll) {
+      return html;
+    }
+    CAPTURE_NOISE_SELECTORS.forEach(function (selector) {
+      var elements = doc.querySelectorAll(selector);
+      for (var i = 0; i < elements.length; i += 1) {
+        if (elements[i] && elements[i].remove) {
+          elements[i].remove();
+        }
+      }
+    });
+    return doc.body ? doc.body.innerHTML : html;
+  }
+
+  function isNoiseUrl(url) {
+    if (!url) {
+      return true;
+    }
+    try {
+      var parsed = new URL(url);
+      var path = (parsed.pathname || "") + (parsed.search || "");
+      for (var i = 0; i < CAPTURE_NOISE_URL_PATTERNS.length; i += 1) {
+        if (CAPTURE_NOISE_URL_PATTERNS[i].test(path)) {
+          return true;
+        }
+      }
+      return false;
+    } catch (error) {
+      return true;
+    }
+  }
+
+  function getSurroundingContext(anchor, maxLength) {
+    if (!anchor || !anchor.parentElement) {
+      return "";
+    }
+    var parentText = anchor.parentElement.textContent || "";
+    var anchorText = anchor.textContent || "";
+    var anchorIndex = parentText.indexOf(anchorText);
+    if (anchorIndex === -1) {
+      return "";
+    }
+    var limit = typeof maxLength === "number" && isFinite(maxLength) ? maxLength : 60;
+    var start = Math.max(0, anchorIndex - limit / 2);
+    var end = Math.min(parentText.length, anchorIndex + anchorText.length + limit / 2);
+    var context = parentText.slice(start, end).trim();
+    if (start > 0) {
+      context = "..." + context;
+    }
+    if (end < parentText.length) {
+      context = context + "...";
+    }
+    return context;
+  }
+
+  function normalizeCaptureUrl(url) {
+    try {
+      var parsed = new URL(url);
+      parsed.hash = "";
+      return parsed.toString().replace(/\/$/, "");
+    } catch (error) {
+      return url;
+    }
+  }
+
+  function extractLinksFromHtml(htmlContent, pageUrl) {
+    if (!htmlContent) {
+      return [];
+    }
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(htmlContent, "text/html");
+    if (!doc || !doc.querySelectorAll) {
+      return [];
+    }
+    var anchors = doc.querySelectorAll("a[href]");
+    var seen = new Set();
+    var links = [];
+    var pageNormalized = normalizeCaptureUrl(pageUrl || "");
+    for (var i = 0; i < anchors.length; i += 1) {
+      var anchor = anchors[i];
+      var href = anchor.href;
+      var text = (anchor.textContent || "").trim();
+      if (!href || !text) {
+        continue;
+      }
+      if (!/^https?:/i.test(href)) {
+        continue;
+      }
+      var normalized = normalizeCaptureUrl(href);
+      if (!normalized || normalized === pageNormalized) {
+        continue;
+      }
+      if (seen.has(normalized)) {
+        continue;
+      }
+      if (isNoiseUrl(normalized)) {
+        continue;
+      }
+      if (text.length < 3) {
+        continue;
+      }
+      var lowerText = text.toLowerCase();
+      if (lowerText === "click here" || lowerText === "read more" || lowerText === "learn more" ||
+          lowerText === "here" || lowerText === "link") {
+        continue;
+      }
+      seen.add(normalized);
+      links.push({
+        url: normalized,
+        text: text,
+        context: getSurroundingContext(anchor, 80)
+      });
+      if (links.length >= 40) {
+        break;
+      }
+    }
+    return links;
+  }
+
+  function boundMarkdown(markdown, maxChars) {
+    var text = String(markdown || "");
+    var total = text.length;
+    var limit = clampCaptureMaxChars(maxChars);
+    if (total <= limit) {
+      return { markdown: text, truncated: false, totalChars: total, headChars: total, tailChars: 0 };
+    }
+    var marker = "\n\n...\n\n[Truncated: captured first {head} chars and last {tail} chars]\n\n";
+    var overhead = marker.length + 10;
+    var head = Math.max(0, Math.floor((limit - overhead) * 0.6));
+    var tail = Math.max(0, limit - overhead - head);
+    if (head + tail + overhead > limit) {
+      tail = Math.max(0, limit - overhead - head);
+    }
+    if (tail < 200 && limit > 400) {
+      tail = 200;
+      head = Math.max(0, limit - overhead - tail);
+    }
+    var headText = text.slice(0, head);
+    var tailText = tail > 0 ? text.slice(total - tail) : "";
+    var markerText = marker.replace("{head}", String(head)).replace("{tail}", String(tail));
+    return {
+      markdown: headText + markerText + tailText,
+      truncated: true,
+      totalChars: total,
+      headChars: head,
+      tailChars: tail
+    };
+  }
+
+  function fallbackMarkdownFromText(title, text, maxChars) {
+    var heading = title ? "# " + title + "\n\n" : "";
+    var body = String(text || "").trim();
+    var combined = heading + body;
+    return boundMarkdown(combined, maxChars);
+  }
+
+  function capturePage(options) {
+    var pageUrl = typeof window !== "undefined" ? (window.location.href || "") : "";
+    var mode = normalizeCaptureMode(options && options.mode);
+    var maxChars = clampCaptureMaxChars(options && options.maxChars);
+    var readabilityUsed = false;
+    var content = "";
+    var title = document.title || "";
+
+    if (mode !== "list") {
+      var readability = tryReadability();
+      if (readability && readability.content) {
+        content = readability.content;
+        title = readability.title || title;
+        readabilityUsed = true;
+      }
+    }
+
+    if (!content) {
+      content = getMainContentFallback();
+    }
+
+    var cleaned = cleanHtml(content);
+    var links = extractLinksFromHtml(cleaned, pageUrl);
+    if (!turndownService) {
+      var fallbackText = document.body ? document.body.innerText : "";
+      var boundedFallback = fallbackMarkdownFromText(title, fallbackText, maxChars);
+      return {
+        status: "ok",
+        url: pageUrl,
+        title: title,
+        markdown: boundedFallback.markdown,
+        truncated: boundedFallback.truncated,
+        totalChars: boundedFallback.totalChars,
+        links: links,
+        signals: {
+          readabilityUsed: readabilityUsed,
+          mode: mode,
+          fallback: "innerText"
+        }
+      };
+    }
+    var markdown = turndownService.turndown(cleaned);
+    var bounded = boundMarkdown(markdown, maxChars);
+    return {
+      status: "ok",
+      url: pageUrl,
+      title: title,
+      markdown: bounded.markdown,
+      truncated: bounded.truncated,
+      totalChars: bounded.totalChars,
+      links: links,
+      signals: {
+        readabilityUsed: readabilityUsed,
+        mode: mode
+      }
+    };
+  }
+
   function applyTool(toolName, args) {
     if (toolName === "browser.get_selection_links") {
       var DEFAULT_MAX_LINKS = 50;
@@ -3906,6 +4273,13 @@
       }
       if (message.type === "laika.observe") {
         return Promise.resolve(observeDomWithStatus(message.options || {}));
+      }
+      if (message.type === "laika.capture") {
+        try {
+          return Promise.resolve(capturePage(message.options || {}));
+        } catch (error) {
+          return Promise.resolve({ status: "error", error: "capture_failed" });
+        }
       }
       if (message.type === "laika.tool") {
         return Promise.resolve(applyTool(message.toolName, message.args || {}));

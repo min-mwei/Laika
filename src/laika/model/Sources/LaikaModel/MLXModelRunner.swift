@@ -345,6 +345,104 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         throw lastError ?? ModelError.invalidResponse("Plan generation failed.")
     }
 
+    public func generateAnswer(request: LLMCPRequest, logContext: AnswerLogContext) async throws -> ModelResponse {
+        let container = try await store.container(for: modelURL)
+        let systemPrompt = PromptBuilder.systemPrompt()
+        let userPrompt = PromptBuilder.userPrompt(request: request, runId: logContext.runId, step: logContext.step, maxSteps: logContext.maxSteps)
+        let requestId = UUID().uuidString
+        let attempt = GenerationAttempt(temperature: 0.2, topP: 0.7, enableThinking: false)
+        let maxOutputChars = 28_000
+        let answerMaxTokens = answerMaxTokens(sourceCount: logContext.sourceCount)
+
+        LaikaLogger.logLLMEvent(.request(
+            id: requestId,
+            runId: logContext.runId,
+            step: logContext.step,
+            maxSteps: logContext.maxSteps,
+            goal: request.input.userMessage.text,
+            origin: logContext.origin,
+            pageURL: logContext.pageURL,
+            pageTitle: logContext.pageTitle,
+            recentToolCallsCount: 0,
+            modelPath: modelURL.lastPathComponent,
+            maxTokens: answerMaxTokens,
+            temperature: Double(attempt.temperature),
+            topP: Double(attempt.topP),
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            observationChars: logContext.contextChars,
+            elementCount: 0,
+            blockCount: 0,
+            itemCount: 0,
+            outlineCount: 0,
+            primaryChars: 0,
+            commentCount: 0,
+            tabCount: 0,
+            recentToolName: nil,
+            recentToolArgumentsPreview: nil,
+            recentToolResultStatus: nil,
+            recentToolResultPreview: nil,
+            stage: "collection_answer"
+        ))
+
+        let startedAt = Date()
+        do {
+            let result = try await generateJSONResponse(
+                container: container,
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                attempt: attempt,
+                maxOutputChars: maxOutputChars,
+                maxTokensOverride: answerMaxTokens
+            )
+            let output = result.output
+            let outcome = LLMCPResponseParser.parseWithOutcome(output)
+            let parsed = outcome.response
+            let durationMs = max(0, Date().timeIntervalSince(startedAt) * 1000)
+            logParseOutcome(outcome, logContext: logContext, stage: "collection_answer", outputChars: output.count)
+            LaikaLogger.logLLMEvent(.response(
+                id: requestId,
+                runId: logContext.runId,
+                step: logContext.step,
+                maxSteps: logContext.maxSteps,
+                modelPath: modelURL.lastPathComponent,
+                maxTokens: answerMaxTokens,
+                temperature: Double(attempt.temperature),
+                topP: Double(attempt.topP),
+                output: output,
+                toolCallsCount: parsed.toolCalls.count,
+                summary: parsed.summary,
+                error: nil,
+                durationMs: durationMs,
+                stage: "collection_answer",
+                firstTokenMs: result.firstTokenMs,
+                firstJSONMs: result.firstJSONMs,
+                captureMode: result.captureMode,
+                outputTruncated: result.outputTruncated
+            ))
+            return parsed
+        } catch {
+            let durationMs = max(0, Date().timeIntervalSince(startedAt) * 1000)
+            LaikaLogger.logLLMEvent(.response(
+                id: requestId,
+                runId: logContext.runId,
+                step: logContext.step,
+                maxSteps: logContext.maxSteps,
+                modelPath: modelURL.lastPathComponent,
+                maxTokens: answerMaxTokens,
+                temperature: Double(attempt.temperature),
+                topP: Double(attempt.topP),
+                output: "",
+                toolCallsCount: nil,
+                summary: nil,
+                error: error.localizedDescription,
+                durationMs: durationMs,
+                stage: "collection_answer"
+            ))
+            throw error
+        }
+    }
+
     private func generateJSONResponse(
         container: ModelContainer,
         systemPrompt: String,
@@ -459,6 +557,12 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         ]
     }
 
+    private func answerMaxTokens(sourceCount: Int) -> Int {
+        let base = 768
+        let bonus = min(max(sourceCount, 0), 8) * 64
+        return min(maxTokens, base + bonus)
+    }
+
     private func goalParseMaxTokens(goal: String) -> Int {
         let threshold = 140
         let desired = goal.count > threshold ? 128 : 72
@@ -504,6 +608,32 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
             runId: context.runId,
             step: context.step,
             maxSteps: context.maxSteps,
+            payload: payload
+        )
+    }
+
+    private func logParseOutcome(
+        _ outcome: LLMCPResponseParser.ParseOutcome,
+        logContext: AnswerLogContext,
+        stage: String,
+        outputChars: Int
+    ) {
+        guard outcome.mode != .strict else {
+            return
+        }
+        var payload: [String: LaikaShared.JSONValue] = [
+            "mode": .string(outcome.mode.rawValue),
+            "stage": .string(stage),
+            "outputChars": .number(Double(outputChars))
+        ]
+        if let error = outcome.error, !error.isEmpty {
+            payload["error"] = .string(LaikaLogger.preview(error, maxChars: 200))
+        }
+        LaikaLogger.logAgentEvent(
+            type: "llmcp.parse_mode",
+            runId: logContext.runId,
+            step: logContext.step,
+            maxSteps: logContext.maxSteps,
             payload: payload
         )
     }

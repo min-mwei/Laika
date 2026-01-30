@@ -17,6 +17,7 @@ var tabButtons = document.querySelectorAll(".tab-button");
 var tabPanels = document.querySelectorAll(".tab-panel");
 var addCurrentTabButton = document.getElementById("add-current-tab");
 var addSelectedLinksButton = document.getElementById("add-selected-links");
+var collectTopResultsButton = document.getElementById("collect-top-results");
 var pasteUrlsButton = document.getElementById("paste-urls");
 var addNoteButton = document.getElementById("add-note");
 var selectionPreview = document.getElementById("selection-preview");
@@ -34,6 +35,7 @@ var sourcesList = document.getElementById("sources-list");
 var DEFAULT_MAX_TOKENS = 3072;
 var MAX_TOKENS_CAP = 8192;
 var maxTokensSetting = DEFAULT_MAX_TOKENS;
+var DEFAULT_CAPTURE_MAX_CHARS = 24000;
 
 var lastObservation = null;
 var lastObservationTabId = null;
@@ -43,6 +45,7 @@ var planValidator = window.LaikaPlanValidator || {
     return { ok: true };
   }
 };
+var collectTopResultsHelper = window.LaikaCollectTopResults || null;
 
 var CHAT_HISTORY_KEY = "laika.chat.history.v1";
 // Stored as a unix epoch ms watermark. Entries older than this are treated as deleted.
@@ -58,6 +61,11 @@ var collections = [];
 var activeCollectionId = null;
 var sources = [];
 var selectionUrls = [];
+var captureQueueActive = false;
+var captureQueueRequested = false;
+var captureQueueTimer = null;
+var collectionChatLoadedId = null;
+var collectionChatLoading = false;
 
 var MESSAGE_FORMAT_PLAIN = "plain";
 var MESSAGE_FORMAT_RENDER = "render";
@@ -259,6 +267,7 @@ async function loadCollections() {
     activeCollectionId = typeof result.activeCollectionId === "string" ? result.activeCollectionId : null;
     renderCollections();
     await loadSources();
+    await loadChatHistory(true);
   } catch (error) {
     setSourcesStatus("Failed to load collections.");
   }
@@ -305,6 +314,7 @@ async function setActiveCollection(collectionId) {
     var result = unwrapNativeResult(response);
     activeCollectionId = typeof result.activeCollectionId === "string" ? result.activeCollectionId : collectionId;
     await loadSources();
+    await loadChatHistory(true);
   } catch (error) {
     setSourcesStatus("Failed to switch collection.");
   }
@@ -338,7 +348,9 @@ async function ensureActiveCollection() {
 
 async function createNewCollection() {
   activeCollectionId = null;
-  return await ensureActiveCollection();
+  var created = await ensureActiveCollection();
+  await loadChatHistory(true);
+  return created;
 }
 
 async function deleteActiveCollection() {
@@ -353,6 +365,7 @@ async function deleteActiveCollection() {
     var response = await sendCollectionMessage("delete", { collectionId: activeCollectionId });
     unwrapNativeResult(response);
     await loadCollections();
+    await loadChatHistory(true);
   } catch (error) {
     setSourcesStatus("Failed to delete collection.");
   }
@@ -375,6 +388,7 @@ async function loadSources() {
     var result = unwrapNativeResult(response);
     sources = Array.isArray(result.sources) ? result.sources : [];
     renderSources();
+    maybeScheduleCapture();
   } catch (error) {
     setSourcesStatus("Failed to load sources.");
   }
@@ -442,6 +456,95 @@ function renderSources() {
     item.appendChild(meta);
     sourcesList.appendChild(item);
   });
+}
+
+function hasPendingUrlSources() {
+  if (!Array.isArray(sources)) {
+    return false;
+  }
+  return sources.some(function (source) {
+    return source && source.kind === "url" && (source.captureStatus === "pending" || !source.captureStatus);
+  });
+}
+
+function scheduleCaptureQueue(delayMs) {
+  if (captureQueueTimer) {
+    clearTimeout(captureQueueTimer);
+  }
+  var delay = typeof delayMs === "number" && isFinite(delayMs) ? Math.max(50, Math.floor(delayMs)) : 250;
+  captureQueueTimer = setTimeout(function () {
+    captureQueueTimer = null;
+    processCaptureQueue();
+  }, delay);
+}
+
+function maybeScheduleCapture() {
+  if (captureQueueActive) {
+    return;
+  }
+  if (!activeCollectionId) {
+    return;
+  }
+  if (!hasPendingUrlSources()) {
+    return;
+  }
+  scheduleCaptureQueue(200);
+}
+
+async function captureSource(source) {
+  if (!source || !source.url) {
+    return;
+  }
+  try {
+    var response = await browser.runtime.sendMessage({
+      type: "laika.tool",
+      toolName: "source.capture",
+      args: {
+        collectionId: source.collectionId || activeCollectionId,
+        url: source.url,
+        mode: "auto",
+        maxChars: DEFAULT_CAPTURE_MAX_CHARS
+      }
+    });
+    if (!response || response.status !== "ok") {
+      setSourcesStatus("Capture failed: " + (response && response.error ? response.error : "unknown"));
+    }
+  } catch (error) {
+    setSourcesStatus("Capture failed: " + (error && error.message ? error.message : "unknown"));
+  }
+}
+
+async function processCaptureQueue() {
+  if (captureQueueActive) {
+    captureQueueRequested = true;
+    return;
+  }
+  captureQueueActive = true;
+  try {
+    while (true) {
+      await loadSources();
+      if (!activeCollectionId) {
+        break;
+      }
+      var pending = sources.filter(function (source) {
+        return source && source.kind === "url" && (source.captureStatus === "pending" || !source.captureStatus);
+      });
+      if (pending.length === 0) {
+        break;
+      }
+      var nextSource = pending[0];
+      var label = nextSource.title || nextSource.url || "source";
+      setSourcesStatus("Capturing " + label + "…");
+      await captureSource(nextSource);
+      await sleep(200);
+    }
+  } finally {
+    captureQueueActive = false;
+  }
+  if (captureQueueRequested) {
+    captureQueueRequested = false;
+    scheduleCaptureQueue(200);
+  }
 }
 
 function resetSelectionPreview() {
@@ -556,6 +659,40 @@ async function addCurrentTab() {
     await addSourcesToCollection([{ type: "url", url: url, title: title }]);
   } catch (error) {
     setSourcesStatus("Failed to add current tab.");
+  }
+}
+
+async function collectTopResults() {
+  if (!collectTopResultsHelper || typeof collectTopResultsHelper.extractTopResults !== "function") {
+    setSourcesStatus("Top results collection unavailable.");
+    return;
+  }
+  try {
+    var context = await observePage();
+    if (!context || !context.observation) {
+      setSourcesStatus("No page context found.");
+      return;
+    }
+    setSourcesStatus("Collecting top results...");
+    var extraction = collectTopResultsHelper.extractTopResults(context.observation, {
+      maxResults: 10,
+      hostCap: 2
+    });
+    var items = extraction && Array.isArray(extraction.items) ? extraction.items : [];
+    if (items.length === 0) {
+      setSourcesStatus("No result links found.");
+      return;
+    }
+    var sourceInputs = items.map(function (item) {
+      var input = { type: "url", url: item.url };
+      if (item.title) {
+        input.title = item.title;
+      }
+      return input;
+    });
+    await addSourcesToCollection(sourceInputs);
+  } catch (error) {
+    setSourcesStatus("Failed to collect top results.");
   }
 }
 
@@ -1221,6 +1358,31 @@ async function clearChatHistory() {
     appendMessage("system", "Can't clear chat while the agent is running.");
     return;
   }
+  if (activeCollectionId) {
+    try {
+      if (typeof window !== "undefined" && window.confirm) {
+        if (!window.confirm("Clear chat history for this collection?")) {
+          return;
+        }
+      }
+    } catch (error) {
+    }
+    try {
+      var response = await sendCollectionMessage("clear_chat", { collectionId: activeCollectionId });
+      unwrapNativeResult(response);
+      if (chatLog) {
+        chatLog.innerHTML = "";
+      }
+      collectionChatLoadedId = null;
+    } catch (error) {
+      appendMessage(
+        "system",
+        "Failed to clear collection chat: " + String(error && error.message ? error.message : error),
+        { save: false }
+      );
+    }
+    return;
+  }
   if (!chatHistory.length && (!chatLog || chatLog.childElementCount === 0)) {
     return;
   }
@@ -1284,7 +1446,12 @@ async function clearChatHistory() {
 }
 
 async function loadChatHistory() {
-  if (chatHistoryLoaded) {
+  var force = arguments.length > 0 ? Boolean(arguments[0]) : false;
+  if (activeCollectionId) {
+    await loadCollectionChatHistory(force);
+    return;
+  }
+  if (chatHistoryLoaded && !force) {
     return;
   }
   chatHistoryLoaded = true;
@@ -1328,6 +1495,214 @@ async function loadChatHistory() {
   syncChatHistory(loaded);
 }
 
+function renderCollectionChatHistory(events) {
+  if (!chatLog) {
+    return;
+  }
+  chatLog.innerHTML = "";
+  if (!Array.isArray(events) || events.length === 0) {
+    return;
+  }
+  events.forEach(function (event) {
+    if (!event || typeof event.markdown !== "string") {
+      return;
+    }
+    appendMessage(event.role || "assistant", event.markdown, {
+      format: MESSAGE_FORMAT_MARKDOWN,
+      save: false,
+      historyId: event.id
+    });
+  });
+}
+
+async function loadCollectionChatHistory(force) {
+  if (!activeCollectionId) {
+    if (chatLog) {
+      chatLog.innerHTML = "";
+    }
+    collectionChatLoadedId = null;
+    return;
+  }
+  if (!force && collectionChatLoadedId === activeCollectionId) {
+    return;
+  }
+  if (collectionChatLoading) {
+    return;
+  }
+  collectionChatLoading = true;
+  try {
+    var response = await sendCollectionMessage("list_chat", { collectionId: activeCollectionId, limit: 120 });
+    var result = unwrapNativeResult(response);
+    var events = Array.isArray(result.events) ? result.events : [];
+    renderCollectionChatHistory(events);
+    collectionChatLoadedId = activeCollectionId;
+  } catch (error) {
+    appendMessage(
+      "system",
+      "Failed to load collection chat: " + String(error && error.message ? error.message : error),
+      { save: false }
+    );
+  } finally {
+    collectionChatLoading = false;
+  }
+}
+
+function getCollectionTitle(collectionId) {
+  if (!collectionId) {
+    return "";
+  }
+  if (!Array.isArray(collections)) {
+    return "";
+  }
+  for (var i = 0; i < collections.length; i += 1) {
+    if (collections[i].id === collectionId) {
+      return collections[i].title || "";
+    }
+  }
+  return "";
+}
+
+function generateAnswerViewerToken() {
+  return "ans_" + String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+}
+
+async function openAnswerViewerTab(token) {
+  if (!token || typeof token !== "string") {
+    return false;
+  }
+  if (!browser || !browser.runtime || !browser.runtime.sendMessage) {
+    return false;
+  }
+  try {
+    var response = await browser.runtime.sendMessage({
+      type: "laika.answer_viewer.open_pending",
+      token: token
+    });
+    if (response && response.status === "ok") {
+      return true;
+    }
+  } catch (error) {
+    logDebug("open pending viewer failed: " + String(error && error.message ? error.message : error));
+  }
+  if (!browser.runtime.getURL) {
+    return false;
+  }
+  var viewerUrl = browser.runtime.getURL("answer_viewer.html") + "?token=" + encodeURIComponent(token);
+  if (browser.tabs && browser.tabs.create) {
+    try {
+      await browser.tabs.create({ url: viewerUrl, active: true });
+      return true;
+    } catch (error) {
+      logDebug("open answer viewer tab failed: " + String(error && error.message ? error.message : error));
+    }
+  }
+  try {
+    if (typeof window !== "undefined" && window.open) {
+      window.open(viewerUrl, "_blank");
+      return true;
+    }
+  } catch (error) {
+    logDebug("window.open answer viewer failed: " + String(error && error.message ? error.message : error));
+  }
+  return false;
+}
+
+async function fulfillAnswerViewer(token, payload) {
+  if (!token || typeof token !== "string") {
+    return false;
+  }
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+  if (!browser || !browser.runtime || !browser.runtime.sendMessage) {
+    return false;
+  }
+  try {
+    var response = await browser.runtime.sendMessage({
+      type: "laika.answer_viewer.fulfill",
+      token: token,
+      payload: payload
+    });
+    return response && response.status === "ok";
+  } catch (error) {
+    logDebug("fulfill answer viewer failed: " + String(error && error.message ? error.message : error));
+    return false;
+  }
+}
+
+async function openAnswerViewer(payload) {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  if (!browser || !browser.runtime || !browser.runtime.sendMessage) {
+    return;
+  }
+  try {
+    var response = await browser.runtime.sendMessage({
+      type: "laika.answer_viewer.open",
+      payload: payload
+    });
+    if (response && response.status === "ok") {
+      return;
+    }
+    if (!browser.tabs || !browser.runtime.getURL) {
+      return;
+    }
+    var fallback = await browser.runtime.sendMessage({
+      type: "laika.answer_viewer.store",
+      payload: payload
+    });
+    if (!fallback || fallback.status !== "ok" || !fallback.token) {
+      return;
+    }
+    var viewerUrl = browser.runtime.getURL("answer_viewer.html") + "?token=" + encodeURIComponent(fallback.token);
+    await browser.tabs.create({ url: viewerUrl, active: true });
+  } catch (error) {
+    logDebug("open answer viewer failed: " + String(error && error.message ? error.message : error));
+  }
+}
+
+async function sendCollectionAnswer(question) {
+  var collectionId = await ensureActiveCollection();
+  if (!collectionId) {
+    appendMessage("system", "Create a collection first.", { save: false });
+    return;
+  }
+  var viewerToken = generateAnswerViewerToken();
+  var viewerOpened = await openAnswerViewerTab(viewerToken);
+  if (!viewerOpened) {
+    viewerToken = null;
+  }
+  await loadMaxTokens();
+  var response = await sendCollectionMessage("answer", {
+    collectionId: collectionId,
+    question: question,
+    maxTokens: clampMaxTokens(maxTokensSetting)
+  });
+  var result = unwrapNativeResult(response);
+  var answer = result.answer || {};
+  var markdown = typeof answer.markdown === "string" ? answer.markdown : "";
+  appendMessage("assistant", markdown, { format: MESSAGE_FORMAT_MARKDOWN, save: false });
+  await loadCollectionChatHistory(true);
+  var payload = {
+    markdown: markdown,
+    title: typeof answer.title === "string" ? answer.title : "",
+    question: question,
+    collectionId: collectionId,
+    collectionTitle: getCollectionTitle(collectionId),
+    citations: Array.isArray(answer.citations) ? answer.citations : []
+  };
+  if (viewerToken) {
+    var delivered = await fulfillAnswerViewer(viewerToken, payload);
+    if (!delivered) {
+      logDebug("answer viewer delivery failed; falling back to inline open.");
+      await openAnswerViewer(payload);
+    }
+    return;
+  }
+  await openAnswerViewer(payload);
+}
+
 function appendMessage(role, text, options) {
   var message = document.createElement("div");
   message.className = "message";
@@ -1347,7 +1722,10 @@ function appendMessage(role, text, options) {
   renderMessageBody(body, content, format);
   message.appendChild(label);
   message.appendChild(body);
-  var shouldSave = !(options && options.save === false);
+  var shouldSave = !activeCollectionId;
+  if (options && typeof options.save === "boolean") {
+    shouldSave = options.save;
+  }
   if (shouldSave) {
     var historyId = generateHistoryId();
     message.setAttribute("data-history-id", historyId);
@@ -1738,7 +2116,7 @@ sendButton.addEventListener("click", async function () {
     appendMessage("system", "Enter a message first.");
     return;
   }
-  appendMessage("user", goal);
+  appendMessage("user", goal, { save: false });
   goalInput.value = "";
   sendButton.disabled = true;
   if (clearButton) {
@@ -1747,141 +2125,14 @@ sendButton.addEventListener("click", async function () {
   if (openPanelButton) {
     openPanelButton.disabled = true;
   }
-  lastObservationTabId = null;
-  lastAssistantFingerprint = "";
-  var searchTabIdsToCleanup = [];
-  var originTabId = null;
-
   try {
-    setStatus("Status: observing page...");
-    await loadMaxTokens();
-    var runId = generateRunId();
-    var tabsContext = await listTabContext();
-    var mode = "assist";
-    var maxSteps = MAX_AGENT_STEPS;
-    var observeOptions = shouldUseDetailObservation(goal) ? DETAIL_OBSERVE_OPTIONS : DEFAULT_OBSERVE_OPTIONS;
-    var firstObservation = await observeWithRetries(observeOptions, null);
-    lastObservation = firstObservation.observation;
-    var tabIdForPlan = firstObservation.tabId;
-    originTabId = tabIdForPlan;
-
-    var recentToolCalls = [];
-    var recentToolResults = [];
-
-    for (var step = 1; step <= maxSteps; step += 1) {
-      setStatus("Status: planning...");
-      var context = {
-        mode: mode,
-        runId: runId,
-        step: step,
-        maxSteps: maxSteps,
-        observation: lastObservation,
-        recentToolCalls: recentToolCalls.slice(-8),
-        recentToolResults: recentToolResults.slice(-8),
-        tabs: tabsContext
-      };
-      var response = await requestPlan(goal, context);
-      if (!response || response.ok !== true) {
-        appendMessage("system", "Plan failed: " + (response && response.error ? response.error : "unknown"));
-        return;
-      }
-      var plan = response.plan;
-      var validation = planValidator.validatePlanResponse(plan);
-      if (!validation.ok) {
-        appendMessage("system", "Invalid plan response: " + validation.error);
-        return;
-      }
-      var goalPlan = plan.goalPlan || null;
-      var nextAction = pickNextAction(plan.actions);
-      if (!nextAction) {
-        setStatus("Status: responding...");
-        appendAssistantFromPlan(plan);
-        break;
-      }
-      if (nextAction.policy.decision === "deny") {
-        appendMessage("system", "Blocked: " + nextAction.policy.reasonCode);
-        setStatus("Status: responding...");
-        appendAssistantFromPlan(plan);
-        break;
-      }
-      if (step === maxSteps) {
-        appendMessage("system", "Step limit reached.");
-        setStatus("Status: responding...");
-        appendAssistantFromPlan(plan);
-        break;
-      }
-
-      var approval = null;
-      if (nextAction.policy.decision === "ask") {
-        setStatus("Status: responding...");
-        appendAssistantFromPlan(plan);
-        setStatus("Status: awaiting approval...");
-        approval = await appendActionPrompt(nextAction, tabIdForPlan);
-        if (!approval || approval.decision !== "approve") {
-          appendMessage("system", "Stopped: action not approved.");
-          break;
-        }
-      } else {
-        setStatus("Status: running action...");
-        approval = { decision: "approve", result: await runTool(nextAction, tabIdForPlan) };
-      }
-
-      var toolResult = approval.result;
-      recentToolCalls.push(nextAction.toolCall);
-      recentToolResults.push(buildToolResult(nextAction.toolCall, nextAction.toolCall.name, toolResult));
-
-      var executedToolName = nextAction.toolCall.name;
-      if (executedToolName === "search" && toolResult && typeof toolResult.tabId === "number") {
-        if (searchTabIdsToCleanup.indexOf(toolResult.tabId) === -1) {
-          searchTabIdsToCleanup.push(toolResult.tabId);
-        }
-      }
-      if (toolResult && typeof toolResult.tabId === "number") {
-        tabIdForPlan = toolResult.tabId;
-      } else if (executedToolName === "search" || executedToolName === "browser.open_tab" || executedToolName === "browser.navigate") {
-        // Fall back to the currently active tab if the tool didn't return a tab id.
-        tabIdForPlan = null;
-      }
-      if (nextAction.toolCall.name === "browser.observe_dom" && toolResult && toolResult.observation) {
-        setStatus("Status: observing page...");
-        lastObservation = toolResult.observation;
-        if (typeof toolResult.tabId === "number") {
-          tabIdForPlan = toolResult.tabId;
-        }
-      } else {
-        setStatus("Status: observing page...");
-        tabsContext = await listTabContext();
-        var toolName = nextAction && nextAction.toolCall && nextAction.toolCall.name ? nextAction.toolCall.name : "";
-        var observeSettings = null;
-        // New tabs / navigations can take longer to load + inject the content script.
-        if (toolName === "search" || toolName === "browser.open_tab" || toolName === "browser.navigate") {
-          observeSettings = { attempts: 14, delayMs: 350, initialDelayMs: 700 };
-        }
-        var updated = await observeWithRetries(observeOptions, tabIdForPlan, observeSettings);
-        lastObservation = updated.observation;
-        tabIdForPlan = updated.tabId;
-      }
-    }
+    setStatus("Status: answering...");
+    await sendCollectionAnswer(goal);
+    setStatus("Status: ready");
   } catch (error) {
-    if (error && (error.message === "no_context" || error.message === "no_active_tab")) {
-      explainMissingContext();
-    } else {
-      appendMessage("system", "Error: " + error.message);
-    }
+    appendMessage("system", "Error: " + error.message, { save: false });
+    setStatus("Status: error");
   } finally {
-    if (searchTabIdsToCleanup.length && typeof browser !== "undefined" && browser.runtime && browser.runtime.sendMessage) {
-      try {
-        await browser.runtime.sendMessage({
-          type: "laika.search.cleanup",
-          tabIds: searchTabIdsToCleanup.slice(0),
-          fallbackTabId: originTabId
-        });
-      } catch (error) {
-        if (typeof console !== "undefined" && console.debug) {
-          console.debug("[Laika][search] cleanup_failed", error);
-        }
-      }
-    }
     sendButton.disabled = false;
     if (clearButton) {
       clearButton.disabled = false;
@@ -1913,6 +2164,9 @@ sendButton.addEventListener("click", async function () {
   if (browser.storage && browser.storage.onChanged) {
     browser.storage.onChanged.addListener(function (changes, areaName) {
       if (areaName !== "local" || !changes) {
+        return;
+      }
+      if (activeCollectionId) {
         return;
       }
       if (changes[CHAT_HISTORY_TOMBSTONE_KEY] && typeof changes[CHAT_HISTORY_TOMBSTONE_KEY].newValue === "number") {
@@ -1961,6 +2215,9 @@ sendButton.addEventListener("click", async function () {
   }
   if (addSelectedLinksButton) {
     addSelectedLinksButton.addEventListener("click", requestSelectionLinks);
+  }
+  if (collectTopResultsButton) {
+    collectTopResultsButton.addEventListener("click", collectTopResults);
   }
   if (selectionAddButton) {
     selectionAddButton.addEventListener("click", addSelectedLinks);

@@ -52,6 +52,11 @@ private actor NativeAgent {
         return response
     }
 
+    func answer(request: LLMCPRequest, logContext: AnswerLogContext, maxTokens: Int?) async throws -> ModelResponse {
+        let runner = ensureRunner(maxTokens: maxTokens)
+        return try await runner.generateAnswer(request: request, logContext: logContext)
+    }
+
     private func contextWithGoalPlan(_ context: ContextPack, goalPlan: GoalPlan) -> ContextPack {
         if context.goalPlan == goalPlan {
             return context
@@ -335,7 +340,13 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                 return ["ok": false, "error": "unsupported_tool"]
             }
         } catch {
-            return ["ok": false, "error": error.localizedDescription]
+            let message: String
+            if let collectionError = error as? CollectionStoreError {
+                message = collectionError.description
+            } else {
+                message = String(describing: error)
+            }
+            return ["ok": false, "error": message]
         }
     }
 
@@ -397,12 +408,327 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                 let payload = try decodePayload(CollectionDeleteSourcePayload.self, from: payload)
                 try await sharedCollections.deleteSource(collectionId: payload.collectionId, sourceId: payload.sourceId)
                 return ["ok": true, "result": ["status": "ok"]]
+            case "capture_update":
+                let payload = try decodePayload(CollectionCaptureUpdatePayload.self, from: payload)
+                switch payload.status {
+                case "captured":
+                    guard let markdown = payload.markdown else {
+                        throw CollectionStoreError.invalidRequest("capture_markdown_required")
+                    }
+                    try await sharedCollections.markSourceCaptured(
+                        collectionId: payload.collectionId,
+                        url: payload.url,
+                        title: payload.title,
+                        markdown: markdown,
+                        links: payload.links ?? []
+                    )
+                case "failed":
+                    let errorMessage = (payload.error ?? "").isEmpty ? "capture_failed" : payload.error!
+                    try await sharedCollections.markSourceCaptureFailed(
+                        collectionId: payload.collectionId,
+                        url: payload.url,
+                        error: errorMessage
+                    )
+                default:
+                    throw CollectionStoreError.invalidRequest("invalid_capture_status")
+                }
+                return ["ok": true, "result": ["status": "ok"]]
+            case "answer":
+                let payload = try decodePayload(CollectionAnswerPayload.self, from: payload)
+                let question = payload.question.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !question.isEmpty else {
+                    throw CollectionStoreError.invalidRequest("question_required")
+                }
+                guard let collection = try await sharedCollections.getCollection(collectionId: payload.collectionId) else {
+                    throw CollectionStoreError.invalidRequest("collection_not_found")
+                }
+                let maxSources = max(1, min(payload.maxSources ?? 10, 20))
+                let snapshots = try await sharedCollections.listSourceSnapshots(
+                    collectionId: payload.collectionId,
+                    limit: maxSources
+                )
+                let capturedSources = snapshots.filter { !$0.captureMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                guard !capturedSources.isEmpty else {
+                    throw CollectionStoreError.invalidRequest("no_captured_sources")
+                }
+                let runId = "collection:\(payload.collectionId)"
+                let turn = max(1, (try await sharedCollections.listChatEvents(collectionId: payload.collectionId, limit: 200).count + 1))
+                let (request, logContext, citationMap) = buildCollectionAnswerRequest(
+                    collection: collection,
+                    sources: capturedSources,
+                    question: question,
+                    runId: runId,
+                    turn: turn
+                )
+                let requestStartedAt = Date()
+                LaikaLogger.logAgentEvent(
+                    type: "native.collection_answer_request",
+                    runId: runId,
+                    step: nil,
+                    maxSteps: nil,
+                    payload: [
+                        "collectionId": .string(payload.collectionId),
+                        "questionPreview": .string(LaikaLogger.preview(question, maxChars: 200)),
+                        "sourceCount": .number(Double(capturedSources.count)),
+                        "contextChars": .number(Double(logContext.contextChars))
+                    ]
+                )
+                _ = try await sharedCollections.addChatEvent(
+                    collectionId: payload.collectionId,
+                    role: "user",
+                    markdown: question
+                )
+                let response = try await agent.answer(request: request, logContext: logContext, maxTokens: payload.maxTokens)
+                let citationsPayload = buildCitationPayload(response: response, sourceURLMap: citationMap)
+                var assistantMarkdown = response.assistant.render.markdown()
+                if assistantMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let summary = response.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !summary.isEmpty {
+                        assistantMarkdown = summary
+                    } else {
+                        let fallback = response.assistant.render.plainText().trimmingCharacters(in: .whitespacesAndNewlines)
+                        assistantMarkdown = fallback.isEmpty ? "Answer unavailable." : fallback
+                    }
+                }
+                let citationsJSON = encodeJSONArrayPayload(citationsPayload)
+                _ = try await sharedCollections.addChatEvent(
+                    collectionId: payload.collectionId,
+                    role: "assistant",
+                    markdown: assistantMarkdown,
+                    citationsJSON: citationsJSON
+                )
+                let durationMs = max(0, Date().timeIntervalSince(requestStartedAt) * 1000)
+                LaikaLogger.logAgentEvent(
+                    type: "native.collection_answer_response",
+                    runId: runId,
+                    step: nil,
+                    maxSteps: nil,
+                    payload: [
+                        "ok": .bool(true),
+                        "durationMs": .number(durationMs),
+                        "answerChars": .number(Double(assistantMarkdown.count))
+                    ]
+                )
+                let result: [String: Any] = [
+                    "status": "ok",
+                    "answer": [
+                        "title": response.assistant.title as Any,
+                        "markdown": assistantMarkdown,
+                        "citations": citationsPayload
+                    ]
+                ]
+                return ["ok": true, "result": result]
+            case "list_chat":
+                let payload = try decodePayload(CollectionListChatPayload.self, from: payload)
+                let limit = max(1, min(payload.limit ?? 60, 200))
+                let events = try await sharedCollections.listChatEvents(collectionId: payload.collectionId, limit: limit)
+                let resultEvents: [[String: Any]] = events.map { event in
+                    [
+                        "id": event.id,
+                        "role": event.role,
+                        "markdown": event.markdown,
+                        "citationsJSON": event.citationsJSON,
+                        "createdAtMs": event.createdAtMs
+                    ]
+                }
+                return ["ok": true, "result": ["status": "ok", "events": resultEvents]]
+            case "clear_chat":
+                let payload = try decodePayload(CollectionClearChatPayload.self, from: payload)
+                try await sharedCollections.clearChatEvents(collectionId: payload.collectionId)
+                return ["ok": true, "result": ["status": "ok"]]
             default:
                 return ["ok": false, "error": "unknown_action"]
             }
         } catch {
-            return ["ok": false, "error": error.localizedDescription]
+            let message: String
+            if let collectionError = error as? CollectionStoreError {
+                message = collectionError.description
+            } else {
+                message = error.localizedDescription
+            }
+            return ["ok": false, "error": message]
         }
+    }
+
+    private func buildCollectionAnswerRequest(
+        collection: CollectionRecord,
+        sources: [SourceSnapshot],
+        question: String,
+        runId: String,
+        turn: Int
+    ) -> (LLMCPRequest, AnswerLogContext, [String: String]) {
+        let conversationId = collection.id
+        let requestId = UUID().uuidString
+        let input = LLMCPInput(
+            userMessage: LLMCPUserMessage(id: UUID().uuidString, text: question),
+            task: LLMCPTask(name: "web.answer", args: nil)
+        )
+        let (documents, citationMap, contextChars) = buildCollectionDocuments(collection: collection, sources: sources)
+        let request = LLMCPRequest(
+            protocolInfo: LLMCPProtocol(name: "laika.llmcp", version: 1),
+            id: requestId,
+            type: .request,
+            createdAt: llmcpNowString(),
+            conversation: LLMCPConversation(id: conversationId, turn: turn),
+            sender: LLMCPSender(role: "agent"),
+            input: input,
+            context: LLMCPContext(documents: documents),
+            output: LLMCPOutputSpec(format: "json"),
+            trace: nil
+        )
+        let logContext = AnswerLogContext(
+            runId: runId,
+            step: nil,
+            maxSteps: nil,
+            origin: "collection",
+            pageURL: "collection:\(collection.id)",
+            pageTitle: collection.title,
+            sourceCount: sources.count,
+            contextChars: contextChars
+        )
+        return (request, logContext, citationMap)
+    }
+
+    private func buildCollectionDocuments(
+        collection: CollectionRecord,
+        sources: [SourceSnapshot]
+    ) -> ([LLMCPDocument], [String: String], Int) {
+        var documents: [LLMCPDocument] = []
+        var citationMap: [String: String] = [:]
+        var contextChars = 0
+
+        let indexDoc = collectionIndexDocument(collection: collection, sources: sources)
+        documents.append(indexDoc)
+
+        for source in sources {
+            citationMap[source.id] = source.url
+            contextChars += source.captureMarkdown.count
+            documents.append(collectionSourceDocument(collection: collection, source: source))
+        }
+
+        return (documents, citationMap, contextChars)
+    }
+
+    private func collectionIndexDocument(
+        collection: CollectionRecord,
+        sources: [SourceSnapshot]
+    ) -> LLMCPDocument {
+        let sourceEntries: [JSONValue] = sources.map { source in
+            var entry: [String: JSONValue] = [
+                "source_id": .string(source.id),
+                "url": .string(source.url)
+            ]
+            if let title = source.title, !title.isEmpty {
+                entry["title"] = .string(title)
+            }
+            if let capturedAt = source.capturedAtMs, let iso = isoString(fromMs: capturedAt) {
+                entry["captured_at"] = .string(iso)
+            }
+            return .object(entry)
+        }
+        var content: [String: JSONValue] = [
+            "doc_type": .string("collection.index.v1"),
+            "collection_id": .string(collection.id),
+            "title": .string(collection.title),
+            "sources": .array(sourceEntries)
+        ]
+        if !collection.tags.isEmpty {
+            content["tags"] = .array(collection.tags.map { .string($0) })
+        }
+        return LLMCPDocument(
+            docId: "doc:collection:index",
+            kind: "collection.index.v1",
+            trust: "untrusted",
+            source: nil,
+            content: .object(content)
+        )
+    }
+
+    private func collectionSourceDocument(
+        collection: CollectionRecord,
+        source: SourceSnapshot
+    ) -> LLMCPDocument {
+        var content: [String: JSONValue] = [
+            "doc_type": .string("collection.source.v1"),
+            "collection_id": .string(collection.id),
+            "source_id": .string(source.id),
+            "url": .string(source.url),
+            "markdown": .string(source.captureMarkdown)
+        ]
+        if let title = source.title, !title.isEmpty {
+            content["title"] = .string(title)
+        }
+        if let capturedAt = source.capturedAtMs, let iso = isoString(fromMs: capturedAt) {
+            content["captured_at"] = .string(iso)
+        }
+        if !source.extractedLinks.isEmpty {
+            let links = source.extractedLinks.map { link -> JSONValue in
+                var entry: [String: JSONValue] = [
+                    "url": .string(link.url)
+                ]
+                if let text = link.text, !text.isEmpty {
+                    entry["text"] = .string(text)
+                }
+                if let context = link.context, !context.isEmpty {
+                    entry["context"] = .string(context)
+                }
+                return .object(entry)
+            }
+            content["extracted_links"] = .array(links)
+        }
+        return LLMCPDocument(
+            docId: source.id,
+            kind: "collection.source.v1",
+            trust: "untrusted",
+            source: nil,
+            content: .object(content)
+        )
+    }
+
+    private func buildCitationPayload(
+        response: ModelResponse,
+        sourceURLMap: [String: String]
+    ) -> [[String: Any]] {
+        let citations = response.assistant.citations
+        guard !citations.isEmpty else {
+            return []
+        }
+        return citations.map { citation in
+            var entry: [String: Any] = ["source_id": citation.docId]
+            if let url = sourceURLMap[citation.docId], !url.isEmpty {
+                entry["url"] = url
+            }
+            if let quote = citation.quote, !quote.isEmpty {
+                entry["quote"] = quote
+            }
+            if let nodeId = citation.nodeId, !nodeId.isEmpty {
+                entry["locator"] = nodeId
+            } else if let handleId = citation.handleId, !handleId.isEmpty {
+                entry["locator"] = handleId
+            }
+            return entry
+        }
+    }
+
+    private func isoString(fromMs ms: Int64) -> String? {
+        let date = Date(timeIntervalSince1970: Double(ms) / 1000.0)
+        let formatter = ISO8601DateFormatter()
+        return formatter.string(from: date)
+    }
+
+    private func llmcpNowString() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: Date())
+    }
+
+    private func encodeJSONArrayPayload(_ array: [[String: Any]]) -> String {
+        guard JSONSerialization.isValidJSONObject(array),
+              let data = try? JSONSerialization.data(withJSONObject: array, options: []),
+              let json = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return json
     }
 
     private func collectionPayload(_ record: CollectionRecord) -> [String: Any] {
@@ -474,4 +800,30 @@ private struct CollectionDeletePayload: Decodable {
 private struct CollectionDeleteSourcePayload: Decodable {
     let collectionId: String
     let sourceId: String
+}
+
+private struct CollectionCaptureUpdatePayload: Decodable {
+    let collectionId: String
+    let url: String
+    let status: String
+    let title: String?
+    let markdown: String?
+    let links: [CapturedLink]?
+    let error: String?
+}
+
+private struct CollectionAnswerPayload: Decodable {
+    let collectionId: String
+    let question: String
+    let maxTokens: Int?
+    let maxSources: Int?
+}
+
+private struct CollectionListChatPayload: Decodable {
+    let collectionId: String
+    let limit: Int?
+}
+
+private struct CollectionClearChatPayload: Decodable {
+    let collectionId: String
 }

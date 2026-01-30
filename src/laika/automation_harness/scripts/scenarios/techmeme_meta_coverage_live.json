@@ -2,8 +2,21 @@
   "url": "https://www.techmeme.com/",
   "goals": [
     "On Techmeme, locate the Meta coverage block and identify these links: https://investor.atmeta.com/investor-news/press-release-details/2026/Meta-Reports-Fourth-Quarter-and-Full-Year-2025-Results/default.aspx, https://techcrunch.com/2026/01/28/zuckerberg-teases-agentic-commerce-tools-and-major-ai-rollout-in-2026/, https://www.bloomberg.com/news/articles/2026-01-28/meta-says-2026-spending-will-blow-past-analysts-estimates. Prefer links found on the page; only open those links and avoid unrelated/social links.",
-    "Create a new collection titled \"Meta 2026 coverage\", add the three URLs, and capture each source with bounded Markdown (maxChars 24000).",
-    "Using only the collection sources, answer: \"What are the key differences in how each outlet is covering this story?\" Provide a concise comparison with citations."
+    {
+      "type": "collection.capture",
+      "title": "Meta 2026 coverage",
+      "urls": [
+        "https://investor.atmeta.com/investor-news/press-release-details/2026/Meta-Reports-Fourth-Quarter-and-Full-Year-2025-Results/default.aspx",
+        "https://techcrunch.com/2026/01/28/zuckerberg-teases-agentic-commerce-tools-and-major-ai-rollout-in-2026/",
+        "https://www.bloomberg.com/news/articles/2026-01-28/meta-says-2026-spending-will-blow-past-analysts-estimates"
+      ],
+      "maxChars": 24000
+    },
+    {
+      "type": "collection.answer",
+      "question": "What are the key differences in how each outlet is covering this story?",
+      "maxSources": 10
+    }
   ],
   "options": {
     "maxSteps": 10,

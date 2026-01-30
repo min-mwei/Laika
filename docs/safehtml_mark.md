@@ -98,6 +98,13 @@ Baseline rule ideas (mirrors the reference):
 - We do not "execute" page content; we only read and normalize it.
 - Captures should be bounded and provenance-tagged so we can explain what was used.
 
+### 3.5 Implementation notes (vNext)
+
+- The capture pipeline is driven by `source.capture` in the extension background.
+- The background opens (or reuses) a tab, then sends `laika.capture` to the content script.
+- The content script runs Readability + Turndown, bounds Markdown, and returns only Markdown + link metadata.
+- The background forwards results to the native store via `collection.capture_update` (no raw HTML crosses the boundary).
+
 ---
 
 ## 4) Rendering pipeline (Markdown -> safe HTML)

@@ -35,6 +35,10 @@ public struct Document: Codable, Equatable, Sendable {
         DocumentTextRenderer().render(document: self)
     }
 
+    public func markdown() -> String {
+        DocumentMarkdownRenderer().render(document: self)
+    }
+
     private enum CodingKeys: String, CodingKey {
         case type
         case children
@@ -202,6 +206,140 @@ private struct DocumentTextRenderer {
             return renderInline(children)
         case .list:
             return ""
+        case .codeBlock(_, let text):
+            return text
+        }
+    }
+}
+
+private struct DocumentMarkdownRenderer {
+    func render(document: Document) -> String {
+        let parts = document.children.compactMap { renderBlock($0) }
+        return parts.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func renderBlock(_ node: DocumentNode) -> String? {
+        switch node {
+        case .heading(let level, let children):
+            let clamped = max(1, min(level, 6))
+            let text = renderInline(children)
+            guard !text.isEmpty else {
+                return nil
+            }
+            return String(repeating: "#", count: clamped) + " " + text
+        case .paragraph(let children):
+            let text = renderInline(children)
+            return text.isEmpty ? nil : text
+        case .list(let ordered, let items):
+            return renderList(items: items, ordered: ordered)
+        case .listItem(let children):
+            let text = renderListItem(children: children)
+            return text.isEmpty ? nil : text
+        case .blockquote(let children):
+            let inner = renderBlocks(children)
+            guard !inner.isEmpty else {
+                return nil
+            }
+            let lines = inner.split(separator: "\n", omittingEmptySubsequences: false)
+            return lines.map { $0.isEmpty ? ">" : "> " + $0 }.joined(separator: "\n")
+        case .codeBlock(let language, let text):
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                return nil
+            }
+            let lang = language?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let fence = lang.isEmpty ? "```" : "```" + lang
+            return [fence, trimmed, "```"].joined(separator: "\n")
+        case .text, .link:
+            let inline = renderInline([node])
+            return inline.isEmpty ? nil : inline
+        }
+    }
+
+    private func renderBlocks(_ nodes: [DocumentNode]) -> String {
+        let parts = nodes.compactMap { renderBlock($0) }
+        return parts.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func renderList(items: [DocumentNode], ordered: Bool) -> String? {
+        guard !items.isEmpty else {
+            return nil
+        }
+        var lines: [String] = []
+        lines.reserveCapacity(items.count)
+        for (index, item) in items.enumerated() {
+            let content: String
+            switch item {
+            case .listItem(let children):
+                content = renderListItem(children: children)
+            default:
+                content = renderBlock(item) ?? ""
+            }
+            if content.isEmpty {
+                continue
+            }
+            let parts = content.split(separator: "\n", omittingEmptySubsequences: false)
+            let prefix = ordered ? "\(index + 1). " : "- "
+            for (lineIndex, line) in parts.enumerated() {
+                if lineIndex == 0 {
+                    lines.append(prefix + line)
+                } else {
+                    lines.append("  " + line)
+                }
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func renderListItem(children: [DocumentNode]) -> String {
+        var fragments: [String] = []
+        for child in children {
+            switch child {
+            case .text, .link:
+                let inline = renderInline([child])
+                if !inline.isEmpty {
+                    fragments.append(inline)
+                }
+            case .paragraph(let inner):
+                let text = renderInline(inner)
+                if !text.isEmpty {
+                    fragments.append(text)
+                }
+            default:
+                if let block = renderBlock(child) {
+                    fragments.append(block)
+                }
+            }
+        }
+        return fragments.joined(separator: "\n")
+    }
+
+    private func renderInline(_ nodes: [DocumentNode]) -> String {
+        var output = ""
+        for node in nodes {
+            output.append(renderInlineNode(node))
+        }
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func renderInlineNode(_ node: DocumentNode) -> String {
+        switch node {
+        case .text(let text):
+            return text
+        case .link(let href, let children):
+            let text = renderInline(children)
+            let label = text.isEmpty ? href : text
+            return "[" + label + "](" + href + ")"
+        case .heading(_, let children):
+            return renderInline(children)
+        case .paragraph(let children):
+            return renderInline(children)
+        case .listItem(let children):
+            return renderInline(children)
+        case .list(let ordered, let items):
+            return renderList(items: items, ordered: ordered) ?? ""
+        case .blockquote(let children):
+            return renderInline(children)
         case .codeBlock(_, let text):
             return text
         }

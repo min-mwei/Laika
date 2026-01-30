@@ -247,7 +247,6 @@ var NATIVE_TOOLS = {
   "collection.create": true,
   "collection.add_sources": true,
   "collection.list_sources": true,
-  "source.capture": true,
   "source.refresh": true,
   "transform.list_types": true,
   "transform.run": true,
@@ -281,6 +280,80 @@ var AUTOMATION_ALLOWED_HOSTS = {
   "127.0.0.1": true,
   "localhost": true
 };
+
+var ANSWER_VIEWER_STORE = {};
+var ANSWER_VIEWER_TTL_MS = 10 * 60 * 1000;
+
+function pruneAnswerViewerStore() {
+  var now = Date.now();
+  Object.keys(ANSWER_VIEWER_STORE).forEach(function (token) {
+    var entry = ANSWER_VIEWER_STORE[token];
+    if (!entry || typeof entry.createdAt !== "number" || now - entry.createdAt > ANSWER_VIEWER_TTL_MS) {
+      delete ANSWER_VIEWER_STORE[token];
+    }
+  });
+}
+
+function storeAnswerPayload(payload, token) {
+  pruneAnswerViewerStore();
+  var storedToken = token;
+  if (!storedToken || typeof storedToken !== "string") {
+    storedToken = String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+  }
+  ANSWER_VIEWER_STORE[storedToken] = { payload: payload, createdAt: Date.now() };
+  return storedToken;
+}
+
+function fetchAnswerPayload(token) {
+  pruneAnswerViewerStore();
+  if (!token || typeof token !== "string") {
+    return null;
+  }
+  var entry = ANSWER_VIEWER_STORE[token];
+  if (!entry) {
+    return null;
+  }
+  delete ANSWER_VIEWER_STORE[token];
+  return entry.payload;
+}
+
+function openAnswerViewer(payload, sender) {
+  var token = storeAnswerPayload(payload);
+  if (!browser || !browser.tabs || !browser.runtime || !browser.runtime.getURL) {
+    return Promise.resolve({ status: "error", error: "tabs_unavailable" });
+  }
+  var url = browser.runtime.getURL("answer_viewer.html") + "?token=" + encodeURIComponent(token);
+  var windowId = resolveOwnerWindowId(sender, null);
+  var createOptions = { url: url, active: true };
+  if (isNumericId(windowId)) {
+    createOptions.windowId = windowId;
+  }
+  return browser.tabs.create(createOptions).then(function () {
+    return { status: "ok", token: token };
+  }).catch(function () {
+    return { status: "error", error: "open_tab_failed" };
+  });
+}
+
+function openAnswerViewerPending(token, sender) {
+  if (!token || typeof token !== "string") {
+    return Promise.resolve({ status: "error", error: "invalid_token" });
+  }
+  if (!browser || !browser.tabs || !browser.runtime || !browser.runtime.getURL) {
+    return Promise.resolve({ status: "error", error: "tabs_unavailable" });
+  }
+  var url = browser.runtime.getURL("answer_viewer.html") + "?token=" + encodeURIComponent(token);
+  var windowId = resolveOwnerWindowId(sender, null);
+  var createOptions = { url: url, active: true };
+  if (isNumericId(windowId)) {
+    createOptions.windowId = windowId;
+  }
+  return browser.tabs.create(createOptions).then(function () {
+    return { status: "ok", token: token };
+  }).catch(function () {
+    return { status: "error", error: "open_tab_failed" };
+  });
+}
 var AUTOMATION_RUNS = {};
 var AUTOMATION_PORTS = {};
 
@@ -330,7 +403,28 @@ var TAB_SCRIPTABLE_TIMEOUT_MS = 2500;
 var TAB_INJECTION_DELAY_MS = 250;
 var TAB_PING_TIMEOUT_MS = 2000;
 var TAB_PING_TOTAL_MS = 8000;
-var CONTENT_SCRIPT_FILES = ["lib/text_utils.js", "content_script.js"];
+var CAPTURE_MESSAGE_TIMEOUT_MS = 20000;
+var CAPTURE_DEFAULT_MAX_CHARS = 24000;
+var CAPTURE_MIN_MAX_CHARS = 2000;
+var CAPTURE_MAX_MAX_CHARS = 120000;
+var CAPTURE_FALLBACK_OBSERVE_OPTIONS = {
+  maxChars: 12000,
+  maxElements: 160,
+  maxBlocks: 40,
+  maxPrimaryChars: 1600,
+  maxOutline: 80,
+  maxOutlineChars: 180,
+  maxItems: 30,
+  maxItemChars: 240,
+  maxComments: 28,
+  maxCommentChars: 360
+};
+var CONTENT_SCRIPT_FILES = [
+  "lib/text_utils.js",
+  "lib/vendor/readability.js",
+  "lib/vendor/turndown.js",
+  "content_script.js"
+];
 
 var DEFAULT_SIDECAR_SIDE = "right";
 var DEFAULT_SIDECAR_STICKY = true;
@@ -1036,6 +1130,159 @@ async function handleObserve(options, sender, tabOverride, ensureFocused) {
   }
 }
 
+async function resolveCaptureTab(url, sender, tabOverride) {
+  if (!browser.tabs) {
+    return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
+  }
+  if (browser.tabs.query) {
+    try {
+      var existing = await browser.tabs.query({ url: url });
+      if (existing && existing.length && isNumericId(existing[0].id)) {
+        return { status: "ok", tabId: existing[0].id, created: false };
+      }
+    } catch (error) {
+    }
+  }
+  if (!browser.tabs.create) {
+    return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
+  }
+  var targetWindowId = await getTabWindowId(tabOverride);
+  if (!isNumericId(targetWindowId)) {
+    targetWindowId = resolveOwnerWindowId(sender, null);
+  }
+  var createOptions = { url: url, active: false };
+  if (isNumericId(targetWindowId)) {
+    createOptions.windowId = targetWindowId;
+  }
+  try {
+    var tab = await browser.tabs.create(createOptions);
+    return { status: "ok", tabId: tab.id, created: true };
+  } catch (error) {
+    return { status: "error", error: ToolErrorCode.OPEN_TAB_FAILED };
+  }
+}
+
+async function sendCaptureUpdate(payload) {
+  var response = await sendCollectionAction("capture_update", payload || {});
+  if (response && response.ok && response.result && response.result.status === "ok") {
+    return { status: "ok" };
+  }
+  if (response && response.result && response.result.error) {
+    return { status: "error", error: response.result.error };
+  }
+  if (response && response.error) {
+    return { status: "error", error: response.error };
+  }
+  return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
+}
+
+async function handleSourceCapture(args, sender, tabOverride) {
+  var collectionId = args && typeof args.collectionId === "string" ? args.collectionId.trim() : "";
+  if (!collectionId) {
+    return { status: "error", error: ToolErrorCode.INVALID_ARGUMENTS };
+  }
+  var safeUrl = sanitizeOpenUrl(args && args.url);
+  if (!safeUrl) {
+    return { status: "error", error: ToolErrorCode.INVALID_URL };
+  }
+  var mode = normalizeCaptureMode(args && args.mode);
+  var maxChars = clampCaptureMaxChars(args && args.maxChars);
+  var captureTab = await resolveCaptureTab(safeUrl, sender, tabOverride);
+  if (!captureTab || captureTab.status !== "ok") {
+    return { status: "error", error: captureTab && captureTab.error ? captureTab.error : ToolErrorCode.NO_TARGET_TAB };
+  }
+  var tabId = captureTab.tabId;
+  if (!isNumericId(tabId)) {
+    return { status: "error", error: ToolErrorCode.NO_TARGET_TAB };
+  }
+
+  var captureResult = null;
+  try {
+    captureResult = await sendTabMessageWithTimeout(
+      tabId,
+      { type: "laika.capture", options: { mode: mode, maxChars: maxChars } },
+      { allowInject: true, waitForReady: true, timeoutMs: CAPTURE_MESSAGE_TIMEOUT_MS, attempts: 2 }
+    );
+  } catch (error) {
+    captureResult = { status: "error", error: error && error.code ? error.code : "capture_failed" };
+  }
+
+  var markdown = null;
+  var title = "";
+  var links = [];
+  var truncated = false;
+  if (captureResult && captureResult.status === "ok" && typeof captureResult.markdown === "string") {
+    markdown = captureResult.markdown;
+    if (!markdown || markdown.trim().length < 80) {
+      markdown = null;
+      captureResult.error = captureResult.error || "capture_empty";
+    }
+    title = typeof captureResult.title === "string" ? captureResult.title : "";
+    truncated = !!captureResult.truncated;
+    if (Array.isArray(captureResult.links)) {
+      links = captureResult.links;
+    }
+  } else {
+    try {
+      var observeResult = await sendTabMessageWithTimeout(
+        tabId,
+        { type: "laika.observe", options: CAPTURE_FALLBACK_OBSERVE_OPTIONS },
+        { allowInject: true, waitForReady: true, timeoutMs: CAPTURE_MESSAGE_TIMEOUT_MS, attempts: 1 }
+      );
+      if (observeResult && observeResult.status === "ok" && observeResult.observation) {
+        var fallback = buildFallbackMarkdown(observeResult.observation, maxChars);
+        markdown = fallback.markdown;
+        truncated = fallback.truncated;
+        title = observeResult.observation.title || title;
+        if (Array.isArray(observeResult.observation.items)) {
+          links = observeResult.observation.items.slice(0, 12).map(function (item) {
+            return {
+              url: item.url,
+              text: item.title || item.url || "",
+              context: item.snippet || ""
+            };
+          }).filter(function (item) { return item.url; });
+        }
+      }
+    } catch (error) {
+    }
+  }
+
+  if (captureTab.created && browser.tabs && browser.tabs.remove) {
+    try {
+      await browser.tabs.remove(tabId);
+    } catch (error) {
+    }
+  }
+
+  if (!markdown) {
+    var failResult = await sendCaptureUpdate({
+      collectionId: collectionId,
+      url: safeUrl,
+      status: "failed",
+      error: captureResult && captureResult.error ? captureResult.error : "capture_failed"
+    });
+    if (failResult.status !== "ok") {
+      return failResult;
+    }
+    return { status: "error", error: captureResult && captureResult.error ? captureResult.error : "capture_failed" };
+  }
+
+  var updateResult = await sendCaptureUpdate({
+    collectionId: collectionId,
+    url: safeUrl,
+    status: "captured",
+    title: title,
+    markdown: markdown,
+    links: links,
+    truncated: truncated
+  });
+  if (updateResult.status !== "ok") {
+    return updateResult;
+  }
+  return { status: "ok", url: safeUrl, title: title, truncated: truncated };
+}
+
 async function handleSearchTool(args, sender, tabOverride) {
   if (!SearchTools || typeof SearchTools.buildSearchUrl !== "function") {
     logSearch("error", { stage: "init", error: ToolErrorCode.SEARCH_UNAVAILABLE });
@@ -1445,6 +1692,99 @@ function sanitizeOpenUrl(url) {
   }
 }
 
+function normalizeCaptureMode(mode) {
+  if (mode === "article" || mode === "list") {
+    return mode;
+  }
+  return "auto";
+}
+
+function clampCaptureMaxChars(value) {
+  if (typeof value !== "number" || !isFinite(value)) {
+    return CAPTURE_DEFAULT_MAX_CHARS;
+  }
+  var rounded = Math.floor(value);
+  if (rounded < CAPTURE_MIN_MAX_CHARS) {
+    return CAPTURE_MIN_MAX_CHARS;
+  }
+  if (rounded > CAPTURE_MAX_MAX_CHARS) {
+    return CAPTURE_MAX_MAX_CHARS;
+  }
+  return rounded;
+}
+
+function boundCaptureMarkdown(markdown, maxChars) {
+  var text = String(markdown || "");
+  var total = text.length;
+  var limit = clampCaptureMaxChars(maxChars);
+  if (total <= limit) {
+    return { markdown: text, truncated: false, totalChars: total, headChars: total, tailChars: 0 };
+  }
+  var marker = "\n\n...\n\n[Truncated: captured first {head} chars and last {tail} chars]\n\n";
+  var overhead = marker.length + 10;
+  var head = Math.max(0, Math.floor((limit - overhead) * 0.6));
+  var tail = Math.max(0, limit - overhead - head);
+  if (tail < 200 && limit > 400) {
+    tail = 200;
+    head = Math.max(0, limit - overhead - tail);
+  }
+  var headText = text.slice(0, head);
+  var tailText = tail > 0 ? text.slice(total - tail) : "";
+  var markerText = marker.replace("{head}", String(head)).replace("{tail}", String(tail));
+  return {
+    markdown: headText + markerText + tailText,
+    truncated: true,
+    totalChars: total,
+    headChars: head,
+    tailChars: tail
+  };
+}
+
+function buildFallbackMarkdown(observation, maxChars) {
+  if (!observation || typeof observation !== "object") {
+    return boundCaptureMarkdown("", maxChars);
+  }
+  var lines = [];
+  if (observation.title) {
+    lines.push("# " + observation.title);
+  }
+  if (observation.primary && observation.primary.text) {
+    lines.push(String(observation.primary.text).trim());
+  } else if (observation.text) {
+    lines.push(String(observation.text).trim());
+  }
+  if (Array.isArray(observation.items) && observation.items.length > 0) {
+    lines.push("## Links");
+    var maxItems = Math.min(observation.items.length, 12);
+    for (var i = 0; i < maxItems; i += 1) {
+      var item = observation.items[i];
+      if (!item || !item.url) {
+        continue;
+      }
+      var title = item.title || item.url;
+      var line = "- [" + title + "](" + item.url + ")";
+      if (item.snippet) {
+        line += " — " + item.snippet;
+      }
+      lines.push(line);
+    }
+  }
+  var markdown = lines.join("\n\n");
+  return boundCaptureMarkdown(markdown, maxChars);
+}
+
+async function sendCollectionAction(action, payload) {
+  try {
+    return await sendNativeMessage({
+      type: "collection",
+      action: action,
+      payload: payload || {}
+    });
+  } catch (error) {
+    return { ok: false, error: "native_messaging_unavailable" };
+  }
+}
+
 function defaultSearchSettings() {
   if (SearchTools && typeof SearchTools.normalizeSettings === "function") {
     return SearchTools.normalizeSettings(null);
@@ -1780,6 +2120,9 @@ async function handleTool(toolName, args, sender, tabOverride) {
   }
   if (NATIVE_TOOLS[toolName]) {
     return await runNativeTool(toolName, args);
+  }
+  if (toolName === "source.capture") {
+    return await handleSourceCapture(args || {}, sender, tabOverride);
   }
   if (toolName === "browser.observe_dom") {
     function clampInt(value, min, max) {
@@ -2618,6 +2961,39 @@ browser.runtime.onMessage.addListener(function (message, sender) {
     return closePanelWindow(sender, message.windowId).then(function () {
       return { status: "ok" };
     });
+  }
+  if (message.type === "laika.answer_viewer.open") {
+    if (!message.payload || typeof message.payload !== "object") {
+      return Promise.resolve({ status: "error", error: "invalid_payload" });
+    }
+    return openAnswerViewer(message.payload, sender);
+  }
+  if (message.type === "laika.answer_viewer.open_pending") {
+    return openAnswerViewerPending(message.token, sender);
+  }
+  if (message.type === "laika.answer_viewer.store") {
+    if (!message.payload || typeof message.payload !== "object") {
+      return Promise.resolve({ status: "error", error: "invalid_payload" });
+    }
+    var token = storeAnswerPayload(message.payload);
+    return Promise.resolve({ status: "ok", token: token });
+  }
+  if (message.type === "laika.answer_viewer.fulfill") {
+    if (!message.payload || typeof message.payload !== "object") {
+      return Promise.resolve({ status: "error", error: "invalid_payload" });
+    }
+    if (!message.token || typeof message.token !== "string") {
+      return Promise.resolve({ status: "error", error: "missing_token" });
+    }
+    var storedToken = storeAnswerPayload(message.payload, message.token);
+    return Promise.resolve({ status: "ok", token: storedToken });
+  }
+  if (message.type === "laika.answer_viewer.get") {
+    var payload = fetchAnswerPayload(message.token);
+    if (!payload) {
+      return Promise.resolve({ status: "error", error: "not_found" });
+    }
+    return Promise.resolve({ status: "ok", payload: payload });
   }
   if (message.type === "laika.automation.enable") {
     if (!message.nonce || typeof message.nonce !== "string") {

@@ -52,6 +52,68 @@ final class CollectionStoreTests: XCTestCase {
         XCTAssertEqual(result.activeCollectionId, first.id)
     }
 
+    func testCaptureUpdatesStatus() async throws {
+        let (store, tempDir) = try makeStore()
+        defer { cleanupTempHome(tempDir) }
+
+        let collection = try await store.createCollection(title: "Capture")
+        let url = "https://example.com/article"
+        _ = try await store.addSources(
+            collectionId: collection.id,
+            sources: [SourceInput(type: .url, url: url, title: "Example")]
+        )
+
+        try await store.markSourceCaptured(
+            collectionId: collection.id,
+            url: url,
+            title: "Example",
+            markdown: "# Example\n\nBody",
+            links: [CapturedLink(url: "https://example.com/next", text: "Next", context: "Next link")]
+        )
+        let afterCapture = try await store.listSources(collectionId: collection.id)
+        XCTAssertEqual(afterCapture.first(where: { $0.url == url })?.captureStatus, .captured)
+
+        try await store.markSourceCaptureFailed(
+            collectionId: collection.id,
+            url: url,
+            error: "capture_failed"
+        )
+        let afterFailure = try await store.listSources(collectionId: collection.id)
+        XCTAssertEqual(afterFailure.first(where: { $0.url == url })?.captureStatus, .failed)
+    }
+
+    func testSourceSnapshotsAndChatEvents() async throws {
+        let (store, tempDir) = try makeStore()
+        defer { cleanupTempHome(tempDir) }
+
+        let collection = try await store.createCollection(title: "History")
+        let url = "https://example.com/article"
+        _ = try await store.addSources(
+            collectionId: collection.id,
+            sources: [SourceInput(type: .url, url: url, title: "Example")]
+        )
+        try await store.markSourceCaptured(
+            collectionId: collection.id,
+            url: url,
+            title: "Example",
+            markdown: "# Example\n\nBody",
+            links: [CapturedLink(url: "https://example.com/more", text: "More", context: "More link")]
+        )
+        let snapshots = try await store.listSourceSnapshots(collectionId: collection.id, limit: 5)
+        XCTAssertEqual(snapshots.count, 1)
+        XCTAssertEqual(snapshots.first?.url, url)
+        XCTAssertEqual(snapshots.first?.extractedLinks.count, 1)
+
+        _ = try await store.addChatEvent(collectionId: collection.id, role: "user", markdown: "Question?")
+        _ = try await store.addChatEvent(collectionId: collection.id, role: "assistant", markdown: "Answer.")
+        let events = try await store.listChatEvents(collectionId: collection.id, limit: 10)
+        XCTAssertEqual(events.count, 2)
+
+        try await store.clearChatEvents(collectionId: collection.id)
+        let cleared = try await store.listChatEvents(collectionId: collection.id, limit: 10)
+        XCTAssertEqual(cleared.count, 0)
+    }
+
     private func makeStore() throws -> (CollectionStore, URL) {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("LAIKA_HOME", tempDir.path, 1)

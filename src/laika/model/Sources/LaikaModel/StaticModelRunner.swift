@@ -23,6 +23,12 @@ public final class StaticModelRunner: StreamingModelRunner {
         return ModelResponse(toolCalls: [], assistant: assistant)
     }
 
+    public func generateAnswer(request: LLMCPRequest, logContext: AnswerLogContext) async throws -> ModelResponse {
+        let render = Document.paragraph(text: "Answer unavailable in static mode.")
+        let assistant = AssistantMessage(render: render)
+        return ModelResponse(toolCalls: [], assistant: assistant)
+    }
+
     private func selectClickTarget(from elements: [ObservedElement], goal: String) -> ObservedElement? {
         guard !elements.isEmpty else {
             return nil
