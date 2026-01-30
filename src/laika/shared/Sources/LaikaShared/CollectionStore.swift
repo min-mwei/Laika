@@ -114,6 +114,7 @@ public actor CollectionStore {
         "fbclid", "gclid", "yclid", "mc_cid", "mc_eid", "ref", "ref_src", "ref_url",
         "referrer", "source", "spm", "igshid", "mkt_tok"
     ]
+    private let defaultCaptureVersion = 1
     private let databaseURL: URL?
     private var database: SQLiteDatabase?
     private var openError: String?
@@ -260,7 +261,7 @@ public actor CollectionStore {
                 querySQL = """
                 SELECT id, collection_id, source_id, url, attempt_count, max_attempts
                 FROM capture_jobs
-                WHERE status = 'queued' AND collection_id = ?
+                WHERE status = 'queued' AND attempt_count < max_attempts AND collection_id = ?
                 ORDER BY created_at_ms ASC
                 LIMIT 1;
                 """
@@ -268,7 +269,7 @@ public actor CollectionStore {
                 querySQL = """
                 SELECT id, collection_id, source_id, url, attempt_count, max_attempts
                 FROM capture_jobs
-                WHERE status = 'queued'
+                WHERE status = 'queued' AND attempt_count < max_attempts
                 ORDER BY created_at_ms ASC
                 LIMIT 1;
                 """
@@ -299,6 +300,7 @@ public actor CollectionStore {
                 let updateSQL = """
                 UPDATE capture_jobs
                 SET status = 'running',
+                    attempt_count = MIN(attempt_count + 1, max_attempts),
                     updated_at_ms = ?,
                     started_at_ms = COALESCE(started_at_ms, ?)
                 WHERE id = ? AND status = 'queued';
@@ -311,6 +313,16 @@ public actor CollectionStore {
                 try db.step(updateStatement)
                 if db.changes() == 0 {
                     job = nil
+                } else {
+                    let bumped = min(claimedJob.attemptCount + 1, claimedJob.maxAttempts)
+                    job = CaptureJobRecord(
+                        id: claimedJob.id,
+                        collectionId: claimedJob.collectionId,
+                        sourceId: claimedJob.sourceId,
+                        url: claimedJob.url,
+                        attemptCount: bumped,
+                        maxAttempts: claimedJob.maxAttempts
+                    )
                 }
             }
             try db.exec(sql: "COMMIT;")
@@ -555,12 +567,13 @@ public actor CollectionStore {
                     continue
                 }
                 let sourceId = makeId(prefix: "src")
+                let captureVersion = defaultCaptureVersion
                 let insertSQL = """
                 INSERT INTO sources (
                   id, collection_id, kind, url, normalized_url, title,
                   provenance_json, capture_status, capture_version,
                   added_at_ms, updated_at_ms
-                ) VALUES (?, ?, 'url', ?, ?, ?, '{}', 'pending', 1, ?, ?);
+                ) VALUES (?, ?, 'url', ?, ?, ?, '{}', 'pending', ?, ?, ?);
                 """
                 let insertStatement = try db.prepare(insertSQL)
                 sqlite3_bind_text(insertStatement, 1, sourceId, -1, SQLITE_TRANSIENT)
@@ -572,8 +585,9 @@ public actor CollectionStore {
                 } else {
                     sqlite3_bind_null(insertStatement, 5)
                 }
-                sqlite3_bind_int64(insertStatement, 6, nowMs)
+                sqlite3_bind_int(insertStatement, 6, Int32(captureVersion))
                 sqlite3_bind_int64(insertStatement, 7, nowMs)
+                sqlite3_bind_int64(insertStatement, 8, nowMs)
                 let insertResult = sqlite3_step(insertStatement)
                 sqlite3_finalize(insertStatement)
                 if insertResult == SQLITE_CONSTRAINT {
@@ -583,7 +597,11 @@ public actor CollectionStore {
                 if insertResult != SQLITE_DONE {
                     throw CollectionStoreError.sqliteFailure(db.lastErrorMessage())
                 }
-                let dedupeKey = "\(collectionId):\(normalized)"
+                let dedupeKey = captureDedupeKey(
+                    collectionId: collectionId,
+                    normalizedUrl: normalized,
+                    captureVersion: captureVersion
+                )
                 try queueCaptureJob(
                     sourceId: sourceId,
                     collectionId: collectionId,
@@ -917,7 +935,6 @@ public actor CollectionStore {
         UPDATE capture_jobs
         SET status = ?,
             last_error = ?,
-            attempt_count = MIN(attempt_count + 1, max_attempts),
             updated_at_ms = ?,
             finished_at_ms = ?,
             started_at_ms = COALESCE(started_at_ms, ?)
@@ -1063,6 +1080,23 @@ public actor CollectionStore {
 
     private func hashMarkdown(_ markdown: String) -> String? {
         guard let data = markdown.data(using: .utf8) else {
+            return nil
+        }
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func captureDedupeKey(
+        collectionId: String,
+        normalizedUrl: String,
+        captureVersion: Int
+    ) -> String {
+        let raw = "capture:\(collectionId):\(normalizedUrl):\(captureVersion)"
+        return hashString(raw) ?? ""
+    }
+
+    private func hashString(_ value: String) -> String? {
+        guard let data = value.data(using: .utf8) else {
             return nil
         }
         let digest = SHA256.hash(data: data)

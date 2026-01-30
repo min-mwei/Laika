@@ -2072,6 +2072,18 @@ function buildToolResult(toolCall, toolName, rawResult) {
   }
   if (toolName === "browser.open_tab" && rawResult && typeof rawResult.tabId === "number") {
     payload.tabId = rawResult.tabId;
+    if (typeof rawResult.ready === "boolean") {
+      payload.ready = rawResult.ready;
+    }
+    if (typeof rawResult.readyAttempts === "number") {
+      payload.readyAttempts = rawResult.readyAttempts;
+    }
+    if (rawResult.reloaded) {
+      payload.reloaded = true;
+    }
+    if (rawResult.reopened) {
+      payload.reopened = true;
+    }
   }
   if (toolName === "browser.observe_dom" && rawResult && rawResult.observation) {
     payload.url = rawResult.observation.url || "";

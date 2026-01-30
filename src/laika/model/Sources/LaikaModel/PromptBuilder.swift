@@ -278,6 +278,27 @@ Tools:
         return userPrompt(request: request, runId: context.runId, step: context.step, maxSteps: context.maxSteps)
     }
 
+    static func markdownUserPrompt(request: LLMCPRequest) -> String {
+        var lines: [String] = []
+        lines.append("# User Request")
+        lines.append(request.input.userMessage.text)
+
+        lines.append("")
+        lines.append("# Task")
+        lines.append(taskLine(for: request.input.task))
+
+        lines.append("")
+        lines.append("# Context")
+        for document in request.context.documents {
+            let rendered = renderMarkdownDocument(document)
+            if !rendered.isEmpty {
+                lines.append(rendered)
+                lines.append("")
+            }
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     static func userPrompt(request: LLMCPRequest, runId: String? = nil, step: Int? = nil, maxSteps: Int? = nil) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -301,4 +322,291 @@ Tools:
         }
     }
 
+    private static func taskLine(for task: LLMCPTask) -> String {
+        var parts: [String] = []
+        parts.append(task.name)
+        if let args = task.args, !args.isEmpty {
+            let renderedArgs = args.keys.sorted().compactMap { key -> String? in
+                guard let value = renderArgumentValue(args[key]) else {
+                    return nil
+                }
+                return "\(key)=\(value)"
+            }
+            if !renderedArgs.isEmpty {
+                parts.append("(\(renderedArgs.joined(separator: ", ")))")
+            }
+        }
+        return "Task: " + parts.joined(separator: " ")
+    }
+
+    private static func renderArgumentValue(_ value: JSONValue?) -> String? {
+        guard let value else { return nil }
+        switch value {
+        case .string(let text):
+            return "\"\(text)\""
+        case .number(let number):
+            if number.rounded(.towardZero) == number {
+                return String(Int(number))
+            }
+            return String(number)
+        case .bool(let flag):
+            return flag ? "true" : "false"
+        default:
+            return nil
+        }
+    }
+
+    private static func renderMarkdownDocument(_ document: LLMCPDocument) -> String {
+        guard case .object(let content) = document.content else {
+            return ""
+        }
+        switch document.kind {
+        case "collection.index.v1":
+            return renderCollectionIndex(document: document, content: content)
+        case "collection.source.v1":
+            return renderCollectionSource(document: document, content: content)
+        case "web.observation.summary.v1":
+            return renderObservationSummary(document: document, content: content)
+        case "web.observation.chunk.v1":
+            return renderObservationChunk(document: document, content: content)
+        default:
+            return renderGenericDocument(document: document, content: content)
+        }
+    }
+
+    private static func renderCollectionIndex(document: LLMCPDocument, content: [String: JSONValue]) -> String {
+        var lines: [String] = []
+        lines.append("## Collection Index")
+        if let title = stringValue(content["title"]), !title.isEmpty {
+            lines.append("Title: \(title)")
+        }
+        if let collectionId = stringValue(content["collection_id"]), !collectionId.isEmpty {
+            lines.append("Collection ID: \(collectionId)")
+        }
+        if let sources = arrayValue(content["sources"]), !sources.isEmpty {
+            lines.append("Sources:")
+            for source in sources {
+                guard case .object(let sourceObj) = source else { continue }
+                let sourceId = stringValue(sourceObj["source_id"]) ?? "source"
+                let title = stringValue(sourceObj["title"]) ?? ""
+                let url = stringValue(sourceObj["url"]) ?? ""
+                var line = "- [\(sourceId)]"
+                if !title.isEmpty {
+                    line += " \(title)"
+                }
+                if !url.isEmpty {
+                    line += " — \(url)"
+                }
+                lines.append(line)
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func renderCollectionSource(document: LLMCPDocument, content: [String: JSONValue]) -> String {
+        let markdown = stringValue(content["markdown"]) ?? ""
+        if markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return ""
+        }
+        var lines: [String] = []
+        let sourceId = stringValue(content["source_id"]) ?? document.docId
+        lines.append("## Source \(sourceId)")
+        if let title = stringValue(content["title"]), !title.isEmpty {
+            lines.append("Title: \(title)")
+        }
+        if let url = stringValue(content["url"]), !url.isEmpty {
+            lines.append("URL: \(url)")
+        }
+        lines.append("")
+        lines.append(markdown)
+        return lines.joined(separator: "\n")
+    }
+
+    private static func renderObservationSummary(document: LLMCPDocument, content: [String: JSONValue]) -> String {
+        var lines: [String] = []
+        lines.append("## Page Summary")
+        if let title = stringValue(content["title"]), !title.isEmpty {
+            lines.append("Title: \(title)")
+        }
+        if let url = stringValue(content["url"]), !url.isEmpty {
+            lines.append("URL: \(url)")
+        }
+        let summaryText = stringValue(content["text"]) ?? ""
+        if !summaryText.isEmpty {
+            lines.append("")
+            lines.append(summaryText)
+        } else if let primary = objectValue(content["primary"]),
+                  let primaryText = stringValue(primary["text"]),
+                  !primaryText.isEmpty {
+            lines.append("")
+            lines.append(primaryText)
+        }
+        if let items = arrayValue(content["items"]), !items.isEmpty {
+            lines.append("")
+            lines.append("Items:")
+            for (index, item) in items.enumerated() {
+                guard case .object(let itemObj) = item else { continue }
+                let title = stringValue(itemObj["title"]) ?? ""
+                let snippet = stringValue(itemObj["snippet"]) ?? ""
+                let url = stringValue(itemObj["url"]) ?? ""
+                var line = "\(index + 1)."
+                if !title.isEmpty {
+                    line += " \(title)"
+                }
+                if !snippet.isEmpty {
+                    line += " — \(snippet)"
+                }
+                if !url.isEmpty {
+                    line += " (\(url))"
+                }
+                lines.append(line)
+            }
+        }
+        if let discussions = arrayValue(content["top_discussions"]), !discussions.isEmpty {
+            lines.append("")
+            lines.append("Top discussions:")
+            for discussion in discussions {
+                guard case .object(let discussionObj) = discussion else { continue }
+                let title = stringValue(discussionObj["title"]) ?? ""
+                let url = stringValue(discussionObj["url"]) ?? ""
+                let count = intValue(discussionObj["comment_count"])
+                var line = "- \(title)"
+                if !url.isEmpty {
+                    line += " (\(url))"
+                }
+                if let count {
+                    line += " — comments: \(count)"
+                }
+                lines.append(line)
+            }
+        }
+        if let comments = arrayValue(content["comments"]), !comments.isEmpty {
+            lines.append("")
+            lines.append("Comments:")
+            for comment in comments {
+                guard case .object(let commentObj) = comment else { continue }
+                let text = stringValue(commentObj["text"]) ?? ""
+                if text.isEmpty { continue }
+                var line = "- \(text)"
+                let author = stringValue(commentObj["author"]) ?? ""
+                let age = stringValue(commentObj["age"]) ?? ""
+                let score = stringValue(commentObj["score"]) ?? ""
+                var meta: [String] = []
+                if !author.isEmpty { meta.append(author) }
+                if !age.isEmpty { meta.append(age) }
+                if !score.isEmpty { meta.append("score \(score)") }
+                if !meta.isEmpty {
+                    line += " — " + meta.joined(separator: ", ")
+                }
+                lines.append(line)
+            }
+        }
+        if let outline = arrayValue(content["outline"]), !outline.isEmpty {
+            lines.append("")
+            lines.append("Outline:")
+            for item in outline {
+                guard case .object(let outlineObj) = item else { continue }
+                let text = stringValue(outlineObj["text"]) ?? ""
+                if text.isEmpty { continue }
+                lines.append("- \(text)")
+            }
+        }
+        if let signals = arrayValue(content["signals"]), !signals.isEmpty {
+            let labels = signals.compactMap { stringValue($0) }
+            if !labels.isEmpty {
+                lines.append("")
+                lines.append("Signals: " + labels.joined(separator: ", "))
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func renderObservationChunk(document: LLMCPDocument, content: [String: JSONValue]) -> String {
+        let index = intValue(content["chunk_index"])
+        let total = intValue(content["chunk_count"])
+        var header = "## Page Chunk"
+        if let index, let total {
+            header = "## Page Chunk \(index)/\(total)"
+        } else if let index {
+            header = "## Page Chunk \(index)"
+        }
+        var lines: [String] = [header]
+        if let url = stringValue(content["url"]), !url.isEmpty {
+            lines.append("URL: \(url)")
+        }
+        let text = stringValue(content["text"]) ?? ""
+        if !text.isEmpty {
+            lines.append("")
+            lines.append(text)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func renderGenericDocument(document: LLMCPDocument, content: [String: JSONValue]) -> String {
+        let markdown = stringValue(content["markdown"]) ?? ""
+        let text = stringValue(content["text"]) ?? ""
+        if markdown.isEmpty && text.isEmpty {
+            return ""
+        }
+        var lines: [String] = []
+        lines.append("## Document \(document.docId)")
+        lines.append("Kind: \(document.kind)")
+        if let title = stringValue(content["title"]), !title.isEmpty {
+            lines.append("Title: \(title)")
+        }
+        if let url = stringValue(content["url"]), !url.isEmpty {
+            lines.append("URL: \(url)")
+        }
+        let body = markdown.isEmpty ? text : markdown
+        if !body.isEmpty {
+            lines.append("")
+            lines.append(body)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func stringValue(_ value: JSONValue?) -> String? {
+        guard let value else { return nil }
+        switch value {
+        case .string(let text):
+            return text
+        case .number(let number):
+            if number.rounded(.towardZero) == number {
+                return String(Int(number))
+            }
+            return String(number)
+        case .bool(let flag):
+            return flag ? "true" : "false"
+        default:
+            return nil
+        }
+    }
+
+    private static func arrayValue(_ value: JSONValue?) -> [JSONValue]? {
+        guard let value else { return nil }
+        if case .array(let array) = value {
+            return array
+        }
+        return nil
+    }
+
+    private static func objectValue(_ value: JSONValue?) -> [String: JSONValue]? {
+        guard let value else { return nil }
+        if case .object(let object) = value {
+            return object
+        }
+        return nil
+    }
+
+    private static func intValue(_ value: JSONValue?) -> Int? {
+        guard let value else { return nil }
+        switch value {
+        case .number(let number):
+            return Int(number)
+        case .string(let text):
+            return Int(text)
+        default:
+            return nil
+        }
+    }
 }

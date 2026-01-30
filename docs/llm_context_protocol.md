@@ -84,6 +84,11 @@ Most runtimes accept strings (`system`/`user`). LLMCP is the logical payload:
 - **User content**: serialized request packet (or the request packet's `input` + `context` object).
 - **Local models**: disable "thinking" traces when possible (e.g., Qwen3 `enable_thinking=false`) so responses remain valid JSON.
 
+For **markdown output** tasks, the host may skip the full JSON envelope in the user prompt and instead send a **compact Markdown pack**:
+- User request + task hints
+- A list of context documents rendered as Markdown
+This keeps prompts shorter while honoring the same logical LLMCP content.
+
 ---
 
 ## Request packet (`type: "request"`)
@@ -137,6 +142,7 @@ In this mode:
 - Tool calls are **not allowed**; if tools are needed, use `output.format="json"`.
 - The host may still accept JSON if the model ignores instructions, but Markdown is the canonical
   response format.
+ - Hosts may also use the compact Markdown pack described above to reduce prompt overhead.
 
 ---
 

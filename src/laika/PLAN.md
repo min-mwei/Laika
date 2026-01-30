@@ -176,15 +176,25 @@ As of 2026-01-29, we are treating the following as confirmed/locked for Phase 0:
 We are incorporating the review notes in `src/feedback.md` as follows:
 
 ### Immediate P0 actions (this iteration)
-- **Tool surface gating:** expose only tools with end-to-end implementations; reject stubbed transforms/artifacts/integrations in plan validation and background allowlist until implemented.
-- **Collection context budgeting:** cap per-source markdown and overall context size to keep answers stable as collections grow.
-- **Capture bookkeeping fixes:** populate `capture_jobs.dedupe_key`, increment `attempt_count` on each attempt, and fix relative link extraction.
-- **URL normalization consistency:** remove tracking parameters and normalize query ordering in the native store; apply similar normalization for pasted/selected URLs in the UI.
-- **Durable answers:** store answer events in SQLite with citations and reopen via the answer viewer (viewer falls back to stored chat events).
-- **Background capture queue:** claim `capture_jobs` in the background and run `source.capture` without requiring the sidecar UI.
-- **Read-only markdown output:** ensure `output.format="markdown"` routes through a markdown-only system prompt for collection answers.
-- **Context packing fix:** prefer `observation.text` for chunking (or whichever is longer), and avoid duplicating identical excerpts in multiple fields.
-- **Coverage retry trim:** when coverage is missing, retry with only missing sources + prior answer context (avoid resending full collection).
+Goal: complete these before moving on to P1 work. Status is tracked inline.
+
+- **Tool surface gating (done):** expose only tools with end-to-end implementations; reject stubbed transforms/artifacts/integrations in plan validation and background allowlist until implemented.
+- **Collection context budgeting (done):** cap per-source markdown and overall context size to keep answers stable as collections grow; prefer ranked/trimmed sources when over budget.
+- **Capture bookkeeping fixes (done):** populate `capture_jobs.dedupe_key`, increment `attempt_count` on each attempt, and fix relative link extraction.
+- **URL normalization consistency (done):** remove tracking parameters and normalize query ordering in the native store; apply similar normalization for pasted/selected URLs in the UI.
+- **Durable answers (done):** store answer events in SQLite with citations and reopen via the answer viewer (viewer falls back to stored chat events).
+- **Background capture queue (done):** claim `capture_jobs` in the background and run `source.capture` without requiring the sidecar UI.
+- **Read-only markdown output (done):** ensure `output.format="markdown"` routes through a markdown-only system prompt for collection answers; JSON parsing is bypassed when markdown output is requested.
+- **Context packing fix (done):** prefer `observation.text` for chunking (or whichever is longer), and avoid duplicating identical excerpts in multiple fields.
+- **Coverage retry trim (done):** when coverage is missing, retry with only missing sources + prior answer context (avoid resending full collection).
+- **Page summarize markdown path (done):** `web.summarize` requests emit `output.format="markdown"` and route through markdown prompting in `generatePlan`.
+- **JSON capture start heuristic (done):** start JSON capture at the first `{` anywhere in output rather than disabling after non-JSON preamble.
+- **Markdown prompt compaction (done):** stop JSON-encoding full request objects for markdown tasks; send a compact Markdown pack instead.
+  - Approach: build a Markdown pack from LLMCP docs (collection sources + page summaries/chunks) with lightweight headers + URLs, and use it for `output.format="markdown"` tasks in the model runner.
+- **Open-tab readiness + retry (done):** treat new tabs as a handshake: `browser.open_tab` waits for content-script readiness; if missing, reload once and re-inject, then (if still missing) re-open in the same window. Only as a last resort fall back to `browser.navigate` in the current tab. Log error details so we can diagnose host/permission failures.
+- **Streaming markdown to UI (pending):** stream markdown outputs into the popover/answer viewer for faster perceived latency.
+- **Prompt/packing telemetry (pending):** log prompt size stats (`systemPromptChars`, `userPromptChars`, `contextChars`) and packing metrics (`chunkCount`, `textChars`, `primaryChars`).
+- **Goal parse heuristic gating (pending):** avoid extra model calls when heuristics can resolve page/item/comment intent.
 
 ### P1 follow-ups (design work queued)
 - **Capture pipeline ownership:** evaluate a native-managed scheduler + retry/backoff policy now that the background queue claims jobs.

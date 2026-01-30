@@ -400,6 +400,7 @@ var TAB_SCRIPTABLE_TIMEOUT_MS = 2500;
 var TAB_INJECTION_DELAY_MS = 250;
 var TAB_PING_TIMEOUT_MS = 2000;
 var TAB_PING_TOTAL_MS = 8000;
+var TAB_OPEN_READY_TOTAL_MS = 14000;
 var CAPTURE_MESSAGE_TIMEOUT_MS = 20000;
 var CAPTURE_DEFAULT_MAX_CHARS = 24000;
 var CAPTURE_MIN_MAX_CHARS = 2000;
@@ -918,7 +919,22 @@ async function injectContentScripts(tabId) {
   } catch (error) {
     return false;
   }
-  if (!tab || !isScriptableUrl(tab.url || "")) {
+  if (!tab) {
+    return false;
+  }
+  var tabUrl = typeof tab.url === "string" ? tab.url : "";
+  var pendingUrl = typeof tab.pendingUrl === "string" ? tab.pendingUrl : "";
+  if (!isScriptableUrl(tabUrl) && isScriptableUrl(pendingUrl)) {
+    var ready = await waitForTabComplete(tabId, TAB_READY_TIMEOUT_MS);
+    if (ready) {
+      try {
+        tab = await browser.tabs.get(tabId);
+        tabUrl = typeof tab.url === "string" ? tab.url : tabUrl;
+      } catch (error) {
+      }
+    }
+  }
+  if (!isScriptableUrl(tabUrl)) {
     return false;
   }
   try {
@@ -999,10 +1015,22 @@ async function sendTabMessageWithTimeout(tabId, payload, options) {
   throw new Error("message_failed");
 }
 
-async function waitForContentScript(tabId) {
-  var deadline = Date.now() + TAB_PING_TOTAL_MS;
+async function waitForContentScript(tabId, options) {
+  var opts = options && typeof options === "object" ? options : {};
+  var totalMs = typeof opts.totalMs === "number" && isFinite(opts.totalMs) && opts.totalMs > 0
+    ? Math.floor(opts.totalMs)
+    : TAB_PING_TOTAL_MS;
+  var pingTimeoutMs = typeof opts.pingTimeoutMs === "number" && isFinite(opts.pingTimeoutMs) && opts.pingTimeoutMs > 0
+    ? Math.floor(opts.pingTimeoutMs)
+    : TAB_PING_TIMEOUT_MS;
+  var pingAttempts = typeof opts.pingAttempts === "number" && isFinite(opts.pingAttempts) && opts.pingAttempts > 0
+    ? Math.floor(opts.pingAttempts)
+    : 2;
+  var shouldFocus = opts.focus !== false;
+  var allowInject = opts.allowInject !== false;
+  var deadline = Date.now() + totalMs;
   while (Date.now() < deadline) {
-    if (browser.tabs && browser.tabs.get) {
+    if (shouldFocus && browser.tabs && browser.tabs.get) {
       try {
         var tab = await browser.tabs.get(tabId);
         if (tab) {
@@ -1015,7 +1043,7 @@ async function waitForContentScript(tabId) {
       var result = await sendTabMessageWithTimeout(
         tabId,
         { type: "laika.ping" },
-        { allowInject: true, waitForReady: true, timeoutMs: TAB_PING_TIMEOUT_MS, attempts: 2 }
+        { allowInject: allowInject, waitForReady: true, timeoutMs: pingTimeoutMs, attempts: pingAttempts }
       );
       if (result && result.status === "ok") {
         return true;
@@ -1025,6 +1053,58 @@ async function waitForContentScript(tabId) {
     await sleep(300);
   }
   return false;
+}
+
+async function ensureTabReadyAfterOpen(tabId, url, createOptions, options) {
+  var opts = options && typeof options === "object" ? options : {};
+  var totalMs = typeof opts.readyTimeoutMs === "number" && isFinite(opts.readyTimeoutMs) && opts.readyTimeoutMs > 0
+    ? Math.floor(opts.readyTimeoutMs)
+    : TAB_OPEN_READY_TOTAL_MS;
+  var focus = typeof opts.focus === "boolean" ? opts.focus : !(createOptions && createOptions.active === false);
+  var ready = await waitForContentScript(tabId, { totalMs: totalMs, focus: focus });
+  var attempts = 1;
+  var reloaded = false;
+  var reopened = false;
+  var finalTabId = tabId;
+  if (!ready && opts.reloadOnFail !== false && browser.tabs && browser.tabs.reload) {
+    try {
+      await browser.tabs.reload(finalTabId);
+      reloaded = true;
+      attempts += 1;
+      ready = await waitForContentScript(finalTabId, { totalMs: totalMs, focus: focus });
+    } catch (error) {
+    }
+  }
+  if (!ready && opts.reopenOnFail !== false && browser.tabs && browser.tabs.create) {
+    var reopenOptions = { url: url, active: createOptions && createOptions.active === false ? false : true };
+    if (createOptions && isNumericId(createOptions.windowId)) {
+      reopenOptions.windowId = createOptions.windowId;
+    }
+    try {
+      var reopenedTab = await browser.tabs.create(reopenOptions);
+      if (reopenedTab && isNumericId(reopenedTab.id)) {
+        var previousTabId = finalTabId;
+        finalTabId = reopenedTab.id;
+        reopened = true;
+        attempts += 1;
+        ready = await waitForContentScript(finalTabId, { totalMs: totalMs, focus: focus });
+        if (opts.closeOnReopen !== false && browser.tabs && browser.tabs.remove && isNumericId(previousTabId)) {
+          try {
+            await browser.tabs.remove(previousTabId);
+          } catch (error) {
+          }
+        }
+      }
+    } catch (error) {
+    }
+  }
+  return {
+    ready: ready,
+    attempts: attempts,
+    reloaded: reloaded,
+    reopened: reopened,
+    tabId: finalTabId
+  };
 }
 
 async function handleObserve(options, sender, tabOverride, ensureFocused) {
@@ -1066,14 +1146,22 @@ async function handleObserve(options, sender, tabOverride, ensureFocused) {
     } catch (error) {
     }
   }
-  var ready = await waitForContentScript(tabId);
+  var ready = await waitForContentScript(tabId, {
+    totalMs: isAutomationSender ? TAB_OPEN_READY_TOTAL_MS : TAB_PING_TOTAL_MS
+  });
   if (!ready) {
     if (isAutomationSender && browser.tabs && browser.tabs.reload) {
       try {
         await browser.tabs.reload(tabId);
       } catch (error) {
       }
-      ready = await waitForContentScript(tabId);
+      ready = await waitForContentScript(tabId, { totalMs: TAB_OPEN_READY_TOTAL_MS });
+    }
+  }
+  if (!ready) {
+    var injected = await injectContentScripts(tabId);
+    if (injected) {
+      ready = await waitForContentScript(tabId, { totalMs: TAB_OPEN_READY_TOTAL_MS });
     }
   }
   if (!ready) {
@@ -1084,7 +1172,9 @@ async function handleObserve(options, sender, tabOverride, ensureFocused) {
       errorDetails: {
         code: "no_content_script",
         url: tabSnapshot && tabSnapshot.url ? tabSnapshot.url : null,
-        status: tabSnapshot && tabSnapshot.status ? tabSnapshot.status : null
+        pendingUrl: tabSnapshot && tabSnapshot.pendingUrl ? tabSnapshot.pendingUrl : null,
+        status: tabSnapshot && tabSnapshot.status ? tabSnapshot.status : null,
+        windowId: tabSnapshot && isNumericId(tabSnapshot.windowId) ? tabSnapshot.windowId : null
       }
     };
   }
@@ -2292,14 +2382,45 @@ async function handleTool(toolName, args, sender, tabOverride) {
       if (isNumericId(targetWindowId)) {
         createOptions.windowId = targetWindowId;
       }
+      async function createAndEnsure(options) {
+        var created = await browser.tabs.create(options);
+        if (!created || !isNumericId(created.id)) {
+          return { status: "error", error: ToolErrorCode.OPEN_TAB_FAILED };
+        }
+        var readiness = await ensureTabReadyAfterOpen(created.id, safeUrl, options, {
+          readyTimeoutMs: TAB_OPEN_READY_TOTAL_MS,
+          reloadOnFail: true,
+          reopenOnFail: true,
+          closeOnReopen: true,
+          focus: options.active !== false
+        });
+        var response = {
+          status: "ok",
+          tabId: readiness && isNumericId(readiness.tabId) ? readiness.tabId : created.id,
+          ready: readiness ? !!readiness.ready : true
+        };
+        if (readiness) {
+          if (typeof readiness.attempts === "number") {
+            response.readyAttempts = readiness.attempts;
+          }
+          if (readiness.reloaded) {
+            response.reloaded = true;
+          }
+          if (readiness.reopened) {
+            response.reopened = true;
+          }
+          if (!readiness.ready) {
+            response.errorDetails = { code: "no_content_script", url: safeUrl };
+          }
+        }
+        return response;
+      }
       try {
-        var created = await browser.tabs.create(createOptions);
-        return { status: "ok", tabId: created && isNumericId(created.id) ? created.id : null };
+        return await createAndEnsure(createOptions);
       } catch (error) {
         if (isNumericId(createOptions.windowId)) {
           try {
-            var createdFallback = await browser.tabs.create({ url: safeUrl, active: true });
-            return { status: "ok", tabId: createdFallback && isNumericId(createdFallback.id) ? createdFallback.id : null };
+            return await createAndEnsure({ url: safeUrl, active: true });
           } catch (innerError) {
           }
         }
@@ -2816,12 +2937,12 @@ async function startAutomationRun(message, sender) {
       return { status: "error", error: "target_tab_failed" };
     }
     recordAutomationTab(targetTabId);
-    var contentReady = await waitForContentScript(targetTabId);
+    var contentReady = await waitForContentScript(targetTabId, { totalMs: TAB_OPEN_READY_TOTAL_MS });
     if (!contentReady && sender && sender.tab && isNumericId(sender.tab.id)) {
       var fallbackResult = await handleTool("browser.navigate", { url: message.targetUrl }, sender, sender.tab.id);
       if (fallbackResult && fallbackResult.status === "ok") {
         targetTabId = sender.tab.id;
-        await waitForContentScript(targetTabId);
+        await waitForContentScript(targetTabId, { totalMs: TAB_OPEN_READY_TOTAL_MS });
       }
     }
   }

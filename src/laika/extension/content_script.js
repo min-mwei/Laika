@@ -3550,13 +3550,63 @@
     return context;
   }
 
+  var CAPTURE_TRACKING_KEYS = {
+    fbclid: true,
+    gclid: true,
+    yclid: true,
+    mc_cid: true,
+    mc_eid: true,
+    ref: true,
+    ref_src: true,
+    ref_url: true,
+    referrer: true,
+    source: true,
+    spm: true,
+    igshid: true,
+    mkt_tok: true
+  };
+
   function normalizeCaptureUrl(url) {
     try {
       var parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return "";
+      }
       parsed.hash = "";
-      return parsed.toString().replace(/\/$/, "");
+      parsed.protocol = parsed.protocol.toLowerCase();
+      parsed.hostname = parsed.hostname.toLowerCase();
+      if (parsed.search) {
+        var params = parsed.searchParams;
+        var entries = [];
+        params.forEach(function (value, key) {
+          var lowerKey = key.toLowerCase();
+          if (lowerKey.indexOf("utm_") === 0 || CAPTURE_TRACKING_KEYS[lowerKey]) {
+            return;
+          }
+          entries.push([key, value]);
+        });
+        if (entries.length) {
+          entries.sort(function (a, b) {
+            if (a[0] === b[0]) {
+              return a[1] < b[1] ? -1 : (a[1] > b[1] ? 1 : 0);
+            }
+            return a[0] < b[0] ? -1 : 1;
+          });
+        }
+        var rebuilt = new URLSearchParams();
+        entries.forEach(function (pair) {
+          rebuilt.append(pair[0], pair[1]);
+        });
+        var search = rebuilt.toString();
+        parsed.search = search ? "?" + search : "";
+      }
+      var normalized = parsed.toString();
+      if (normalized.length > 1 && normalized.endsWith("/")) {
+        normalized = normalized.slice(0, -1);
+      }
+      return normalized;
     } catch (error) {
-      return url;
+      return "";
     }
   }
 
@@ -3572,6 +3622,17 @@
     var anchors = doc.querySelectorAll("a[href]");
     var seen = new Set();
     var links = [];
+    var baseUrl = pageUrl || "";
+    var baseTag = doc.querySelector("base[href]");
+    if (baseTag) {
+      var baseHref = baseTag.getAttribute("href");
+      if (baseHref) {
+        try {
+          baseUrl = new URL(baseHref, pageUrl || undefined).toString();
+        } catch (error) {
+        }
+      }
+    }
     var pageNormalized = normalizeCaptureUrl(pageUrl || "");
     for (var i = 0; i < anchors.length; i += 1) {
       var anchor = anchors[i];
@@ -3582,7 +3643,7 @@
       }
       var resolved = null;
       try {
-        resolved = new URL(rawHref, pageUrl || undefined).toString();
+        resolved = new URL(rawHref, baseUrl || pageUrl || undefined).toString();
       } catch (error) {
         resolved = rawHref;
       }

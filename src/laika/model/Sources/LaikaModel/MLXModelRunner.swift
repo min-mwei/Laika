@@ -43,18 +43,11 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         private var inString = false
         private var escaped = false
         private var started = false
-        private var disabled = false
 
         mutating func append(_ chunk: String) -> (started: Bool, completed: Bool) {
-            if disabled {
-                return (false, false)
-            }
             var startedNow = false
             for character in chunk {
                 if !started {
-                    if character.isWhitespace {
-                        continue
-                    }
                     if character == "{" {
                         started = true
                         startedNow = true
@@ -62,7 +55,6 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
                         buffer.append(character)
                         continue
                     }
-                    disabled = true
                     continue
                 }
 
@@ -234,8 +226,12 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
 
     public func generatePlan(context: ContextPack, userGoal: String) async throws -> ModelResponse {
         let container = try await store.container(for: modelURL)
-        let systemPrompt = PromptBuilder.systemPrompt()
-        let userPrompt = PromptBuilder.userPrompt(context: context, goal: userGoal)
+        let request = LLMCPRequestBuilder.build(context: context, userGoal: userGoal)
+        let wantsMarkdown = request.output.format == "markdown"
+        let systemPrompt = wantsMarkdown ? PromptBuilder.markdownSystemPrompt() : PromptBuilder.systemPrompt()
+        let userPrompt = wantsMarkdown
+            ? PromptBuilder.markdownUserPrompt(request: request)
+            : PromptBuilder.userPrompt(request: request, runId: context.runId, step: context.step, maxSteps: context.maxSteps)
         let baseRequestId = UUID().uuidString
         let attempts = planAttempts(context: context, userGoal: userGoal)
         let maxOutputChars = 24_000
@@ -280,6 +276,45 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
 
             let startedAt = Date()
             do {
+                if wantsMarkdown {
+                    let result = try await generateTextResponse(
+                        container: container,
+                        systemPrompt: systemPrompt,
+                        userPrompt: userPrompt,
+                        attempt: attempt,
+                        maxOutputChars: maxOutputChars,
+                        maxTokensOverride: planMaxTokens
+                    )
+                    let output = result.output
+                    lastOutput = output
+                    let cleaned = cleanMarkdownOutput(output)
+                    let markdown = cleaned.isEmpty ? output.trimmingCharacters(in: .whitespacesAndNewlines) : cleaned
+                    let assistant = AssistantMessage(render: Document.paragraph(text: markdown))
+                    let response = ModelResponse(toolCalls: [], assistant: assistant, summary: markdown, rawMarkdown: markdown)
+                    let durationMs = max(0, Date().timeIntervalSince(startedAt) * 1000)
+                    LaikaLogger.logLLMEvent(.response(
+                        id: requestId,
+                        runId: context.runId,
+                        step: context.step,
+                        maxSteps: context.maxSteps,
+                        modelPath: modelURL.lastPathComponent,
+                        maxTokens: planMaxTokens,
+                        temperature: Double(attempt.temperature),
+                        topP: Double(attempt.topP),
+                        output: output,
+                        toolCallsCount: 0,
+                        summary: markdown,
+                        error: nil,
+                        durationMs: durationMs,
+                        stage: "plan",
+                        firstTokenMs: result.firstTokenMs,
+                        firstJSONMs: result.firstJSONMs,
+                        captureMode: result.captureMode,
+                        outputTruncated: result.outputTruncated
+                    ))
+                    return response
+                }
+
                 let result = try await generateJSONResponse(
                     container: container,
                     systemPrompt: systemPrompt,
@@ -338,9 +373,16 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         }
 
         if let lastOutput {
-            let outcome = LLMCPResponseParser.parseWithOutcome(lastOutput)
-            logParseOutcome(outcome, context: context, stage: "plan", outputChars: lastOutput.count)
-            return outcome.response
+            if wantsMarkdown {
+                let cleaned = cleanMarkdownOutput(lastOutput)
+                let markdown = cleaned.isEmpty ? lastOutput.trimmingCharacters(in: .whitespacesAndNewlines) : cleaned
+                let assistant = AssistantMessage(render: Document.paragraph(text: markdown))
+                return ModelResponse(toolCalls: [], assistant: assistant, summary: markdown, rawMarkdown: markdown)
+            } else {
+                let outcome = LLMCPResponseParser.parseWithOutcome(lastOutput)
+                logParseOutcome(outcome, context: context, stage: "plan", outputChars: lastOutput.count)
+                return outcome.response
+            }
         }
         throw lastError ?? ModelError.invalidResponse("Plan generation failed.")
     }
@@ -452,7 +494,7 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         container: ModelContainer
     ) async throws -> ModelResponse {
         let systemPrompt = PromptBuilder.markdownSystemPrompt()
-        let userPrompt = PromptBuilder.userPrompt(request: request, runId: logContext.runId, step: logContext.step, maxSteps: logContext.maxSteps)
+        let userPrompt = PromptBuilder.markdownUserPrompt(request: request)
         let requestId = UUID().uuidString
         let attempt = GenerationAttempt(temperature: 0.2, topP: 0.7, enableThinking: false)
         let maxOutputChars = 28_000

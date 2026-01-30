@@ -80,6 +80,24 @@ final class LLMCPRequestBuilderTests: XCTestCase {
         XCTAssertFalse(chunkDocs.isEmpty)
     }
 
+    func testSummaryOutputFormatUsesMarkdown() {
+        let observation = Observation(
+            url: "https://example.com",
+            title: "Example",
+            text: "Some content",
+            elements: []
+        )
+        let context = ContextPack(
+            origin: "https://example.com",
+            mode: .assist,
+            observation: observation,
+            recentToolCalls: [],
+            goalPlan: GoalPlan(intent: .pageSummary)
+        )
+        let request = LLMCPRequestBuilder.build(context: context, userGoal: "Summarize this page.")
+        XCTAssertEqual(request.output.format, "markdown")
+    }
+
     private func makeItem(title: String, commentCount: Int) -> ObservedItem {
         let commentTitle = "\(commentCount) comments"
         let links = [

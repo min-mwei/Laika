@@ -37,6 +37,7 @@ enum LLMCPRequestBuilder {
         let turn = context.step ?? 1
         let requestId = UUID().uuidString
         let task = taskForGoalPlan(context.goalPlan, userGoal: userGoal)
+        let outputFormat = outputFormat(for: task)
         let input = LLMCPInput(
             userMessage: LLMCPUserMessage(id: UUID().uuidString, text: userGoal),
             task: task
@@ -51,10 +52,17 @@ enum LLMCPRequestBuilder {
             sender: LLMCPSender(role: "agent"),
             input: input,
             context: LLMCPContext(documents: documents),
-            output: LLMCPOutputSpec(format: "json"),
+            output: LLMCPOutputSpec(format: outputFormat),
             trace: nil
         )
         return request
+    }
+
+    private static func outputFormat(for task: LLMCPTask) -> String {
+        if task.name == "web.summarize" {
+            return "markdown"
+        }
+        return "json"
     }
 
     private static func taskForGoalPlan(_ goalPlan: GoalPlan?, userGoal: String) -> LLMCPTask {

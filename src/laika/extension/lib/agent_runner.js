@@ -228,6 +228,28 @@
     throw error;
   }
 
+  function extractToolUrl(toolCall) {
+    if (!toolCall || !toolCall.arguments) {
+      return null;
+    }
+    var url = toolCall.arguments.url;
+    return typeof url === "string" && url ? url : null;
+  }
+
+  function shouldFallbackOpenTab(error) {
+    if (!error || typeof error !== "object") {
+      return false;
+    }
+    var details = error.details && typeof error.details === "object" ? error.details : null;
+    if (!details || details.lastError !== "no_context") {
+      return false;
+    }
+    var errorDetails = details.lastErrorDetails && typeof details.lastErrorDetails === "object"
+      ? details.lastErrorDetails
+      : null;
+    return !!(errorDetails && errorDetails.code === "no_content_script");
+  }
+
   function buildToolResult(toolCall, toolName, rawResult) {
     var status = rawResult && rawResult.status === "ok" ? "ok" : "error";
     var payload = {};
@@ -247,6 +269,18 @@
     }
     if (toolName === "browser.open_tab" && rawResult && typeof rawResult.tabId === "number") {
       payload.tabId = rawResult.tabId;
+      if (typeof rawResult.ready === "boolean") {
+        payload.ready = rawResult.ready;
+      }
+      if (typeof rawResult.readyAttempts === "number") {
+        payload.readyAttempts = rawResult.readyAttempts;
+      }
+      if (rawResult.reloaded) {
+        payload.reloaded = true;
+      }
+      if (rawResult.reopened) {
+        payload.reopened = true;
+      }
     }
     if (toolName === "browser.observe_dom" && rawResult && rawResult.observation) {
       payload.url = rawResult.observation.url || "";
@@ -656,6 +690,7 @@
       if (typeof firstObservation.tabId === "number") {
         tabIdForPlan = firstObservation.tabId;
       }
+      var lastStableTabId = tabIdForPlan;
 
       var results = [];
       for (var goalIndex = 0; goalIndex < goalSpecs.length; goalIndex += 1) {
@@ -904,6 +939,7 @@
           }
 
           noteStatus("running_action");
+          var previousTabId = tabIdForPlan;
           var toolResult = await deps.runTool(action, tabIdForPlan);
           recentToolCalls.push(action.toolCall);
           recentToolResults.push(buildToolResult(action.toolCall, action.toolCall.name, toolResult));
@@ -926,7 +962,27 @@
             if (action.toolCall.name === "search" || action.toolCall.name === "browser.open_tab" || action.toolCall.name === "browser.navigate") {
               observeSettings = { attempts: 14, delayMs: 350, initialDelayMs: 700 };
             }
-            var updated = await observeWithRetries(deps.observe, observeOptions, tabIdForPlan, observeSettings);
+            var updated = null;
+            try {
+              updated = await observeWithRetries(deps.observe, observeOptions, tabIdForPlan, observeSettings);
+            } catch (error) {
+              if (action.toolCall.name === "browser.open_tab" && shouldFallbackOpenTab(error)) {
+                var fallbackTabId = previousTabId || lastStableTabId;
+                var fallbackUrl = extractToolUrl(action.toolCall);
+                if (fallbackTabId && fallbackUrl) {
+                  noteStatus("open_tab_fallback");
+                  var navigateAction = { toolCall: { name: "browser.navigate", arguments: { url: fallbackUrl } } };
+                  var navigateResult = await deps.runTool(navigateAction, fallbackTabId);
+                  recentToolCalls.push(navigateAction.toolCall);
+                  recentToolResults.push(buildToolResult(navigateAction.toolCall, navigateAction.toolCall.name, navigateResult));
+                  updated = await observeWithRetries(deps.observe, observeOptions, fallbackTabId, observeSettings);
+                  stepInfo.fallback = { type: "open_tab_fallback", url: fallbackUrl, reason: "no_content_script" };
+                }
+              }
+              if (!updated) {
+                throw error;
+              }
+            }
             lastObservation = updated.observation;
             if (typeof updated.tabId === "number") {
               tabIdForPlan = updated.tabId;
@@ -935,6 +991,9 @@
 
           stepInfo.toolResult = toolResult;
           stepInfo.nextObservation = summarizeObservation(lastObservation);
+          if (typeof tabIdForPlan === "number") {
+            lastStableTabId = tabIdForPlan;
+          }
         }
 
         results.push({ goal: goal, summary: summary, steps: steps });
