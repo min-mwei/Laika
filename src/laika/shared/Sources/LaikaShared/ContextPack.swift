@@ -232,6 +232,10 @@ public struct Observation: Codable, Equatable, Sendable {
     public let navigationGeneration: Int?
     public let observedAtMs: Int?
     public let text: String
+    public let markdown: String?
+    public let markdownChunks: [String]?
+    public let markdownTruncated: Bool?
+    public let extractedLinks: [CapturedLink]?
     public let elements: [ObservedElement]
     public let blocks: [ObservedTextBlock]
     public let items: [ObservedItem]
@@ -247,6 +251,10 @@ public struct Observation: Codable, Equatable, Sendable {
         navigationGeneration: Int? = nil,
         observedAtMs: Int? = nil,
         text: String,
+        markdown: String? = nil,
+        markdownChunks: [String]? = nil,
+        markdownTruncated: Bool? = nil,
+        extractedLinks: [CapturedLink]? = nil,
         elements: [ObservedElement],
         blocks: [ObservedTextBlock] = [],
         items: [ObservedItem] = [],
@@ -261,6 +269,10 @@ public struct Observation: Codable, Equatable, Sendable {
         self.navigationGeneration = navigationGeneration
         self.observedAtMs = observedAtMs
         self.text = text
+        self.markdown = markdown
+        self.markdownChunks = markdownChunks
+        self.markdownTruncated = markdownTruncated
+        self.extractedLinks = extractedLinks
         self.elements = elements
         self.blocks = blocks
         self.items = items
@@ -268,6 +280,43 @@ public struct Observation: Codable, Equatable, Sendable {
         self.primary = primary
         self.comments = comments
         self.signals = signals
+    }
+
+    public init(
+        url: String,
+        title: String,
+        text: String,
+        markdown: String? = nil,
+        markdownChunks: [String]? = nil,
+        markdownTruncated: Bool? = nil,
+        extractedLinks: [CapturedLink]? = nil,
+        elements: [ObservedElement],
+        blocks: [ObservedTextBlock] = [],
+        items: [ObservedItem] = [],
+        outline: [ObservedOutlineItem] = [],
+        primary: ObservedPrimaryContent? = nil,
+        comments: [ObservedComment] = [],
+        signals: [String] = []
+    ) {
+        self.init(
+            url: url,
+            title: title,
+            documentId: nil,
+            navigationGeneration: nil,
+            observedAtMs: nil,
+            text: text,
+            markdown: markdown,
+            markdownChunks: markdownChunks,
+            markdownTruncated: markdownTruncated,
+            extractedLinks: extractedLinks,
+            elements: elements,
+            blocks: blocks,
+            items: items,
+            outline: outline,
+            primary: primary,
+            comments: comments,
+            signals: signals
+        )
     }
 
     public init(
@@ -285,10 +334,11 @@ public struct Observation: Codable, Equatable, Sendable {
         self.init(
             url: url,
             title: title,
-            documentId: nil,
-            navigationGeneration: nil,
-            observedAtMs: nil,
             text: text,
+            markdown: nil,
+            markdownChunks: nil,
+            markdownTruncated: nil,
+            extractedLinks: nil,
             elements: elements,
             blocks: blocks,
             items: items,
@@ -312,6 +362,10 @@ public struct Observation: Codable, Equatable, Sendable {
         case navGeneration
         case observedAtMs
         case text
+        case markdown
+        case markdownChunks
+        case markdownTruncated
+        case extractedLinks
         case elements
         case blocks
         case items
@@ -334,6 +388,10 @@ public struct Observation: Codable, Equatable, Sendable {
         }
         observedAtMs = try container.decodeIfPresent(Int.self, forKey: .observedAtMs)
         text = try container.decode(String.self, forKey: .text)
+        markdown = try container.decodeIfPresent(String.self, forKey: .markdown)
+        markdownChunks = try container.decodeIfPresent([String].self, forKey: .markdownChunks)
+        markdownTruncated = try container.decodeIfPresent(Bool.self, forKey: .markdownTruncated)
+        extractedLinks = try container.decodeIfPresent([CapturedLink].self, forKey: .extractedLinks)
         elements = try container.decode([ObservedElement].self, forKey: .elements)
         blocks = try container.decodeIfPresent([ObservedTextBlock].self, forKey: .blocks) ?? []
         items = try container.decodeIfPresent([ObservedItem].self, forKey: .items) ?? []
@@ -351,6 +409,10 @@ public struct Observation: Codable, Equatable, Sendable {
         try container.encodeIfPresent(navigationGeneration, forKey: .navigationGeneration)
         try container.encodeIfPresent(observedAtMs, forKey: .observedAtMs)
         try container.encode(text, forKey: .text)
+        try container.encodeIfPresent(markdown, forKey: .markdown)
+        try container.encodeIfPresent(markdownChunks, forKey: .markdownChunks)
+        try container.encodeIfPresent(markdownTruncated, forKey: .markdownTruncated)
+        try container.encodeIfPresent(extractedLinks, forKey: .extractedLinks)
         try container.encode(elements, forKey: .elements)
         try container.encode(blocks, forKey: .blocks)
         try container.encode(items, forKey: .items)

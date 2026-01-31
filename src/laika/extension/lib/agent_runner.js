@@ -236,6 +236,38 @@
     return typeof url === "string" && url ? url : null;
   }
 
+  function shouldCaptureMarkdown(goals) {
+    if (!Array.isArray(goals)) {
+      return false;
+    }
+    var tokens = [
+      "summarize",
+      "summarise",
+      "summary",
+      "overview",
+      "key takeaways",
+      "highlights",
+      "recap",
+      "tldr",
+      "tl;dr",
+      "what is this page about",
+      "what's this page about",
+      "what is this about"
+    ];
+    for (var i = 0; i < goals.length; i += 1) {
+      var goal = String(goals[i] || "").toLowerCase();
+      if (!goal) {
+        continue;
+      }
+      for (var j = 0; j < tokens.length; j += 1) {
+        if (goal.indexOf(tokens[j]) >= 0) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   function shouldFallbackOpenTab(error) {
     if (!error || typeof error !== "object") {
       return false;
@@ -655,6 +687,13 @@
       blockedTools.push("browser.open_tab");
     }
     var observeOptions = config.observeOptions || (config.detail ? DETAIL_OBSERVE_OPTIONS : DEFAULT_OBSERVE_OPTIONS);
+    observeOptions = Object.assign({}, observeOptions || {});
+    if (typeof observeOptions.includeMarkdown === "undefined" && shouldCaptureMarkdown(goals)) {
+      observeOptions.includeMarkdown = true;
+      if (typeof observeOptions.captureLinks === "undefined") {
+        observeOptions.captureLinks = false;
+      }
+    }
     var requestPlanFn = deps.requestPlan || requestPlan;
     var validatePlanFn = typeof deps.validatePlan === "function" ? deps.validatePlan : null;
     var listTabsFn = typeof deps.listTabs === "function" ? deps.listTabs : null;

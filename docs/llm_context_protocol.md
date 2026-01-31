@@ -160,6 +160,7 @@ This is the primary page capture format for single-page workflows.
   "captured_at": "2026-01-28T12:34:56.789Z",
 
   "markdown": "# Example\\n\\nMain content as markdown...",
+  "chunk_count": 3,
   "extracted_links": [
     { "url": "https://...", "text": "link text", "context": "surrounding text" }
   ],
@@ -352,7 +353,7 @@ Notes:
 
 ### Browser primitives (Safari extension)
 
-- `browser.observe_dom`: `{ "maxChars"?: int, "maxElements"?: int, "maxBlocks"?: int, "maxPrimaryChars"?: int, "maxOutline"?: int, "maxOutlineChars"?: int, "maxItems"?: int, "maxItemChars"?: int, "maxComments"?: int, "maxCommentChars"?: int, "rootHandleId"?: string }`
+- `browser.observe_dom`: `{ "maxChars"?: int, "maxElements"?: int, "maxBlocks"?: int, "maxPrimaryChars"?: int, "maxOutline"?: int, "maxOutlineChars"?: int, "maxItems"?: int, "maxItemChars"?: int, "maxComments"?: int, "maxCommentChars"?: int, "rootHandleId"?: string, "includeMarkdown"?: boolean, "captureMode"?: "auto"|"article"|"list", "captureMaxChars"?: int, "captureLinks"?: boolean }`
 - `browser.get_selection_links`: `{ "maxLinks"?: int }`
 - `browser.click`: `{ "handleId": string }`
 - `browser.type`: `{ "handleId": string, "text": string }`

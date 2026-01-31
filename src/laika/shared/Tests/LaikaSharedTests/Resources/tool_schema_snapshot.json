@@ -13,7 +13,11 @@
         "maxItemChars": "number",
         "maxComments": "number",
         "maxCommentChars": "number",
-        "rootHandleId": "string"
+        "rootHandleId": "string",
+        "includeMarkdown": "bool",
+        "captureMode": "string",
+        "captureMaxChars": "number",
+        "captureLinks": "bool"
       }
     },
     "browser.get_selection_links": {

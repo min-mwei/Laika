@@ -123,6 +123,57 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         return LaikaLogger.preview(text, maxChars: maxChars)
     }
 
+    private struct PromptMetrics {
+        let contextChars: Int
+        let textChars: Int
+        let primaryChars: Int
+        let chunkCount: Int
+    }
+
+    private func promptMetrics(for request: LLMCPRequest) -> PromptMetrics {
+        var contextChars = 0
+        var textChars = 0
+        var primaryChars = 0
+        var chunkCount = 0
+        for document in request.context.documents {
+            if document.kind == "web.observation.chunk.v1" {
+                chunkCount += 1
+            }
+            guard case let .object(content) = document.content else {
+                continue
+            }
+            if let markdown = extractString(content["markdown"]) {
+                contextChars += markdown.count
+            }
+            if let text = extractString(content["text"]) {
+                textChars += text.count
+                contextChars += text.count
+            }
+            if let primary = content["primary"],
+               case let .object(primaryContent) = primary,
+               let primaryText = extractString(primaryContent["text"]) {
+                primaryChars += primaryText.count
+                contextChars += primaryText.count
+            }
+        }
+        return PromptMetrics(
+            contextChars: contextChars,
+            textChars: textChars,
+            primaryChars: primaryChars,
+            chunkCount: chunkCount
+        )
+    }
+
+    private func extractString(_ value: LaikaShared.JSONValue?) -> String? {
+        guard let value else {
+            return nil
+        }
+        if case let .string(text) = value {
+            return text
+        }
+        return nil
+    }
+
     public func parseGoalPlan(context: ContextPack, userGoal: String) async throws -> GoalPlan {
         let container = try await store.container(for: modelURL)
         let systemPrompt = PromptBuilder.goalParseSystemPrompt()
@@ -136,6 +187,8 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         let parseMaxTokens = goalParseMaxTokens(goal: userGoal)
         let maxOutputChars = 8_000
         let recentTool = recentToolDebugInfo(for: context)
+        let contextChars = context.observation.text.count
+        let primaryChars = context.observation.primary?.text.count ?? 0
 
         LaikaLogger.logLLMEvent(.request(
             id: requestId,
@@ -153,12 +206,15 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
             topP: Double(attempt.topP),
             systemPrompt: systemPrompt,
             userPrompt: userPrompt,
+            contextChars: contextChars,
+            textChars: contextChars,
+            primaryChars: primaryChars,
+            chunkCount: 0,
             observationChars: context.observation.text.count,
             elementCount: context.observation.elements.count,
             blockCount: context.observation.blocks.count,
             itemCount: context.observation.items.count,
             outlineCount: context.observation.outline.count,
-            primaryChars: context.observation.primary?.text.count ?? 0,
             commentCount: context.observation.comments.count,
             tabCount: context.tabs.count,
             recentToolName: recentTool.name,
@@ -237,6 +293,7 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         let maxOutputChars = 24_000
         let planMaxTokens = planMaxTokens(context: context, userGoal: userGoal)
         let recentTool = recentToolDebugInfo(for: context)
+        let metrics = promptMetrics(for: request)
 
         var lastOutput: String?
         var lastError: Error?
@@ -259,12 +316,15 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
                 topP: Double(attempt.topP),
                 systemPrompt: systemPrompt,
                 userPrompt: userPrompt,
+                contextChars: metrics.contextChars,
+                textChars: metrics.textChars,
+                primaryChars: metrics.primaryChars,
+                chunkCount: metrics.chunkCount,
                 observationChars: context.observation.text.count,
                 elementCount: context.observation.elements.count,
                 blockCount: context.observation.blocks.count,
                 itemCount: context.observation.items.count,
                 outlineCount: context.observation.outline.count,
-                primaryChars: context.observation.primary?.text.count ?? 0,
                 commentCount: context.observation.comments.count,
                 tabCount: context.tabs.count,
                 recentToolName: recentTool.name,
@@ -398,6 +458,7 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         let attempt = GenerationAttempt(temperature: 0.2, topP: 0.7, enableThinking: false)
         let maxOutputChars = 28_000
         let answerMaxTokens = answerMaxTokens(sourceCount: logContext.sourceCount)
+        let metrics = promptMetrics(for: request)
 
         LaikaLogger.logLLMEvent(.request(
             id: requestId,
@@ -415,12 +476,15 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
             topP: Double(attempt.topP),
             systemPrompt: systemPrompt,
             userPrompt: userPrompt,
+            contextChars: metrics.contextChars,
+            textChars: metrics.textChars,
+            primaryChars: metrics.primaryChars,
+            chunkCount: metrics.chunkCount,
             observationChars: logContext.contextChars,
             elementCount: 0,
             blockCount: 0,
             itemCount: 0,
             outlineCount: 0,
-            primaryChars: 0,
             commentCount: 0,
             tabCount: 0,
             recentToolName: nil,
@@ -499,6 +563,7 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         let attempt = GenerationAttempt(temperature: 0.2, topP: 0.7, enableThinking: false)
         let maxOutputChars = 28_000
         let answerMaxTokens = answerMaxTokens(sourceCount: logContext.sourceCount)
+        let metrics = promptMetrics(for: request)
 
         LaikaLogger.logLLMEvent(.request(
             id: requestId,
@@ -516,12 +581,15 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
             topP: Double(attempt.topP),
             systemPrompt: systemPrompt,
             userPrompt: userPrompt,
+            contextChars: metrics.contextChars,
+            textChars: metrics.textChars,
+            primaryChars: metrics.primaryChars,
+            chunkCount: metrics.chunkCount,
             observationChars: logContext.contextChars,
             elementCount: 0,
             blockCount: 0,
             itemCount: 0,
             outlineCount: 0,
-            primaryChars: 0,
             commentCount: 0,
             tabCount: 0,
             recentToolName: nil,

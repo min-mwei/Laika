@@ -144,9 +144,31 @@ enum LLMCPRequestBuilder {
             "url": .string(observation.url),
             "title": .string(TextUtils.truncate(TextUtils.normalizeWhitespace(observation.title), maxChars: ObservationBudget.maxTitleChars))
         ]
+        let markdown = observation.markdown?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !markdown.isEmpty {
+            content["markdown"] = .string(markdown)
+        }
+        let extractedLinks = observation.extractedLinks ?? []
+        if !extractedLinks.isEmpty {
+            let links = extractedLinks.prefix(30).map { link -> JSONValue in
+                var entry: [String: JSONValue] = ["url": .string(link.url)]
+                if let text = link.text, !text.isEmpty {
+                    entry["text"] = .string(TextUtils.truncate(TextUtils.normalizeWhitespace(text), maxChars: ObservationBudget.maxTitleChars))
+                }
+                if let context = link.context, !context.isEmpty {
+                    entry["context"] = .string(TextUtils.truncate(TextUtils.normalizeWhitespace(context), maxChars: ObservationBudget.maxItemSnippetChars))
+                }
+                return .object(entry)
+            }
+            content["extracted_links"] = .array(links)
+        }
+        let markdownChunkCount = observation.markdownChunks?.count ?? 0
+        if markdownChunkCount > 0 {
+            content["chunk_count"] = .number(Double(markdownChunkCount))
+        }
         var discussionCandidates: [(title: String, url: String, handleId: String?, commentCount: Int)] = []
         var summaryText: String?
-        if shouldIncludeSummaryText(focus: focus, observation: observation) {
+        if markdown.isEmpty, shouldIncludeSummaryText(focus: focus, observation: observation) {
             let text = buildSummaryText(
                 observation: observation,
                 maxChars: summaryTextLimit(goalPlan: goalPlan, hasChunks: hasChunks)
@@ -156,7 +178,7 @@ enum LLMCPRequestBuilder {
             }
         }
         var primaryText: String?
-        if shouldIncludePrimary(focus: focus, observation: observation), let primary = observation.primary {
+        if markdown.isEmpty, shouldIncludePrimary(focus: focus, observation: observation), let primary = observation.primary {
             let trimmedPrimaryText = TextUtils.truncate(
                 TextUtils.normalizePreservingNewlines(primary.text),
                 maxChars: primaryTextLimit(goalPlan: goalPlan, hasChunks: hasChunks)
@@ -310,21 +332,34 @@ enum LLMCPRequestBuilder {
         if wantsComments(goalPlan: goalPlan) || goalPlan.intent == .itemSummary || goalPlan.intent == .action {
             return []
         }
-        let sourceText = preferredObservationText(observation: observation)
-        let chunks = chunkText(sourceText, maxChunkChars: ObservationBudget.maxChunkChars, maxChunks: ObservationBudget.maxChunks)
+        let markdownChunks = (observation.markdownChunks ?? []).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let chunks: [String]
+        let useMarkdown: Bool
+        if !markdownChunks.isEmpty {
+            chunks = markdownChunks
+            useMarkdown = true
+        } else {
+            let sourceText = preferredObservationText(observation: observation)
+            chunks = chunkText(sourceText, maxChunkChars: ObservationBudget.maxChunkChars, maxChunks: ObservationBudget.maxChunks)
+            useMarkdown = false
+        }
         guard chunks.count > 1 else {
             return []
         }
         let total = chunks.count
         return chunks.enumerated().map { index, chunk in
-            let content: [String: JSONValue] = [
+            var content: [String: JSONValue] = [
                 "doc_type": .string("web.observation.chunk.v1"),
                 "url": .string(observation.url),
                 "title": .string(TextUtils.truncate(TextUtils.normalizeWhitespace(observation.title), maxChars: ObservationBudget.maxTitleChars)),
                 "chunk_index": .number(Double(index + 1)),
-                "chunk_count": .number(Double(total)),
-                "text": .string(chunk)
+                "chunk_count": .number(Double(total))
             ]
+            if useMarkdown {
+                content["markdown"] = .string(chunk)
+            } else {
+                content["text"] = .string(chunk)
+            }
             return LLMCPDocument(
                 docId: "doc:web:chunk:\(index + 1)",
                 kind: "web.observation.chunk.v1",

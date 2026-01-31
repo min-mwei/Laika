@@ -312,6 +312,18 @@ LLM Runtime (local by default; optional BYO cloud)
 
 ---
 
+## Goal Parsing + Heuristic Gating (P0)
+
+Goal parsing should avoid extra model calls when heuristics are confident:
+
+- If the user clearly asks for **comments**, classify as `commentSummary`.
+- If the user names an **ordinal/item** on list-like pages, classify as `itemSummary`.
+- If the user explicitly asks for a **summary/overview**, classify as `pageSummary`.
+
+Only call the model for goal parsing when intent is ambiguous or action-oriented. Log whether the goal plan came from the model, heuristics, or fallback rules so we can audit impact on accuracy and latency.
+
+---
+
 ## References
 
 - "If NotebookLM Was a Web Browser" (inspiration for browser-native source collection workflows): https://aifoc.us/if-notebooklm-was-a-web-browser/

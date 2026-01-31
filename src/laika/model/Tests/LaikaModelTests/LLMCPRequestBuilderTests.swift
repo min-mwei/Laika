@@ -98,6 +98,39 @@ final class LLMCPRequestBuilderTests: XCTestCase {
         XCTAssertEqual(request.output.format, "markdown")
     }
 
+    func testMarkdownObservationCreatesChunkDocuments() {
+        let markdownChunks = [
+            "# Heading\n\nFirst chunk.",
+            "## Section\n\nSecond chunk."
+        ]
+        let observation = Observation(
+            url: "https://example.com",
+            title: "Example",
+            text: "",
+            markdown: markdownChunks.joined(separator: "\n\n"),
+            markdownChunks: markdownChunks,
+            elements: []
+        )
+        let context = ContextPack(
+            origin: "https://example.com",
+            mode: .assist,
+            observation: observation,
+            recentToolCalls: [],
+            goalPlan: GoalPlan(intent: .pageSummary)
+        )
+        let request = LLMCPRequestBuilder.build(context: context, userGoal: "Summarize this page.")
+        let chunkDocs = request.context.documents.filter { $0.kind == "web.observation.chunk.v1" }
+        XCTAssertEqual(chunkDocs.count, 2)
+        let summaryDoc = request.context.documents.first { $0.kind == "web.observation.summary.v1" }
+        guard let summaryDoc,
+              case let .object(content) = summaryDoc.content,
+              case let .string(markdown) = content["markdown"] else {
+            XCTFail("Missing markdown in summary doc.")
+            return
+        }
+        XCTAssertTrue(markdown.contains("First chunk"))
+    }
+
     private func makeItem(title: String, commentCount: Int) -> ObservedItem {
         let commentTitle = "\(commentCount) comments"
         let links = [

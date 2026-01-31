@@ -54,16 +54,22 @@ Capture happens in the **content script** (where the DOM exists and where authen
 
 2) Reduce obvious noise
    - Remove scripts, nav, headers/footers, forms, iframes, etc. (do this before conversion).
+   - Apply semantic noise pruning (id/class/aria tokens such as `ad`, `sponsor`, `promo`, `related`,
+     `share`, `newsletter`, `subscribe`, `cookie`, `consent`, `modal`, `paywall`, `banner`).
+   - Drop overlay/dialog UI (`aria-modal`, `role="dialog"`) unless it is clearly part of the article body.
 
 3) Convert HTML -> Markdown (canonical)
    - Convert the reduced main-content HTML into Markdown.
    - Bound it (`maxMarkdownChars`) so captures are stable and predictable.
      - Recommended P0 default: `24_000` chars (tunable).
      - If truncating, insert an explicit marker so users know it's partial.
+   - For long pages, chunk by headings + paragraph boundaries (never split inside code fences).
+     - Chunks are used for LLM context; stored Markdown remains bounded and human-readable.
 
 4) Extract outbound links (for discovery)
    - Extract `{ url, text, context }` from the same reduced HTML prior to conversion.
    - Filter obvious noise (privacy/terms/login/share/rss/etc.) and duplicates.
+   - Link extraction can be disabled for summarize-only flows to reduce noise and overhead.
 
 5) Persist source snapshot
    - Store `captureMarkdown`, `capturedAt`, and extraction `signals` (paywall/login/overlay, sparse text, etc).
@@ -104,6 +110,8 @@ Baseline rule ideas (mirrors the reference):
 - The background opens (or reuses) a tab, then sends `laika.capture` to the content script.
 - The content script runs Readability + Turndown, bounds Markdown, and returns only Markdown + link metadata.
 - The background forwards results to the native store via `collection.capture_update` (no raw HTML crosses the boundary).
+- For summarization, the content script can optionally include a chunk list in the observation so the model
+  sees the full page without head+tail truncation.
 
 ---
 

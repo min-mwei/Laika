@@ -2331,6 +2331,18 @@ async function handleTool(toolName, args, sender, tabOverride) {
     if (args && typeof args.rootHandleId === "string" && args.rootHandleId) {
       options.rootHandleId = args.rootHandleId;
     }
+    if (args && typeof args.includeMarkdown === "boolean") {
+      options.includeMarkdown = args.includeMarkdown;
+    }
+    if (args && typeof args.captureMode === "string") {
+      options.captureMode = normalizeCaptureMode(args.captureMode);
+    }
+    if (args && typeof args.captureMaxChars === "number" && isFinite(args.captureMaxChars)) {
+      options.captureMaxChars = clampCaptureMaxChars(args.captureMaxChars);
+    }
+    if (args && typeof args.captureLinks === "boolean") {
+      options.captureLinks = args.captureLinks;
+    }
     return handleObserve(options, sender, tabOverride, false);
   }
   if (toolName === "search") {

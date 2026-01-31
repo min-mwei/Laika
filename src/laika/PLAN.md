@@ -193,8 +193,8 @@ Goal: complete these before moving on to P1 work. Status is tracked inline.
   - Approach: build a Markdown pack from LLMCP docs (collection sources + page summaries/chunks) with lightweight headers + URLs, and use it for `output.format="markdown"` tasks in the model runner.
 - **Open-tab readiness + retry (done):** treat new tabs as a handshake: `browser.open_tab` waits for content-script readiness; if missing, reload once and re-inject, then (if still missing) re-open in the same window. Only as a last resort fall back to `browser.navigate` in the current tab. Log error details so we can diagnose host/permission failures.
 - **Streaming markdown to UI (pending):** stream markdown outputs into the popover/answer viewer for faster perceived latency.
-- **Prompt/packing telemetry (pending):** log prompt size stats (`systemPromptChars`, `userPromptChars`, `contextChars`) and packing metrics (`chunkCount`, `textChars`, `primaryChars`).
-- **Goal parse heuristic gating (pending):** avoid extra model calls when heuristics can resolve page/item/comment intent.
+- **Prompt/packing telemetry (done):** log prompt size stats (`systemPromptChars`, `userPromptChars`, `contextChars`) and packing metrics (`chunkCount`, `textChars`, `primaryChars`).
+- **Goal parse heuristic gating (done):** avoid extra model calls when heuristics can resolve page/item/comment intent.
 
 ### P1 follow-ups (design work queued)
 - **Capture pipeline ownership:** evaluate a native-managed scheduler + retry/backoff policy now that the background queue claims jobs.

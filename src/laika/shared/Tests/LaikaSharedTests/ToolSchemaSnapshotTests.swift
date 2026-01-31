@@ -75,6 +75,8 @@ final class ToolSchemaSnapshotTests: XCTestCase {
                 return .string("option")
             case "mode":
                 return .string("auto")
+            case "captureMode":
+                return .string("auto")
             case "target":
                 return .string("viewer")
             default:

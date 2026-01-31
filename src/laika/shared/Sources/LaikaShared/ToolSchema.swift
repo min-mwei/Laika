@@ -27,13 +27,23 @@ public enum ToolSchemaValidator {
                 "maxItemChars": .number,
                 "maxComments": .number,
                 "maxCommentChars": .number,
-                "rootHandleId": .string
+                "rootHandleId": .string,
+                "includeMarkdown": .bool,
+                "captureMode": .string,
+                "captureMaxChars": .number,
+                "captureLinks": .bool
             ]
             let valid = validate(arguments: arguments, required: [:], optional: optional)
             if !valid {
                 return false
             }
             if arguments["rootHandleId"] != nil && !hasNonEmptyString(arguments, key: "rootHandleId") {
+                return false
+            }
+            if let mode = arguments["captureMode"], !isValidCaptureMode(mode) {
+                return false
+            }
+            if !hasValidMaxChars(arguments, key: "captureMaxChars") {
                 return false
             }
             return true

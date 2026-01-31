@@ -74,6 +74,29 @@ test("validatePlanResponse rejects observe_dom with unknown args", () => {
   assert.equal(result.ok, false);
 });
 
+test("validatePlanResponse accepts observe_dom markdown options", () => {
+  const payload = {
+    actions: [
+      {
+        toolCall: {
+          id: "12345678-1234-1234-1234-1234567890ab",
+          name: "browser.observe_dom",
+          arguments: {
+            maxChars: 8000,
+            includeMarkdown: true,
+            captureMode: "article",
+            captureMaxChars: 24000,
+            captureLinks: false
+          }
+        },
+        policy: { decision: "allow", reasonCode: "observe_allowed" }
+      }
+    ]
+  };
+  const result = validator.validatePlanResponse(payload);
+  assert.equal(result.ok, true);
+});
+
 test("validatePlanResponse rejects observe_dom with non-finite numbers", () => {
   const payload = {
     actions: [

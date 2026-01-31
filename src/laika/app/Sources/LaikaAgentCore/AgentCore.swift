@@ -512,6 +512,17 @@ public final class AgentOrchestrator: @unchecked Sendable {
         if let existing = contextSnapshot.goalPlan {
             return existing
         }
+        if let heuristic = heuristicGoalPlan(context: contextSnapshot, userGoal: userGoal) {
+            let resolved = applyFallbackGoalPlan(heuristic, context: contextSnapshot, userGoal: userGoal)
+            logGoalPlan(
+                parsed: heuristic,
+                resolved: resolved,
+                userGoal: userGoal,
+                context: contextSnapshot,
+                sourceOverride: "heuristic"
+            )
+            return resolved
+        }
         do {
             let parsed = try await model.parseGoalPlan(context: contextSnapshot, userGoal: userGoal)
             let resolved = applyFallbackGoalPlan(parsed, context: contextSnapshot, userGoal: userGoal)
@@ -528,6 +539,81 @@ public final class AgentOrchestrator: @unchecked Sendable {
             )
             return fallback
         }
+    }
+
+    private func heuristicGoalPlan(context: ContextPack, userGoal: String) -> GoalPlan? {
+        let normalized = normalizeForMatch(userGoal)
+        guard !normalized.isEmpty else {
+            return nil
+        }
+        if isActionLikeGoal(normalized) {
+            return nil
+        }
+        let listLike = isListObservation(context)
+            || shouldUseMainLinkFallback(context: context)
+            || !context.observation.items.isEmpty
+        let wantsComments = extractWantsComments(from: userGoal)
+        let itemIndex = extractOrdinalIndex(from: userGoal)
+        if wantsComments {
+            return GoalPlan(
+                intent: .commentSummary,
+                itemIndex: listLike ? itemIndex : nil,
+                itemQuery: nil,
+                wantsComments: true
+            )
+        }
+        if hasSummaryIntent(normalized) {
+            return GoalPlan(intent: .pageSummary, itemIndex: nil, itemQuery: nil, wantsComments: false)
+        }
+        if let itemIndex, listLike {
+            return GoalPlan(intent: .itemSummary, itemIndex: itemIndex, itemQuery: nil, wantsComments: false)
+        }
+        return nil
+    }
+
+    private func isActionLikeGoal(_ normalized: String) -> Bool {
+        let tokens = [
+            "click",
+            "open",
+            "go to",
+            "navigate",
+            "scroll",
+            "type",
+            "enter",
+            "fill",
+            "search",
+            "collect",
+            "add",
+            "remove",
+            "delete",
+            "download",
+            "compare",
+            "difference",
+            "differences",
+            "versus",
+            "vs"
+        ]
+        for token in tokens where normalized.contains(token) {
+            return true
+        }
+        return false
+    }
+
+    private func hasSummaryIntent(_ normalized: String) -> Bool {
+        let tokens = [
+            "summarize",
+            "summary",
+            "overview",
+            "key takeaways",
+            "highlights",
+            "recap",
+            "tldr",
+            "tl dr"
+        ]
+        for token in tokens where normalized.contains(token) {
+            return true
+        }
+        return false
     }
 
     private func contextWithGoalPlan(_ context: ContextPack, goalPlan: GoalPlan) -> ContextPack {

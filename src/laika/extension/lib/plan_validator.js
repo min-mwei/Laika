@@ -19,7 +19,11 @@
         maxItemChars: "number",
         maxComments: "number",
         maxCommentChars: "number",
-        rootHandleId: "string"
+        rootHandleId: "string",
+        includeMarkdown: "bool",
+        captureMode: "string",
+        captureMaxChars: "number",
+        captureLinks: "bool"
       }
     },
     "browser.get_selection_links": {
@@ -202,6 +206,20 @@
       }
       if (typeof args.rootHandleId !== "undefined" && typeof args.rootHandleId !== "string") {
         return "observe_dom.rootHandleId must be string";
+      }
+      if (typeof args.includeMarkdown !== "undefined" && typeof args.includeMarkdown !== "boolean") {
+        return "observe_dom.includeMarkdown must be boolean";
+      }
+      if (typeof args.captureLinks !== "undefined" && typeof args.captureLinks !== "boolean") {
+        return "observe_dom.captureLinks must be boolean";
+      }
+      if (typeof args.captureMode !== "undefined") {
+        if (args.captureMode !== "auto" && args.captureMode !== "article" && args.captureMode !== "list") {
+          return "observe_dom.captureMode invalid";
+        }
+      }
+      if (typeof args.captureMaxChars !== "undefined" && !isFiniteNumber(args.captureMaxChars)) {
+        return "observe_dom.captureMaxChars must be number";
       }
       return null;
     }

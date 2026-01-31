@@ -23,6 +23,11 @@ final class AgentCoreTests: XCTestCase {
         func parseGoalPlan(context: ContextPack, userGoal: String) async throws -> GoalPlan {
             return goalPlan ?? .unknown
         }
+
+        func generateAnswer(request: LLMCPRequest, logContext: AnswerLogContext) async throws -> ModelResponse {
+            let assistant = AssistantMessage(render: Document.paragraph(text: summary))
+            return ModelResponse(toolCalls: toolCalls, assistant: assistant)
+        }
     }
 
     func testAssistSummaryFallsBackWithoutStreamingModel() async throws {
@@ -98,6 +103,45 @@ final class AgentCoreTests: XCTestCase {
         XCTAssertTrue(response.summary.contains("Summary:"))
         XCTAssertTrue(response.summary.contains("Key takeaways:"))
         XCTAssertTrue(response.summary.contains("What to verify next:"))
+    }
+
+    func testHeuristicPageSummaryAddsHeadings() async throws {
+        let observation = Observation(
+            url: "https://example.com",
+            title: "Example",
+            text: "Example page text about observability and performance.",
+            elements: []
+        )
+        let context = ContextPack(origin: "https://example.com", mode: .assist, observation: observation, recentToolCalls: [])
+        let model = MockModelRunner(summary: "This page describes observability practices.")
+        let orchestrator = AgentOrchestrator(model: model)
+
+        let response = try await orchestrator.runOnce(context: context, userGoal: "Summarize this page")
+
+        XCTAssertTrue(response.summary.contains("Summary:"))
+        XCTAssertTrue(response.summary.contains("Key takeaways:"))
+        XCTAssertTrue(response.summary.contains("What to verify next:"))
+    }
+
+    func testHeuristicCommentSummaryAddsHeadings() async throws {
+        let comments = [
+            ObservedComment(text: "This is a comment.", author: "user1", age: "1h", score: "10", depth: 0)
+        ]
+        let observation = Observation(
+            url: "https://example.com",
+            title: "Example",
+            text: "Example page text.",
+            elements: [],
+            comments: comments
+        )
+        let context = ContextPack(origin: "https://example.com", mode: .assist, observation: observation, recentToolCalls: [])
+        let model = MockModelRunner(summary: "Comments discuss the release.")
+        let orchestrator = AgentOrchestrator(model: model)
+
+        let response = try await orchestrator.runOnce(context: context, userGoal: "Summarize the comments")
+
+        XCTAssertTrue(response.summary.contains("Comment themes:"))
+        XCTAssertTrue(response.summary.contains("Notable contributors or tools:"))
     }
 
     func testSummaryIncludesAccessLimitations() async throws {

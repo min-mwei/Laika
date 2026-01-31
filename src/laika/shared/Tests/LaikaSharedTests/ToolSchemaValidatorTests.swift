@@ -29,6 +29,17 @@ final class ToolSchemaValidatorTests: XCTestCase {
         )
         XCTAssertTrue(valid)
 
+        let markdownValid = ToolSchemaValidator.validateArguments(
+            name: .browserObserveDom,
+            arguments: [
+                "includeMarkdown": .bool(true),
+                "captureMode": .string("article"),
+                "captureMaxChars": .number(24000),
+                "captureLinks": .bool(false)
+            ]
+        )
+        XCTAssertTrue(markdownValid)
+
         let invalid = ToolSchemaValidator.validateArguments(
             name: .browserObserveDom,
             arguments: ["maxChars": .string("1200")]

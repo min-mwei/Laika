@@ -3177,9 +3177,21 @@
     }
     signals = Array.from(signalSet);
     urlRedactionCounter = null;
+    var captureResult = null;
+    if (options && options.includeMarkdown) {
+      try {
+        captureResult = capturePage({
+          mode: options.captureMode,
+          maxChars: options.captureMaxChars,
+          captureLinks: options.captureLinks
+        });
+      } catch (error) {
+        captureResult = null;
+      }
+    }
     lastObservedDocumentId = documentId || null;
     lastObservedGeneration = navGeneration;
-    return {
+    var observation = {
       url: pageUrl,
       title: document.title || "",
       documentId: documentId || "",
@@ -3195,6 +3207,17 @@
       signals: signals,
       debug: debugInfo
     };
+    if (captureResult && captureResult.status === "ok") {
+      observation.markdown = captureResult.markdown || "";
+      observation.markdownChunks = Array.isArray(captureResult.chunks) ? captureResult.chunks : [];
+      observation.markdownTruncated = !!captureResult.truncated;
+      observation.extractedLinks = Array.isArray(captureResult.links) ? captureResult.links : [];
+      if (debugInfo && captureResult.signals) {
+        debugInfo.captureSignals = captureResult.signals;
+        debugInfo.captureChunkCount = captureResult.chunkCount;
+      }
+    }
+    return observation;
   }
 
   function observeDomWithStatus(options) {
@@ -3444,16 +3467,65 @@
     return node && node.nodeType === Node.DOCUMENT_NODE;
   }
 
+  function getCaptureContentRoot() {
+    var selectors = [
+      "article",
+      "main",
+      "[role='main']",
+      "[itemprop='articleBody']",
+      ".post-content",
+      ".article-content",
+      ".entry-content",
+      ".content",
+      "#content"
+    ];
+    for (var i = 0; i < selectors.length; i += 1) {
+      var element = document.querySelector(selectors[i]);
+      if (element && element.textContent && element.textContent.trim().length > 200) {
+        return element;
+      }
+    }
+    return null;
+  }
+
+  function shouldUseContentRootDirectly(root) {
+    if (!root || !root.textContent) {
+      return false;
+    }
+    var length = root.textContent.trim().length;
+    if (length < 800) {
+      return false;
+    }
+    var structureCount = root.querySelectorAll("p, h1, h2, h3, h4, li").length;
+    return structureCount >= 4;
+  }
+
   function tryReadability() {
     if (typeof Readability === "undefined") {
       return null;
     }
     try {
-      var cloned = document.cloneNode(true);
-      if (!isDocumentNode(cloned)) {
+      var contentRoot = getCaptureContentRoot();
+      if (contentRoot && shouldUseContentRootDirectly(contentRoot)) {
+        return { content: contentRoot.innerHTML, title: document.title || "", captureRootUsed: true };
+      }
+      var doc = document.implementation && document.implementation.createHTMLDocument
+        ? document.implementation.createHTMLDocument(document.title || "")
+        : null;
+      if (!doc) {
         return null;
       }
-      var reader = new Readability(cloned, { charThreshold: 100 });
+      var container = doc.createElement("article");
+      if (contentRoot) {
+        container.appendChild(contentRoot.cloneNode(true));
+      } else if (document.body) {
+        container.appendChild(document.body.cloneNode(true));
+      }
+      doc.body.appendChild(container);
+      if (!isDocumentNode(doc)) {
+        return null;
+      }
+      var reader = new Readability(doc, { charThreshold: 100 });
       var article = reader.parse();
       if (article && article.content && article.textContent) {
         var textLength = article.textContent.trim().length;
@@ -3467,21 +3539,9 @@
   }
 
   function getMainContentFallback() {
-    var selectors = [
-      "article",
-      "main",
-      "[role='main']",
-      ".post-content",
-      ".article-content",
-      ".entry-content",
-      ".content",
-      "#content"
-    ];
-    for (var i = 0; i < selectors.length; i += 1) {
-      var element = document.querySelector(selectors[i]);
-      if (element && element.textContent && element.textContent.trim().length > 200) {
-        return element.innerHTML;
-      }
+    var element = getCaptureContentRoot();
+    if (element && element.innerHTML) {
+      return element.innerHTML;
     }
     if (document.body) {
       return document.body.innerHTML;
@@ -3489,14 +3549,132 @@
     return "";
   }
 
+  var CAPTURE_NOISE_TOKENS = [
+    "ad",
+    "ads",
+    "advert",
+    "sponsor",
+    "sponsored",
+    "promoted",
+    "promo",
+    "recommend",
+    "related",
+    "share",
+    "social",
+    "newsletter",
+    "subscribe",
+    "signup",
+    "cookie",
+    "consent",
+    "modal",
+    "paywall",
+    "banner"
+  ];
+
+  var CAPTURE_CONTENT_TAGS = {
+    article: true,
+    main: true,
+    section: true,
+    figure: true,
+    figcaption: true,
+    table: true,
+    thead: true,
+    tbody: true,
+    tr: true,
+    td: true,
+    th: true,
+    pre: true,
+    code: true,
+    blockquote: true
+  };
+
+  function hasNoiseToken(value) {
+    if (!value) {
+      return false;
+    }
+    var lower = String(value).toLowerCase();
+    for (var i = 0; i < CAPTURE_NOISE_TOKENS.length; i += 1) {
+      var token = CAPTURE_NOISE_TOKENS[i];
+      var pattern = new RegExp("(^|[^a-z0-9])" + token + "([^a-z0-9]|$)");
+      if (pattern.test(lower)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isContentTag(element) {
+    if (!element || !element.tagName) {
+      return false;
+    }
+    return !!CAPTURE_CONTENT_TAGS[element.tagName.toLowerCase()];
+  }
+
+  function removeNoiseElements(doc) {
+    var stats = { removedNodesCount: 0, removedOverlayCount: 0, removedAdLikeCount: 0 };
+    if (!doc || !doc.querySelectorAll) {
+      return stats;
+    }
+    var adSelectors = [
+      "amp-ad",
+      "ins.adsbygoogle",
+      "iframe[src*=\"doubleclick\"]",
+      "iframe[src*=\"ads\"]",
+      "iframe[src*=\"adservice\"]",
+      "[data-ad]",
+      "[data-ads]",
+      "[data-advertisement]",
+      "[data-sponsor]",
+      "[data-promoted]"
+    ];
+    adSelectors.forEach(function (selector) {
+      var elements = doc.querySelectorAll(selector);
+      for (var i = 0; i < elements.length; i += 1) {
+        if (elements[i] && elements[i].remove) {
+          elements[i].remove();
+          stats.removedAdLikeCount += 1;
+        }
+      }
+    });
+
+    var candidates = doc.querySelectorAll("[class],[id],[aria-label],[role],[name]");
+    for (var j = 0; j < candidates.length; j += 1) {
+      var element = candidates[j];
+      if (!element || !element.getAttribute || isContentTag(element)) {
+        continue;
+      }
+      var role = element.getAttribute("role") || "";
+      var ariaModal = element.getAttribute("aria-modal") || "";
+      if (role === "dialog" || role === "alertdialog" || ariaModal === "true") {
+        if (element.remove) {
+          element.remove();
+          stats.removedOverlayCount += 1;
+        }
+        continue;
+      }
+      var id = element.getAttribute("id") || "";
+      var className = element.getAttribute("class") || "";
+      var ariaLabel = element.getAttribute("aria-label") || "";
+      var name = element.getAttribute("name") || "";
+      if (hasNoiseToken(id) || hasNoiseToken(className) || hasNoiseToken(ariaLabel) || hasNoiseToken(name)) {
+        if (element.remove) {
+          element.remove();
+          stats.removedAdLikeCount += 1;
+        }
+      }
+    }
+    stats.removedNodesCount = stats.removedAdLikeCount + stats.removedOverlayCount;
+    return stats;
+  }
+
   function cleanHtml(html) {
     if (!html) {
-      return "";
+      return { html: "", stats: { removedNodesCount: 0, removedOverlayCount: 0, removedAdLikeCount: 0 } };
     }
     var parser = new DOMParser();
     var doc = parser.parseFromString(html, "text/html");
     if (!doc || !doc.querySelectorAll) {
-      return html;
+      return { html: html, stats: { removedNodesCount: 0, removedOverlayCount: 0, removedAdLikeCount: 0 } };
     }
     CAPTURE_NOISE_SELECTORS.forEach(function (selector) {
       var elements = doc.querySelectorAll(selector);
@@ -3506,7 +3684,8 @@
         }
       }
     });
-    return doc.body ? doc.body.innerHTML : html;
+    var stats = removeNoiseElements(doc);
+    return { html: doc.body ? doc.body.innerHTML : html, stats: stats };
   }
 
   function isNoiseUrl(url) {
@@ -3681,40 +3860,218 @@
     return links;
   }
 
-  function boundMarkdown(markdown, maxChars) {
+  function postProcessMarkdown(markdown) {
     var text = String(markdown || "");
+    if (!text) {
+      return "";
+    }
+    var lines = text.split(/\r?\n/);
+    var output = [];
+    var seen = {};
+    var inFence = false;
+    for (var i = 0; i < lines.length; i += 1) {
+      var line = lines[i];
+      var trimmed = line.trim();
+      if (trimmed.startsWith("```")) {
+        inFence = !inFence;
+        output.push(line);
+        continue;
+      }
+      if (inFence) {
+        output.push(line);
+        continue;
+      }
+      if (!trimmed) {
+        output.push("");
+        continue;
+      }
+      var lower = trimmed.toLowerCase();
+      if (lower === "advertisement" || lower === "sponsored" || lower === "promoted") {
+        continue;
+      }
+      if (trimmed.length < 80 &&
+          (lower.indexOf("subscribe") >= 0 ||
+           lower.indexOf("newsletter") >= 0 ||
+           lower.indexOf("sign up") >= 0 ||
+           lower.indexOf("sign-up") >= 0 ||
+           lower.indexOf("cookie") >= 0 ||
+           lower.indexOf("privacy policy") >= 0 ||
+           lower.indexOf("terms of service") >= 0 ||
+           lower.indexOf("all rights reserved") >= 0)) {
+        continue;
+      }
+      if (trimmed.length < 120) {
+        var count = seen[lower] || 0;
+        if (count > 0 && (
+          lower.indexOf("privacy") >= 0 ||
+          lower.indexOf("terms") >= 0 ||
+          lower.indexOf("cookie") >= 0 ||
+          lower.indexOf("subscribe") >= 0 ||
+          lower.indexOf("newsletter") >= 0)) {
+          continue;
+        }
+        seen[lower] = count + 1;
+      }
+      output.push(line);
+    }
+    var joined = output.join("\n").replace(/\n{3,}/g, "\n\n");
+    return joined.trim();
+  }
+
+  function splitMarkdownBlocks(markdown) {
+    var lines = String(markdown || "").split(/\r?\n/);
+    var blocks = [];
+    var current = [];
+    var inFence = false;
+    for (var i = 0; i < lines.length; i += 1) {
+      var line = lines[i];
+      var trimmed = line.trim();
+      if (trimmed.startsWith("```")) {
+        inFence = !inFence;
+        current.push(line);
+        if (!inFence) {
+          blocks.push({ text: current.join("\n"), isCodeFence: true });
+          current = [];
+        }
+        continue;
+      }
+      if (inFence) {
+        current.push(line);
+        continue;
+      }
+      if (trimmed.startsWith("#")) {
+        if (current.length) {
+          blocks.push({ text: current.join("\n") });
+          current = [];
+        }
+        current.push(line);
+        continue;
+      }
+      if (!trimmed) {
+        if (current.length) {
+          blocks.push({ text: current.join("\n") });
+          current = [];
+        }
+        continue;
+      }
+      current.push(line);
+    }
+    if (current.length) {
+      blocks.push({ text: current.join("\n") });
+    }
+    return blocks;
+  }
+
+  function updateHeadingStack(stack, headingLine) {
+    var match = headingLine.match(/^(#+)\s+(.*)$/);
+    if (!match) {
+      return stack;
+    }
+    var level = match[1].length;
+    if (level <= 1) {
+      return [headingLine];
+    }
+    if (level === 2) {
+      return stack.length > 0 ? [stack[0], headingLine] : [headingLine];
+    }
+    return stack;
+  }
+
+  function chunkMarkdown(markdown, maxChars) {
+    var text = String(markdown || "").trim();
     var total = text.length;
     var limit = clampCaptureMaxChars(maxChars);
+    if (!text) {
+      return { markdown: "", chunks: [], truncated: false, totalChars: 0, chunkCount: 0 };
+    }
     if (total <= limit) {
-      return { markdown: text, truncated: false, totalChars: total, headChars: total, tailChars: 0 };
+      return { markdown: text, chunks: [text], truncated: false, totalChars: total, chunkCount: 1 };
     }
-    var marker = "\n\n...\n\n[Truncated: captured first {head} chars and last {tail} chars]\n\n";
-    var overhead = marker.length + 10;
-    var head = Math.max(0, Math.floor((limit - overhead) * 0.6));
-    var tail = Math.max(0, limit - overhead - head);
-    if (head + tail + overhead > limit) {
-      tail = Math.max(0, limit - overhead - head);
+    var chunkSize = Math.min(8000, Math.max(2000, Math.floor(limit / 3)));
+    var maxChunks = Math.min(6, Math.max(1, Math.ceil(limit / chunkSize)));
+    var blocks = splitMarkdownBlocks(text);
+    var chunks = [];
+    var current = "";
+    var headingStack = [];
+    var remaining = limit;
+    var truncated = false;
+    for (var i = 0; i < blocks.length; i += 1) {
+      var blockText = blocks[i].text || "";
+      var trimmed = blockText.trim();
+      if (!trimmed) {
+        continue;
+      }
+      if (trimmed.startsWith("#")) {
+        headingStack = updateHeadingStack(headingStack, trimmed);
+      }
+      var prefix = "";
+      if (!current && headingStack.length && !trimmed.startsWith("#")) {
+        prefix = headingStack.join("\n") + "\n\n";
+      }
+      var candidate = current ? current + "\n\n" + prefix + blockText : prefix + blockText;
+      if (current && candidate.length > chunkSize) {
+        chunks.push(current);
+        remaining -= current.length;
+        if (chunks.length >= maxChunks || remaining <= 0) {
+          truncated = true;
+          break;
+        }
+        current = "";
+        prefix = "";
+        if (headingStack.length && !trimmed.startsWith("#")) {
+          prefix = headingStack.join("\n") + "\n\n";
+        }
+        candidate = prefix + blockText;
+      }
+      if (candidate.length > remaining) {
+        truncated = true;
+        break;
+      }
+      current = candidate;
     }
-    if (tail < 200 && limit > 400) {
-      tail = 200;
-      head = Math.max(0, limit - overhead - tail);
+    if (!truncated && current) {
+      chunks.push(current);
     }
-    var headText = text.slice(0, head);
-    var tailText = tail > 0 ? text.slice(total - tail) : "";
-    var markerText = marker.replace("{head}", String(head)).replace("{tail}", String(tail));
+    if (chunks.length === 0) {
+      var slice = text.slice(0, Math.min(limit, text.length));
+      chunks = [slice];
+      truncated = true;
+    }
+    if (truncated) {
+      chunks[chunks.length - 1] = chunks[chunks.length - 1] + "\n\n[Truncated: captured partial content]";
+    }
+    var joined = chunks.join("\n\n");
     return {
-      markdown: headText + markerText + tailText,
-      truncated: true,
+      markdown: joined,
+      chunks: chunks,
+      truncated: truncated,
       totalChars: total,
-      headChars: head,
-      tailChars: tail
+      chunkCount: chunks.length
+    };
+  }
+
+  function boundMarkdown(markdown, maxChars) {
+    var chunked = chunkMarkdown(markdown, maxChars);
+    if (!chunked) {
+      return { markdown: "", truncated: false, totalChars: 0, headChars: 0, tailChars: 0, chunks: [] };
+    }
+    var headChars = chunked.chunks.length ? chunked.chunks[0].length : 0;
+    var tailChars = chunked.chunks.length ? chunked.chunks[chunked.chunks.length - 1].length : 0;
+    return {
+      markdown: chunked.markdown,
+      truncated: chunked.truncated,
+      totalChars: chunked.totalChars,
+      headChars: headChars,
+      tailChars: tailChars,
+      chunks: chunked.chunks,
+      chunkCount: chunked.chunkCount
     };
   }
 
   function fallbackMarkdownFromText(title, text, maxChars) {
     var heading = title ? "# " + title + "\n\n" : "";
     var body = String(text || "").trim();
-    var combined = heading + body;
+    var combined = heading + postProcessMarkdown(body);
     return boundMarkdown(combined, maxChars);
   }
 
@@ -3722,7 +4079,9 @@
     var pageUrl = typeof window !== "undefined" ? (window.location.href || "") : "";
     var mode = normalizeCaptureMode(options && options.mode);
     var maxChars = clampCaptureMaxChars(options && options.maxChars);
+    var includeLinks = typeof (options && options.captureLinks) === "boolean" ? options.captureLinks : true;
     var readabilityUsed = false;
+    var contentRootUsed = false;
     var content = "";
     var title = document.title || "";
 
@@ -3732,6 +4091,7 @@
         content = readability.content;
         title = readability.title || title;
         readabilityUsed = true;
+        contentRootUsed = !!readability.captureRootUsed;
       }
     }
 
@@ -3739,8 +4099,32 @@
       content = getMainContentFallback();
     }
 
-    var cleaned = cleanHtml(content);
-    var links = extractLinksFromHtml(cleaned, pageUrl);
+    if (content && content.length > 2000000) {
+      var fallbackText = document.body ? document.body.innerText : "";
+      var boundedFallback = fallbackMarkdownFromText(title, fallbackText, maxChars);
+      return {
+        status: "ok",
+        url: pageUrl,
+        title: title,
+        markdown: boundedFallback.markdown,
+        truncated: boundedFallback.truncated,
+        totalChars: boundedFallback.totalChars,
+        chunks: boundedFallback.chunks,
+        chunkCount: boundedFallback.chunkCount,
+        links: [],
+        signals: {
+          readabilityUsed: readabilityUsed,
+          contentRootUsed: contentRootUsed,
+          mode: mode,
+          fallback: "innerText",
+          oversizeHtml: true
+        }
+      };
+    }
+
+    var cleanedResult = cleanHtml(content);
+    var cleaned = cleanedResult.html || "";
+    var links = includeLinks ? extractLinksFromHtml(cleaned, pageUrl) : [];
     if (!turndownService) {
       var fallbackText = document.body ? document.body.innerText : "";
       var boundedFallback = fallbackMarkdownFromText(title, fallbackText, maxChars);
@@ -3751,15 +4135,19 @@
         markdown: boundedFallback.markdown,
         truncated: boundedFallback.truncated,
         totalChars: boundedFallback.totalChars,
+        chunks: boundedFallback.chunks,
+        chunkCount: boundedFallback.chunkCount,
         links: links,
         signals: {
           readabilityUsed: readabilityUsed,
+          contentRootUsed: contentRootUsed,
           mode: mode,
           fallback: "innerText"
         }
       };
     }
     var markdown = turndownService.turndown(cleaned);
+    markdown = postProcessMarkdown(markdown);
     var bounded = boundMarkdown(markdown, maxChars);
     return {
       status: "ok",
@@ -3768,10 +4156,16 @@
       markdown: bounded.markdown,
       truncated: bounded.truncated,
       totalChars: bounded.totalChars,
+      chunks: bounded.chunks,
+      chunkCount: bounded.chunkCount,
       links: links,
       signals: {
         readabilityUsed: readabilityUsed,
-        mode: mode
+        contentRootUsed: contentRootUsed,
+        mode: mode,
+        removedNodesCount: cleanedResult.stats ? cleanedResult.stats.removedNodesCount : 0,
+        removedOverlayCount: cleanedResult.stats ? cleanedResult.stats.removedOverlayCount : 0,
+        removedAdLikeCount: cleanedResult.stats ? cleanedResult.stats.removedAdLikeCount : 0
       }
     };
   }

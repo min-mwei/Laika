@@ -177,12 +177,15 @@ public struct LLMTraceEvent: Codable, Sendable {
     public let pageTitlePreview: String?
     public let systemPromptChars: Int?
     public let userPromptChars: Int?
+    public let contextChars: Int?
+    public let textChars: Int?
+    public let primaryChars: Int?
+    public let chunkCount: Int?
     public let observationChars: Int?
     public let elementCount: Int?
     public let blockCount: Int?
     public let itemCount: Int?
     public let outlineCount: Int?
-    public let primaryChars: Int?
     public let commentCount: Int?
     public let tabCount: Int?
     public let recentToolCallsCount: Int?
@@ -218,12 +221,15 @@ public struct LLMTraceEvent: Codable, Sendable {
         topP: Double,
         systemPrompt: String,
         userPrompt: String,
+        contextChars: Int? = nil,
+        textChars: Int? = nil,
+        primaryChars: Int? = nil,
+        chunkCount: Int? = nil,
         observationChars: Int,
         elementCount: Int,
         blockCount: Int,
         itemCount: Int,
         outlineCount: Int,
-        primaryChars: Int,
         commentCount: Int,
         tabCount: Int,
         recentToolName: String? = nil,
@@ -252,12 +258,15 @@ public struct LLMTraceEvent: Codable, Sendable {
             pageTitlePreview: shouldLog ? LaikaLogger.preview(pageTitle, maxChars: 200) : nil,
             systemPromptChars: systemPrompt.count,
             userPromptChars: userPrompt.count,
+            contextChars: contextChars,
+            textChars: textChars,
+            primaryChars: primaryChars,
+            chunkCount: chunkCount,
             observationChars: observationChars,
             elementCount: elementCount,
             blockCount: blockCount,
             itemCount: itemCount,
             outlineCount: outlineCount,
-            primaryChars: primaryChars,
             commentCount: commentCount,
             tabCount: tabCount,
             recentToolCallsCount: recentToolCallsCount,
@@ -320,12 +329,15 @@ public struct LLMTraceEvent: Codable, Sendable {
             pageTitlePreview: nil,
             systemPromptChars: nil,
             userPromptChars: nil,
+            contextChars: nil,
+            textChars: nil,
+            primaryChars: nil,
+            chunkCount: nil,
             observationChars: nil,
             elementCount: nil,
             blockCount: nil,
             itemCount: nil,
             outlineCount: nil,
-            primaryChars: nil,
             commentCount: nil,
             tabCount: nil,
             recentToolCallsCount: nil,

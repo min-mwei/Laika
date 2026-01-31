@@ -113,6 +113,8 @@ We need enough observability to debug:
 
 Recommended request fields:
 - `stage` (`plan|web.answer|web.summarize|transform.run|ranking|summarization|capture`) and `model_id`
+- prompt sizes: `system_prompt_chars`, `user_prompt_chars`, `context_chars`
+- packing metrics: `text_chars`, `primary_chars`, `chunk_count` (and optional per-chunk sizes)
 - input sizes (chars/tokens estimates) per context doc kind
 - counts: sources included, chunks included, tool schema version
 - redacted previews only when explicitly enabled
@@ -163,4 +165,3 @@ P0 can start simple:
 - Never upload logs by default.
 
 This avoids unbounded growth while keeping enough history for debugging.
-
