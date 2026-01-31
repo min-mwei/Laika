@@ -6,7 +6,7 @@ public enum ModelPreference: Sendable {
     case staticFallback
 }
 
-public final class ModelRouter: ModelRunner, StreamingModelRunner {
+public final class ModelRouter: ModelRunner, StreamingModelRunner, MaxTokenConfigurable {
     private let runner: ModelRunner
 
     public init(preferred: ModelPreference, modelURL: URL?, maxTokens: Int = 2048) {
@@ -41,5 +41,9 @@ public final class ModelRouter: ModelRunner, StreamingModelRunner {
             }
         }
         return streaming.streamText(request)
+    }
+
+    public func setMaxTokensOverride(_ maxTokens: Int?) {
+        (runner as? MaxTokenConfigurable)?.setMaxTokensOverride(maxTokens)
     }
 }

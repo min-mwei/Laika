@@ -204,11 +204,16 @@ Goal: complete these before moving on to P1 work. Status is tracked inline.
 ### Feedback integration (2026-01-31)
 
 Immediate P0 actions (this iteration):
-- **Summarize observes include Markdown (in progress):** set `includeMarkdown=true` + `captureMode`/`captureMaxChars` defaults in popover/harness; disable `captureLinks` for summarize flows to reduce noise.
-- **Capture reuse by navigation (in progress):** cache Readability/Turndown capture results per `navigationGeneration` + options to avoid repeated heavy DOM parsing during multi-step runs.
-- **Chunking tail coverage (in progress):** remove implicit max-chunk caps, align chunk sizing with `captureMaxChars`, and include a tail sample chunk when truncation happens.
-- **LLM pack de-duplication (in progress):** when `markdownChunks` are present, omit full `markdown` from the summary doc and rely on chunk docs only.
-- **Capture links default (in progress):** default `captureLinks=false` for summarize/observe, explicitly enable for `source.capture` only.
+- **Summarize observes include Markdown (done):** set `includeMarkdown=true` + `captureMode`/`captureMaxChars` defaults in popover/harness; disable `captureLinks` for summarize flows to reduce noise.
+- **Capture reuse by navigation (done):** cache Readability/Turndown capture results per `navigationGeneration` + options to avoid repeated heavy DOM parsing during multi-step runs.
+- **Chunking tail coverage (done):** remove implicit max-chunk caps, align chunk sizing with `captureMaxChars`, and include a tail sample chunk when truncation happens.
+- **LLM pack de-duplication (done):** when `markdownChunks` are present, omit full `markdown` from the summary doc and rely on chunk docs only.
+- **Capture links default (done):** default `captureLinks=false` for summarize/observe, explicitly enable for `source.capture` only.
+
+Additional P0 actions (this iteration):
+- **MaxTokens override without reload (done):** keep model runners alive across per-request token changes; apply max token caps per request instead of reloading the model.
+- **Capture job lease reset (done):** requeue stale `running` capture jobs so pending sources do not get stuck indefinitely after crashes.
+- **Run cache LRU (done):** add a small LRU/TTL for `cachedListItemsByRun` to prevent unbounded growth.
 
 ### Persistence boundaries (source of truth)
 

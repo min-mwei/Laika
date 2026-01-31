@@ -18,6 +18,7 @@ enum LLMCPRequestBuilder {
         static let maxActionPrimaryChars = 1200
         static let maxChunkChars = 2000
         static let maxChunks = 3
+        static let maxFallbackChunks = 6
         static let maxElements = 40
         static let maxElementLabelChars = 120
         static let maxTitleChars = 140
@@ -166,6 +167,7 @@ enum LLMCPRequestBuilder {
         if markdownChunkCount > 0 {
             content["chunk_count"] = .number(Double(markdownChunkCount))
         }
+        let hasMarkdownContent = !markdown.isEmpty || markdownChunkCount > 0
         var discussionCandidates: [(title: String, url: String, handleId: String?, commentCount: Int)] = []
         var summaryText: String?
         if markdown.isEmpty, shouldIncludeSummaryText(focus: focus, observation: observation) {
@@ -203,7 +205,9 @@ enum LLMCPRequestBuilder {
                 content["text"] = .string(summaryText)
             }
         }
-        let itemsForFocus = shouldIncludeItems(focus: focus, goalPlan: goalPlan)
+        let includeItems = shouldIncludeItems(focus: focus, goalPlan: goalPlan)
+            && (!hasMarkdownContent || isListObservation(observation))
+        let itemsForFocus = includeItems
             ? selectItemsForFocus(items: observation.items, goalPlan: goalPlan, focus: focus)
             : []
         if !itemsForFocus.isEmpty {
@@ -340,7 +344,13 @@ enum LLMCPRequestBuilder {
             useMarkdown = true
         } else {
             let sourceText = preferredObservationText(observation: observation)
-            chunks = chunkText(sourceText, maxChunkChars: ObservationBudget.maxChunkChars, maxChunks: ObservationBudget.maxChunks)
+            if sourceText.isEmpty {
+                chunks = []
+            } else {
+                let estimatedChunks = Int(ceil(Double(sourceText.count) / Double(ObservationBudget.maxChunkChars)))
+                let dynamicMax = max(ObservationBudget.maxChunks, min(ObservationBudget.maxFallbackChunks, estimatedChunks))
+                chunks = chunkText(sourceText, maxChunkChars: ObservationBudget.maxChunkChars, maxChunks: dynamicMax)
+            }
             useMarkdown = false
         }
         guard chunks.count > 1 else {

@@ -87,3 +87,7 @@ public extension ModelRunner {
         return GoalPlan.unknown
     }
 }
+
+public protocol MaxTokenConfigurable: Sendable {
+    func setMaxTokensOverride(_ maxTokens: Int?)
+}

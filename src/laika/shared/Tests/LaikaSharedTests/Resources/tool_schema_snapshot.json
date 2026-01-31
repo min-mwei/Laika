@@ -55,19 +55,27 @@
       "required": {
         "url": "string"
       },
-      "optional": {}
+      "optional": {
+        "waitForReady": "bool"
+      }
     },
     "browser.back": {
       "required": {},
-      "optional": {}
+      "optional": {
+        "waitForReady": "bool"
+      }
     },
     "browser.forward": {
       "required": {},
-      "optional": {}
+      "optional": {
+        "waitForReady": "bool"
+      }
     },
     "browser.refresh": {
       "required": {},
-      "optional": {}
+      "optional": {
+        "waitForReady": "bool"
+      }
     },
     "browser.select": {
       "required": {

@@ -22,7 +22,7 @@ private actor NativeAgent {
     private var modelURL: URL?
     private var runner: ModelRunner?
     private var orchestrator: AgentOrchestrator?
-    private var maxTokens: Int?
+    private var maxTokensOverride: Int?
 
     func plan(request: PlanRequest, maxTokens: Int?) async throws -> AgentResponse {
         try request.validate()
@@ -90,19 +90,19 @@ private actor NativeAgent {
     private func ensureRunner(maxTokens: Int?) -> ModelRunner {
         let resolvedURL = resolveModelURL()
         let tokens = normalizeMaxTokens(maxTokens)
+        let maxTokenCap = 8192
         let nextRunner: ModelRunner
         if let resolvedURL {
-            if runner == nil || modelURL != resolvedURL || self.maxTokens != tokens {
+            if runner == nil || modelURL != resolvedURL {
                 os_log(
-                    "Using MLX model at %{public}@ (maxTokens=%{public}d)",
+                    "Using MLX model at %{public}@ (maxTokensCap=%{public}d)",
                     log: log,
                     type: .info,
                     resolvedURL.path,
-                    tokens
+                    maxTokenCap
                 )
-                runner = ModelRouter(preferred: .mlx, modelURL: resolvedURL, maxTokens: tokens)
+                runner = ModelRouter(preferred: .mlx, modelURL: resolvedURL, maxTokens: maxTokenCap)
                 modelURL = resolvedURL
-                self.maxTokens = tokens
                 orchestrator = nil
             }
             nextRunner = runner ?? StaticModelRunner()
@@ -111,9 +111,21 @@ private actor NativeAgent {
             let fallback = StaticModelRunner()
             runner = fallback
             modelURL = nil
-            self.maxTokens = tokens
             orchestrator = nil
             nextRunner = fallback
+        }
+
+        if let configurable = nextRunner as? MaxTokenConfigurable {
+            configurable.setMaxTokensOverride(tokens)
+        }
+        if maxTokensOverride != tokens {
+            os_log(
+                "Applying maxTokens override=%{public}d",
+                log: log,
+                type: .info,
+                tokens
+            )
+            maxTokensOverride = tokens
         }
 
         if orchestrator == nil {

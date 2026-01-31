@@ -65,10 +65,10 @@ public enum ToolSchemaValidator {
             return validate(arguments: arguments, required: ["url": .string], optional: [:])
                 && hasNonEmptyString(arguments, key: "url")
         case .browserNavigate:
-            return validate(arguments: arguments, required: ["url": .string], optional: [:])
+            return validate(arguments: arguments, required: ["url": .string], optional: ["waitForReady": .bool])
                 && hasNonEmptyString(arguments, key: "url")
         case .browserBack, .browserForward, .browserRefresh:
-            return arguments.isEmpty
+            return validate(arguments: arguments, required: [:], optional: ["waitForReady": .bool])
         case .browserSelect:
             return validate(arguments: arguments, required: ["handleId": .string, "value": .string], optional: [:])
                 && hasNonEmptyString(arguments, key: "handleId")

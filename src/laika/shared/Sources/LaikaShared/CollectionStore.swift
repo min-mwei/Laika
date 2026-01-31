@@ -254,9 +254,80 @@ public actor CollectionStore {
         }
         let db = try openDatabase()
         let nowMs = currentTimeMs()
+        let staleAfterMs: Int64 = 10 * 60 * 1000
+        let staleCutoff = nowMs - staleAfterMs
         try db.exec(sql: "BEGIN IMMEDIATE;")
         var job: CaptureJobRecord?
         do {
+            if staleCutoff > 0 {
+                let resetSQL: String
+                if trimmedCollectionId != nil {
+                    resetSQL = """
+                    UPDATE capture_jobs
+                    SET status = 'queued',
+                        last_error = 'stale running job requeued',
+                        updated_at_ms = ?
+                    WHERE status = 'running'
+                      AND updated_at_ms < ?
+                      AND attempt_count < max_attempts
+                      AND collection_id = ?;
+                    """
+                } else {
+                    resetSQL = """
+                    UPDATE capture_jobs
+                    SET status = 'queued',
+                        last_error = 'stale running job requeued',
+                        updated_at_ms = ?
+                    WHERE status = 'running'
+                      AND updated_at_ms < ?
+                      AND attempt_count < max_attempts;
+                    """
+                }
+                let resetStatement = try db.prepare(resetSQL)
+                defer { sqlite3_finalize(resetStatement) }
+                sqlite3_bind_int64(resetStatement, 1, nowMs)
+                sqlite3_bind_int64(resetStatement, 2, staleCutoff)
+                if let trimmedCollectionId {
+                    sqlite3_bind_text(resetStatement, 3, trimmedCollectionId, -1, SQLITE_TRANSIENT)
+                }
+                try db.step(resetStatement)
+
+                let failSQL: String
+                if trimmedCollectionId != nil {
+                    failSQL = """
+                    UPDATE capture_jobs
+                    SET status = 'failed',
+                        last_error = 'stale running job exceeded max attempts',
+                        updated_at_ms = ?,
+                        finished_at_ms = ?
+                    WHERE status = 'running'
+                      AND updated_at_ms < ?
+                      AND attempt_count >= max_attempts
+                      AND collection_id = ?;
+                    """
+                } else {
+                    failSQL = """
+                    UPDATE capture_jobs
+                    SET status = 'failed',
+                        last_error = 'stale running job exceeded max attempts',
+                        updated_at_ms = ?,
+                        finished_at_ms = ?
+                    WHERE status = 'running'
+                      AND updated_at_ms < ?
+                      AND attempt_count >= max_attempts;
+                    """
+                }
+                let failStatement = try db.prepare(failSQL)
+                defer { sqlite3_finalize(failStatement) }
+                sqlite3_bind_int64(failStatement, 1, nowMs)
+                sqlite3_bind_int64(failStatement, 2, nowMs)
+                sqlite3_bind_int64(failStatement, 3, staleCutoff)
+                if let trimmedCollectionId {
+                    sqlite3_bind_text(failStatement, 4, trimmedCollectionId, -1, SQLITE_TRANSIENT)
+                }
+                try db.step(failStatement)
+            }
+
             let querySQL: String
             if trimmedCollectionId != nil {
                 querySQL = """

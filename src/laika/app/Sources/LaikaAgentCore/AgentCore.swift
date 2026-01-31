@@ -35,6 +35,8 @@ public final class AgentOrchestrator: @unchecked Sendable {
     private let model: ModelRunner
     private let policyGate: PolicyGate
     private var cachedListItemsByRun: [String: [ObservedItem]] = [:]
+    private var cachedListItemsByRunOrder: [String] = []
+    private let maxCachedRunIds = 20
     private var lastListItems: [ObservedItem] = []
     private var lastListOrigin: String = ""
     private let cacheLock = NSLock()
@@ -1200,6 +1202,9 @@ public final class AgentOrchestrator: @unchecked Sendable {
             if cachedListItemsByRun[runId] == nil || cachedListItemsByRun[runId]?.isEmpty == true {
                 cachedListItemsByRun[runId] = context.observation.items
             }
+            if cachedListItemsByRun[runId] != nil {
+                touchRunCacheLocked(runId: runId)
+            }
         }
         if itemsContainCommentLinks(context.observation.items),
            itemsMostlyExternal(context.observation.items, origin: context.origin) {
@@ -1212,6 +1217,9 @@ public final class AgentOrchestrator: @unchecked Sendable {
     private func cachedListItems(for runId: String) -> [ObservedItem]? {
         cacheLock.lock()
         let items = cachedListItemsByRun[runId]
+        if items != nil {
+            touchRunCacheLocked(runId: runId)
+        }
         cacheLock.unlock()
         return items
     }
@@ -1228,6 +1236,24 @@ public final class AgentOrchestrator: @unchecked Sendable {
         let origin = lastListOrigin
         cacheLock.unlock()
         return origin
+    }
+
+    private func touchRunCacheLocked(runId: String) {
+        if let index = cachedListItemsByRunOrder.firstIndex(of: runId) {
+            cachedListItemsByRunOrder.remove(at: index)
+        }
+        cachedListItemsByRunOrder.append(runId)
+        pruneRunCacheLocked()
+    }
+
+    private func pruneRunCacheLocked() {
+        guard cachedListItemsByRunOrder.count > maxCachedRunIds else {
+            return
+        }
+        while cachedListItemsByRunOrder.count > maxCachedRunIds {
+            let evicted = cachedListItemsByRunOrder.removeFirst()
+            cachedListItemsByRun.removeValue(forKey: evicted)
+        }
     }
 
     private struct CommentStats {

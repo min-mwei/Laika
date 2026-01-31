@@ -1,8 +1,10 @@
 import Foundation
 import LaikaShared
 
-public final class StaticModelRunner: StreamingModelRunner {
+public final class StaticModelRunner: StreamingModelRunner, MaxTokenConfigurable {
     public init() {}
+
+    public func setMaxTokensOverride(_ maxTokens: Int?) {}
 
     public func generatePlan(context: ContextPack, userGoal: String) async throws -> ModelResponse {
         let normalizedGoal = userGoal.lowercased()

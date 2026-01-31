@@ -18,10 +18,12 @@ actor ModelStore {
     }
 }
 
-public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
+public final class MLXModelRunner: ModelRunner, StreamingModelRunner, MaxTokenConfigurable {
     public let modelURL: URL
     public let maxTokens: Int
     private let store = ModelStore()
+    private var maxTokensOverride: Int?
+    private let maxTokensLock = NSLock()
 
     private struct GenerationAttempt {
         let temperature: Float
@@ -95,6 +97,20 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
     public init(modelURL: URL, maxTokens: Int = 2048) {
         self.modelURL = modelURL
         self.maxTokens = maxTokens
+    }
+
+    public func setMaxTokensOverride(_ maxTokens: Int?) {
+        let sanitized = maxTokens.map { max(32, min($0, self.maxTokens)) }
+        maxTokensLock.lock()
+        maxTokensOverride = sanitized
+        maxTokensLock.unlock()
+    }
+
+    private func effectiveMaxTokens() -> Int {
+        maxTokensLock.lock()
+        let override = maxTokensOverride
+        maxTokensLock.unlock()
+        return override ?? maxTokens
     }
 
     private func recentToolDebugInfo(for context: ContextPack) -> (name: String?, args: String?, resultStatus: String?, resultPreview: String?) {
@@ -694,7 +710,8 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         maxOutputChars: Int,
         maxTokensOverride: Int? = nil
     ) async throws -> GenerationResult {
-        let tokenLimit = maxTokensOverride ?? maxTokens
+        let maxTokenCap = effectiveMaxTokens()
+        let tokenLimit = min(maxTokensOverride ?? maxTokenCap, maxTokenCap)
         let parameters = GenerateParameters(
             maxTokens: tokenLimit,
             temperature: attempt.temperature,
@@ -766,7 +783,8 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         maxOutputChars: Int,
         maxTokensOverride: Int? = nil
     ) async throws -> GenerationResult {
-        let tokenLimit = maxTokensOverride ?? maxTokens
+        let maxTokenCap = effectiveMaxTokens()
+        let tokenLimit = min(maxTokensOverride ?? maxTokenCap, maxTokenCap)
         let parameters = GenerateParameters(
             maxTokens: tokenLimit,
             temperature: attempt.temperature,
@@ -844,7 +862,8 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
             Task {
                 do {
                     let container = try await store.container(for: modelURL)
-                    let tokenLimit = min(maxTokens, max(request.maxTokens, 32))
+                    let maxTokenCap = effectiveMaxTokens()
+                    let tokenLimit = min(maxTokenCap, max(request.maxTokens, 32))
                     var parameters = GenerateParameters(
                         maxTokens: tokenLimit,
                         temperature: request.temperature,
@@ -884,13 +903,15 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
     private func answerMaxTokens(sourceCount: Int) -> Int {
         let base = 768
         let bonus = min(max(sourceCount, 0), 8) * 64
-        return min(maxTokens, base + bonus)
+        let maxTokenCap = effectiveMaxTokens()
+        return min(maxTokenCap, base + bonus)
     }
 
     private func goalParseMaxTokens(goal: String) -> Int {
         let threshold = 140
         let desired = goal.count > threshold ? 128 : 72
-        return min(maxTokens, desired)
+        let maxTokenCap = effectiveMaxTokens()
+        return min(maxTokenCap, desired)
     }
 
     private func planMaxTokens(context: ContextPack, userGoal: String) -> Int {
@@ -906,7 +927,8 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         case .unknown:
             desired = 320
         }
-        return min(maxTokens, desired)
+        let maxTokenCap = effectiveMaxTokens()
+        return min(maxTokenCap, desired)
     }
 
 
@@ -962,3 +984,5 @@ public final class MLXModelRunner: ModelRunner, StreamingModelRunner {
         )
     }
 }
+
+extension MLXModelRunner: @unchecked Sendable {}

@@ -1026,7 +1026,7 @@ async function waitForContentScript(tabId, options) {
   var pingAttempts = typeof opts.pingAttempts === "number" && isFinite(opts.pingAttempts) && opts.pingAttempts > 0
     ? Math.floor(opts.pingAttempts)
     : 2;
-  var shouldFocus = opts.focus !== false;
+  var shouldFocus = opts.focus === true;
   var allowInject = opts.allowInject !== false;
   var deadline = Date.now() + totalMs;
   while (Date.now() < deadline) {
@@ -1053,6 +1053,33 @@ async function waitForContentScript(tabId, options) {
     await sleep(300);
   }
   return false;
+}
+
+async function hasHostPermission(url) {
+  if (!url || !browser.permissions || !browser.permissions.contains) {
+    return true;
+  }
+  try {
+    var origin = new URL(url).origin;
+    return await browser.permissions.contains({ origins: [origin + "/*"] });
+  } catch (error) {
+    return true;
+  }
+}
+
+async function ensureTabReady(tabId, options) {
+  var opts = options && typeof options === "object" ? options : {};
+  var totalMs = typeof opts.totalMs === "number" && isFinite(opts.totalMs) && opts.totalMs > 0
+    ? Math.floor(opts.totalMs)
+    : TAB_PING_TOTAL_MS;
+  var ready = await waitForContentScript(tabId, { totalMs: totalMs, focus: false });
+  if (!ready && opts.allowInject !== false) {
+    var injected = await injectContentScripts(tabId);
+    if (injected) {
+      ready = await waitForContentScript(tabId, { totalMs: totalMs, focus: false });
+    }
+  }
+  return ready;
 }
 
 async function ensureTabReadyAfterOpen(tabId, url, createOptions, options) {
@@ -2292,6 +2319,8 @@ async function handleTool(toolName, args, sender, tabOverride) {
   if (!ALLOWED_TOOLS[toolName]) {
     return { status: "error", error: ToolErrorCode.UNSUPPORTED_TOOL };
   }
+  var senderUrl = sender && sender.tab ? (sender.tab.url || sender.url || "") : (sender && sender.url ? sender.url : "");
+  var isAutomationSender = isAutomationHarnessUrl(senderUrl);
   if (NATIVE_TOOLS[toolName]) {
     var nativeResult = await runNativeTool(toolName, args);
     if (toolName === "collection.add_sources" && nativeResult && nativeResult.status === "ok") {
@@ -2383,6 +2412,14 @@ async function handleTool(toolName, args, sender, tabOverride) {
       if (!safeUrl) {
         return { status: "error", error: ToolErrorCode.INVALID_URL };
       }
+      var allowed = await hasHostPermission(safeUrl);
+      if (!allowed) {
+        return {
+          status: "error",
+          error: ToolErrorCode.NO_CONTEXT,
+          errorDetails: { code: "host_permission_missing", url: safeUrl }
+        };
+      }
       if (!browser.tabs || !browser.tabs.create) {
         return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
       }
@@ -2406,10 +2443,30 @@ async function handleTool(toolName, args, sender, tabOverride) {
           closeOnReopen: true,
           focus: options.active !== false
         });
+        if (!readiness || !readiness.ready) {
+          var errorPayload = {
+            status: "error",
+            error: ToolErrorCode.NO_CONTEXT,
+            tabId: readiness && isNumericId(readiness.tabId) ? readiness.tabId : created.id,
+            errorDetails: { code: "no_content_script", url: safeUrl }
+          };
+          if (readiness) {
+            if (typeof readiness.attempts === "number") {
+              errorPayload.readyAttempts = readiness.attempts;
+            }
+            if (readiness.reloaded) {
+              errorPayload.reloaded = true;
+            }
+            if (readiness.reopened) {
+              errorPayload.reopened = true;
+            }
+          }
+          return errorPayload;
+        }
         var response = {
           status: "ok",
           tabId: readiness && isNumericId(readiness.tabId) ? readiness.tabId : created.id,
-          ready: readiness ? !!readiness.ready : true
+          ready: true
         };
         if (readiness) {
           if (typeof readiness.attempts === "number") {
@@ -2420,9 +2477,6 @@ async function handleTool(toolName, args, sender, tabOverride) {
           }
           if (readiness.reopened) {
             response.reopened = true;
-          }
-          if (!readiness.ready) {
-            response.errorDetails = { code: "no_content_script", url: safeUrl };
           }
         }
         return response;
@@ -2466,8 +2520,31 @@ async function handleTool(toolName, args, sender, tabOverride) {
     if (!browser.tabs || !browser.tabs.update) {
       return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
     }
+    var waitForReady = args && typeof args.waitForReady === "boolean" ? args.waitForReady : isAutomationSender;
+    if (waitForReady) {
+      var allowed = await hasHostPermission(navigateUrl);
+      if (!allowed) {
+        return {
+          status: "error",
+          error: ToolErrorCode.NO_CONTEXT,
+          errorDetails: { code: "host_permission_missing", url: navigateUrl }
+        };
+      }
+    }
     try {
       await browser.tabs.update(tabId, { url: navigateUrl });
+      if (waitForReady) {
+        var ready = await ensureTabReady(tabId, {
+          totalMs: isAutomationSender ? TAB_OPEN_READY_TOTAL_MS : TAB_PING_TOTAL_MS
+        });
+        if (!ready) {
+          return {
+            status: "error",
+            error: ToolErrorCode.NO_CONTEXT,
+            errorDetails: { code: "no_content_script", url: navigateUrl }
+          };
+        }
+      }
       return { status: "ok" };
     } catch (error) {
       return { status: "error", error: ToolErrorCode.NAVIGATION_FAILED };
@@ -2477,8 +2554,38 @@ async function handleTool(toolName, args, sender, tabOverride) {
     if (!browser.tabs || !browser.tabs.goBack) {
       return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
     }
+    var waitBackReady = args && typeof args.waitForReady === "boolean" ? args.waitForReady : isAutomationSender;
     try {
       await browser.tabs.goBack(tabId);
+      if (waitBackReady) {
+        var snapshot = null;
+        if (browser.tabs && browser.tabs.get) {
+          try {
+            snapshot = await browser.tabs.get(tabId);
+          } catch (error) {
+          }
+        }
+        if (snapshot && snapshot.url) {
+          var backAllowed = await hasHostPermission(snapshot.url);
+          if (!backAllowed) {
+            return {
+              status: "error",
+              error: ToolErrorCode.NO_CONTEXT,
+              errorDetails: { code: "host_permission_missing", url: snapshot.url }
+            };
+          }
+        }
+        var backReady = await ensureTabReady(tabId, {
+          totalMs: isAutomationSender ? TAB_OPEN_READY_TOTAL_MS : TAB_PING_TOTAL_MS
+        });
+        if (!backReady) {
+          return {
+            status: "error",
+            error: ToolErrorCode.NO_CONTEXT,
+            errorDetails: { code: "no_content_script" }
+          };
+        }
+      }
       return { status: "ok" };
     } catch (error) {
       return { status: "error", error: ToolErrorCode.BACK_FAILED };
@@ -2488,8 +2595,38 @@ async function handleTool(toolName, args, sender, tabOverride) {
     if (!browser.tabs || !browser.tabs.goForward) {
       return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
     }
+    var waitForwardReady = args && typeof args.waitForReady === "boolean" ? args.waitForReady : isAutomationSender;
     try {
       await browser.tabs.goForward(tabId);
+      if (waitForwardReady) {
+        var forwardSnapshot = null;
+        if (browser.tabs && browser.tabs.get) {
+          try {
+            forwardSnapshot = await browser.tabs.get(tabId);
+          } catch (error) {
+          }
+        }
+        if (forwardSnapshot && forwardSnapshot.url) {
+          var forwardAllowed = await hasHostPermission(forwardSnapshot.url);
+          if (!forwardAllowed) {
+            return {
+              status: "error",
+              error: ToolErrorCode.NO_CONTEXT,
+              errorDetails: { code: "host_permission_missing", url: forwardSnapshot.url }
+            };
+          }
+        }
+        var forwardReady = await ensureTabReady(tabId, {
+          totalMs: isAutomationSender ? TAB_OPEN_READY_TOTAL_MS : TAB_PING_TOTAL_MS
+        });
+        if (!forwardReady) {
+          return {
+            status: "error",
+            error: ToolErrorCode.NO_CONTEXT,
+            errorDetails: { code: "no_content_script" }
+          };
+        }
+      }
       return { status: "ok" };
     } catch (error) {
       return { status: "error", error: ToolErrorCode.FORWARD_FAILED };
@@ -2499,8 +2636,38 @@ async function handleTool(toolName, args, sender, tabOverride) {
     if (!browser.tabs || !browser.tabs.reload) {
       return { status: "error", error: ToolErrorCode.RUNTIME_UNAVAILABLE };
     }
+    var waitRefreshReady = args && typeof args.waitForReady === "boolean" ? args.waitForReady : isAutomationSender;
     try {
       await browser.tabs.reload(tabId);
+      if (waitRefreshReady) {
+        var refreshSnapshot = null;
+        if (browser.tabs && browser.tabs.get) {
+          try {
+            refreshSnapshot = await browser.tabs.get(tabId);
+          } catch (error) {
+          }
+        }
+        if (refreshSnapshot && refreshSnapshot.url) {
+          var refreshAllowed = await hasHostPermission(refreshSnapshot.url);
+          if (!refreshAllowed) {
+            return {
+              status: "error",
+              error: ToolErrorCode.NO_CONTEXT,
+              errorDetails: { code: "host_permission_missing", url: refreshSnapshot.url }
+            };
+          }
+        }
+        var refreshReady = await ensureTabReady(tabId, {
+          totalMs: isAutomationSender ? TAB_OPEN_READY_TOTAL_MS : TAB_PING_TOTAL_MS
+        });
+        if (!refreshReady) {
+          return {
+            status: "error",
+            error: ToolErrorCode.NO_CONTEXT,
+            errorDetails: { code: "no_content_script" }
+          };
+        }
+      }
       return { status: "ok" };
     } catch (error) {
       return { status: "error", error: ToolErrorCode.REFRESH_FAILED };
