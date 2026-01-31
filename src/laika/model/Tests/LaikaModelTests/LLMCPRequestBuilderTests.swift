@@ -123,12 +123,12 @@ final class LLMCPRequestBuilderTests: XCTestCase {
         XCTAssertEqual(chunkDocs.count, 2)
         let summaryDoc = request.context.documents.first { $0.kind == "web.observation.summary.v1" }
         guard let summaryDoc,
-              case let .object(content) = summaryDoc.content,
-              case let .string(markdown) = content["markdown"] else {
-            XCTFail("Missing markdown in summary doc.")
+              case let .object(content) = summaryDoc.content else {
+            XCTFail("Missing summary doc.")
             return
         }
-        XCTAssertTrue(markdown.contains("First chunk"))
+        XCTAssertNil(content["markdown"])
+        XCTAssertEqual(numberValue(content["chunk_count"]), 2)
     }
 
     private func makeItem(title: String, commentCount: Int) -> ObservedItem {

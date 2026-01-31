@@ -44,6 +44,7 @@ public struct SourceRecord: Codable, Equatable, Sendable {
     public let url: String?
     public let title: String?
     public let captureStatus: CaptureStatus
+    public let captureError: String?
     public let addedAtMs: Int64
     public let capturedAtMs: Int64?
     public let updatedAtMs: Int64
@@ -617,6 +618,7 @@ public actor CollectionStore {
                     url: url,
                     title: sourceInput.title,
                     captureStatus: .pending,
+                    captureError: nil,
                     addedAtMs: nowMs,
                     capturedAtMs: nil,
                     updatedAtMs: nowMs
@@ -655,6 +657,7 @@ public actor CollectionStore {
                     url: nil,
                     title: sourceInput.title,
                     captureStatus: .captured,
+                    captureError: nil,
                     addedAtMs: nowMs,
                     capturedAtMs: nowMs,
                     updatedAtMs: nowMs
@@ -834,7 +837,7 @@ public actor CollectionStore {
 
     private func fetchSources(collectionId: String, db: SQLiteDatabase) throws -> [SourceRecord] {
         let querySQL = """
-        SELECT id, kind, url, title, capture_status, added_at_ms, captured_at_ms, updated_at_ms
+        SELECT id, kind, url, title, capture_status, capture_error, added_at_ms, captured_at_ms, updated_at_ms
         FROM sources
         WHERE collection_id = ?
         ORDER BY added_at_ms DESC;
@@ -849,9 +852,10 @@ public actor CollectionStore {
             let url = db.columnOptionalText(statement, index: 2)
             let title = db.columnOptionalText(statement, index: 3)
             let statusRaw = db.columnText(statement, index: 4)
-            let addedAt = sqlite3_column_int64(statement, 5)
-            let capturedAt = sqlite3_column_type(statement, 6) == SQLITE_NULL ? nil : sqlite3_column_int64(statement, 6)
-            let updatedAt = sqlite3_column_int64(statement, 7)
+            let captureError = db.columnOptionalText(statement, index: 5)
+            let addedAt = sqlite3_column_int64(statement, 6)
+            let capturedAt = sqlite3_column_type(statement, 7) == SQLITE_NULL ? nil : sqlite3_column_int64(statement, 7)
+            let updatedAt = sqlite3_column_int64(statement, 8)
             let kind = SourceKind(rawValue: kindRaw) ?? .url
             let status = CaptureStatus(rawValue: statusRaw) ?? .pending
             sources.append(SourceRecord(
@@ -861,6 +865,7 @@ public actor CollectionStore {
                 url: url,
                 title: title,
                 captureStatus: status,
+                captureError: captureError,
                 addedAtMs: addedAt,
                 capturedAtMs: capturedAt,
                 updatedAtMs: updatedAt

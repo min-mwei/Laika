@@ -40,7 +40,11 @@ const DEFAULT_OBSERVE_OPTIONS = {
   maxItems: 30,
   maxItemChars: 240,
   maxComments: 24,
-  maxCommentChars: 360
+  maxCommentChars: 360,
+  includeMarkdown: true,
+  captureMode: "auto",
+  captureMaxChars: 24000,
+  captureLinks: false
 };
 const DETAIL_OBSERVE_OPTIONS = {
   maxChars: 16000,
@@ -52,7 +56,11 @@ const DETAIL_OBSERVE_OPTIONS = {
   maxItems: 60,
   maxItemChars: 400,
   maxComments: 40,
-  maxCommentChars: 600
+  maxCommentChars: 600,
+  includeMarkdown: true,
+  captureMode: "auto",
+  captureMaxChars: 24000,
+  captureLinks: false
 };
 
 function usage() {

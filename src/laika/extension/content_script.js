@@ -54,6 +54,7 @@
   var lastObservedGeneration = null;
   var overlayCache = { generation: null, overlay: null, checkedAt: 0 };
   var overlayCacheTtlMs = 750;
+  var captureCache = { generation: null, key: null, result: null };
 
   function randomId(prefix) {
     var randomPart = Math.random().toString(36).slice(2, 10);
@@ -71,6 +72,7 @@
   function markNavigation() {
     navGeneration += 1;
     navChangedAtMs = Date.now();
+    captureCache = { generation: null, key: null, result: null };
   }
 
   function initNavigationTracking() {
@@ -3463,6 +3465,37 @@
     return "auto";
   }
 
+  function buildCaptureCacheKey(mode, maxChars, includeLinks) {
+    return String(mode || "auto") + "|" + String(maxChars || 0) + "|" + (includeLinks ? "1" : "0");
+  }
+
+  function cloneCaptureResult(result) {
+    if (!result || typeof result !== "object") {
+      return result;
+    }
+    var clone = {};
+    Object.keys(result).forEach(function (key) {
+      clone[key] = result[key];
+    });
+    if (Array.isArray(result.chunks)) {
+      clone.chunks = result.chunks.slice();
+    }
+    if (Array.isArray(result.links)) {
+      clone.links = result.links.map(function (link) {
+        return Object.assign({}, link);
+      });
+    }
+    if (result.signals && typeof result.signals === "object") {
+      clone.signals = Object.assign({}, result.signals);
+    }
+    return clone;
+  }
+
+  function cacheCaptureResult(result, cacheKey) {
+    captureCache = { generation: navGeneration, key: cacheKey, result: result };
+    return cloneCaptureResult(result);
+  }
+
   function isDocumentNode(node) {
     return node && node.nodeType === Node.DOCUMENT_NODE;
   }
@@ -3987,8 +4020,7 @@
     if (total <= limit) {
       return { markdown: text, chunks: [text], truncated: false, totalChars: total, chunkCount: 1 };
     }
-    var chunkSize = Math.min(8000, Math.max(2000, Math.floor(limit / 3)));
-    var maxChunks = Math.min(6, Math.max(1, Math.ceil(limit / chunkSize)));
+    var chunkSize = Math.min(8000, Math.max(2000, Math.floor(limit / 6)));
     var blocks = splitMarkdownBlocks(text);
     var chunks = [];
     var current = "";
@@ -4012,7 +4044,7 @@
       if (current && candidate.length > chunkSize) {
         chunks.push(current);
         remaining -= current.length;
-        if (chunks.length >= maxChunks || remaining <= 0) {
+        if (remaining <= 0) {
           truncated = true;
           break;
         }
@@ -4024,6 +4056,13 @@
         candidate = prefix + blockText;
       }
       if (candidate.length > remaining) {
+        if (current) {
+          var chunkToAdd = current.length > remaining ? current.slice(0, Math.max(0, remaining)) : current;
+          if (chunkToAdd) {
+            chunks.push(chunkToAdd);
+            remaining -= chunkToAdd.length;
+          }
+        }
         truncated = true;
         break;
       }
@@ -4036,6 +4075,16 @@
       var slice = text.slice(0, Math.min(limit, text.length));
       chunks = [slice];
       truncated = true;
+    }
+    if (truncated && chunks.length > 1) {
+      var lastSize = chunks[chunks.length - 1].length;
+      if (lastSize > 0) {
+        var tailStart = Math.max(0, text.length - lastSize);
+        var tailSlice = text.slice(tailStart);
+        if (tailSlice) {
+          chunks[chunks.length - 1] = tailSlice;
+        }
+      }
     }
     if (truncated) {
       chunks[chunks.length - 1] = chunks[chunks.length - 1] + "\n\n[Truncated: captured partial content]";
@@ -4079,7 +4128,11 @@
     var pageUrl = typeof window !== "undefined" ? (window.location.href || "") : "";
     var mode = normalizeCaptureMode(options && options.mode);
     var maxChars = clampCaptureMaxChars(options && options.maxChars);
-    var includeLinks = typeof (options && options.captureLinks) === "boolean" ? options.captureLinks : true;
+    var includeLinks = typeof (options && options.captureLinks) === "boolean" ? options.captureLinks : false;
+    var cacheKey = buildCaptureCacheKey(mode, maxChars, includeLinks);
+    if (captureCache.result && captureCache.generation === navGeneration && captureCache.key === cacheKey) {
+      return cloneCaptureResult(captureCache.result);
+    }
     var readabilityUsed = false;
     var contentRootUsed = false;
     var content = "";
@@ -4102,7 +4155,7 @@
     if (content && content.length > 2000000) {
       var fallbackText = document.body ? document.body.innerText : "";
       var boundedFallback = fallbackMarkdownFromText(title, fallbackText, maxChars);
-      return {
+      return cacheCaptureResult({
         status: "ok",
         url: pageUrl,
         title: title,
@@ -4119,7 +4172,7 @@
           fallback: "innerText",
           oversizeHtml: true
         }
-      };
+      }, cacheKey);
     }
 
     var cleanedResult = cleanHtml(content);
@@ -4128,7 +4181,7 @@
     if (!turndownService) {
       var fallbackText = document.body ? document.body.innerText : "";
       var boundedFallback = fallbackMarkdownFromText(title, fallbackText, maxChars);
-      return {
+      return cacheCaptureResult({
         status: "ok",
         url: pageUrl,
         title: title,
@@ -4144,12 +4197,12 @@
           mode: mode,
           fallback: "innerText"
         }
-      };
+      }, cacheKey);
     }
     var markdown = turndownService.turndown(cleaned);
     markdown = postProcessMarkdown(markdown);
     var bounded = boundMarkdown(markdown, maxChars);
-    return {
+    return cacheCaptureResult({
       status: "ok",
       url: pageUrl,
       title: title,
@@ -4167,7 +4220,7 @@
         removedOverlayCount: cleanedResult.stats ? cleanedResult.stats.removedOverlayCount : 0,
         removedAdLikeCount: cleanedResult.stats ? cleanedResult.stats.removedAdLikeCount : 0
       }
-    };
+    }, cacheKey);
   }
 
   function applyTool(toolName, args) {

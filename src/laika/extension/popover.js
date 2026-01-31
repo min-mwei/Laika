@@ -62,6 +62,9 @@ var sources = [];
 var selectionUrls = [];
 var collectionChatLoadedId = null;
 var collectionChatLoading = false;
+var sourcesRefreshTimer = null;
+var sourcesRefreshBackoffMs = 0;
+var lastPendingCount = 0;
 
 var MESSAGE_FORMAT_PLAIN = "plain";
 var MESSAGE_FORMAT_RENDER = "render";
@@ -80,7 +83,11 @@ var DEFAULT_OBSERVE_OPTIONS = {
   maxItems: 30,
   maxItemChars: 240,
   maxComments: 28,
-  maxCommentChars: 360
+  maxCommentChars: 360,
+  includeMarkdown: true,
+  captureMode: "auto",
+  captureMaxChars: 24000,
+  captureLinks: false
 };
 
 var DETAIL_OBSERVE_OPTIONS = {
@@ -93,7 +100,11 @@ var DETAIL_OBSERVE_OPTIONS = {
   maxItems: 36,
   maxItemChars: 260,
   maxComments: 32,
-  maxCommentChars: 420
+  maxCommentChars: 420,
+  includeMarkdown: true,
+  captureMode: "auto",
+  captureMaxChars: 24000,
+  captureLinks: false
 };
 
 function logDebug(text) {
@@ -373,10 +384,81 @@ function setSourcesStatus(text) {
   }
 }
 
+function normalizeCaptureStatus(source) {
+  if (!source || !source.captureStatus) {
+    return "pending";
+  }
+  return source.captureStatus;
+}
+
+function summarizeSources(list) {
+  var summary = {
+    total: 0,
+    captured: 0,
+    pending: 0,
+    failed: 0,
+    pendingUrls: 0
+  };
+  if (!Array.isArray(list)) {
+    return summary;
+  }
+  summary.total = list.length;
+  list.forEach(function (source) {
+    var status = normalizeCaptureStatus(source);
+    if (status === "captured") {
+      summary.captured += 1;
+    } else if (status === "failed") {
+      summary.failed += 1;
+    } else {
+      summary.pending += 1;
+    }
+    if (source && source.kind === "url" && status === "pending") {
+      summary.pendingUrls += 1;
+    }
+  });
+  return summary;
+}
+
+function clearSourcesRefreshTimer() {
+  if (sourcesRefreshTimer) {
+    clearTimeout(sourcesRefreshTimer);
+    sourcesRefreshTimer = null;
+  }
+  sourcesRefreshBackoffMs = 0;
+  lastPendingCount = 0;
+}
+
+function scheduleSourcesRefresh(pendingCount) {
+  if (!activeCollectionId || !pendingCount) {
+    clearSourcesRefreshTimer();
+    return;
+  }
+  if (document.hidden) {
+    return;
+  }
+  if (pendingCount < lastPendingCount) {
+    sourcesRefreshBackoffMs = 1500;
+  }
+  if (!sourcesRefreshBackoffMs) {
+    sourcesRefreshBackoffMs = 1500;
+  } else {
+    sourcesRefreshBackoffMs = Math.min(Math.floor(sourcesRefreshBackoffMs * 1.6), 10000);
+  }
+  lastPendingCount = pendingCount;
+  if (sourcesRefreshTimer) {
+    return;
+  }
+  sourcesRefreshTimer = setTimeout(function () {
+    sourcesRefreshTimer = null;
+    loadSources();
+  }, sourcesRefreshBackoffMs);
+}
+
 async function loadSources() {
   if (!activeCollectionId) {
     sources = [];
     renderSources();
+    clearSourcesRefreshTimer();
     return;
   }
   try {
@@ -385,8 +467,11 @@ async function loadSources() {
     sources = Array.isArray(result.sources) ? result.sources : [];
     renderSources();
     maybeKickCaptureQueue();
+    var summary = summarizeSources(sources);
+    scheduleSourcesRefresh(summary.pendingUrls);
   } catch (error) {
     setSourcesStatus("Failed to load sources.");
+    clearSourcesRefreshTimer();
   }
 }
 
@@ -403,11 +488,9 @@ function renderSources() {
     setSourcesStatus("No sources yet. Add a tab or selected links.");
     return;
   }
-  var capturedCount = sources.filter(function (source) { return source.captureStatus === "captured"; }).length;
-  var pendingCount = sources.filter(function (source) { return source.captureStatus === "pending"; }).length;
-  var failedCount = sources.filter(function (source) { return source.captureStatus === "failed"; }).length;
+  var summary = summarizeSources(sources);
   setSourcesStatus("Sources: " + sources.length +
-    " (captured " + capturedCount + ", pending " + pendingCount + ", failed " + failedCount + ")");
+    " (captured " + summary.captured + ", pending " + summary.pending + ", failed " + summary.failed + ")");
 
   sources.forEach(function (source) {
     var item = document.createElement("div");
@@ -430,7 +513,7 @@ function renderSources() {
     var meta = document.createElement("div");
     meta.className = "source-meta";
     var badge = document.createElement("span");
-    var status = source.captureStatus || "pending";
+    var status = normalizeCaptureStatus(source);
     badge.className = "badge " + status;
     badge.textContent = status;
     meta.appendChild(badge);
@@ -448,18 +531,15 @@ function renderSources() {
       }
       meta.appendChild(host);
     }
+    if (status === "failed" && source.captureError) {
+      var errorText = document.createElement("span");
+      errorText.className = "source-error";
+      errorText.textContent = source.captureError;
+      meta.appendChild(errorText);
+    }
     item.appendChild(header);
     item.appendChild(meta);
     sourcesList.appendChild(item);
-  });
-}
-
-function hasPendingUrlSources() {
-  if (!Array.isArray(sources)) {
-    return false;
-  }
-  return sources.some(function (source) {
-    return source && source.kind === "url" && (source.captureStatus === "pending" || !source.captureStatus);
   });
 }
 
@@ -467,7 +547,8 @@ async function requestCaptureQueue() {
   if (!activeCollectionId || !browser || !browser.runtime || !browser.runtime.sendMessage) {
     return;
   }
-  if (!hasPendingUrlSources()) {
+  var summary = summarizeSources(sources);
+  if (!summary.pendingUrls) {
     return;
   }
   try {
@@ -484,11 +565,18 @@ function maybeKickCaptureQueue() {
   if (!activeCollectionId) {
     return;
   }
-  if (!hasPendingUrlSources()) {
+  var summary = summarizeSources(sources);
+  if (!summary.pendingUrls) {
     return;
   }
   requestCaptureQueue();
 }
+
+document.addEventListener("visibilitychange", function () {
+  if (!document.hidden && activeCollectionId) {
+    loadSources();
+  }
+});
 
 function resetSelectionPreview() {
   selectionUrls = [];

@@ -1294,7 +1294,7 @@ async function handleSourceCapture(args, sender, tabOverride) {
   try {
     captureResult = await sendTabMessageWithTimeout(
       tabId,
-      { type: "laika.capture", options: { mode: mode, maxChars: maxChars } },
+      { type: "laika.capture", options: { mode: mode, maxChars: maxChars, captureLinks: true } },
       { allowInject: true, waitForReady: true, timeoutMs: CAPTURE_MESSAGE_TIMEOUT_MS, attempts: 2 }
     );
   } catch (error) {

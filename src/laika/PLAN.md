@@ -201,6 +201,15 @@ Goal: complete these before moving on to P1 work. Status is tracked inline.
 - **On-demand content scripts:** avoid heavy global injection (Readability/Turndown) and only inject when capture is requested.
 - **Collection answer ranking/compression:** add ranking + summary compression to keep citations stable within budget.
 
+### Feedback integration (2026-01-31)
+
+Immediate P0 actions (this iteration):
+- **Summarize observes include Markdown (in progress):** set `includeMarkdown=true` + `captureMode`/`captureMaxChars` defaults in popover/harness; disable `captureLinks` for summarize flows to reduce noise.
+- **Capture reuse by navigation (in progress):** cache Readability/Turndown capture results per `navigationGeneration` + options to avoid repeated heavy DOM parsing during multi-step runs.
+- **Chunking tail coverage (in progress):** remove implicit max-chunk caps, align chunk sizing with `captureMaxChars`, and include a tail sample chunk when truncation happens.
+- **LLM pack de-duplication (in progress):** when `markdownChunks` are present, omit full `markdown` from the summary doc and rely on chunk docs only.
+- **Capture links default (in progress):** default `captureLinks=false` for summarize/observe, explicitly enable for `source.capture` only.
+
 ### Persistence boundaries (source of truth)
 
 P0 decision: **native SQLite is the source of truth** for user data.

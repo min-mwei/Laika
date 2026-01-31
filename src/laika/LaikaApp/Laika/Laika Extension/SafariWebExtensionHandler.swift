@@ -1056,6 +1056,9 @@ Missing sources to add:
         if let capturedAtMs = record.capturedAtMs {
             payload["capturedAtMs"] = capturedAtMs
         }
+        if let captureError = record.captureError, !captureError.isEmpty {
+            payload["captureError"] = captureError
+        }
         return payload
     }
 

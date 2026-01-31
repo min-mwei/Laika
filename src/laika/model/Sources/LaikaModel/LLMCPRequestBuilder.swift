@@ -145,7 +145,7 @@ enum LLMCPRequestBuilder {
             "title": .string(TextUtils.truncate(TextUtils.normalizeWhitespace(observation.title), maxChars: ObservationBudget.maxTitleChars))
         ]
         let markdown = observation.markdown?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !markdown.isEmpty {
+        if !markdown.isEmpty, !hasChunks {
             content["markdown"] = .string(markdown)
         }
         let extractedLinks = observation.extractedLinks ?? []
