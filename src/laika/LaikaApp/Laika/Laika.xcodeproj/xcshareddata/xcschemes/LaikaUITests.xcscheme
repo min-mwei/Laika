@@ -14,9 +14,9 @@
             buildForAnalyzing="YES">
             <BuildableReference
                BuildableIdentifier="primary"
-               BlueprintIdentifier="6285AF7E2F1AFB45004C2F8B"
-               BuildableName="Laika.app"
-               BlueprintName="Laika"
+               BlueprintIdentifier="B6F0A2CCD4E5F60718293A75"
+               BuildableName="LaikaUITests.xctest"
+               BlueprintName="LaikaUITests"
                ReferencedContainer="container:Laika.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -42,9 +42,9 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier="primary"
-            BlueprintIdentifier="6285AF7E2F1AFB45004C2F8B"
-            BuildableName="Laika.app"
-            BlueprintName="Laika"
+            BlueprintIdentifier="B6F0A2CCD4E5F60718293A75"
+            BuildableName="LaikaUITests.xctest"
+            BlueprintName="LaikaUITests"
             ReferencedContainer="container:Laika.xcodeproj">
          </BuildableReference>
       </MacroExpansion>

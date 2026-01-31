@@ -106,6 +106,7 @@ async function main() {
   let received = false;
   let reported = false;
   let timeoutHandle = null;
+  let timeoutStartedAt = null;
   const telemetryPath = args.outputPath
     ? (args.outputPath.endsWith(".json")
       ? args.outputPath.slice(0, -5) + ".telemetry.json"
@@ -197,6 +198,25 @@ async function main() {
     }
   }
 
+  function armTimeoutIfNeeded(trigger) {
+    if (timeoutHandle || reported || args.keepOpen || args.timeoutSeconds <= 0) {
+      return;
+    }
+    timeoutStartedAt = new Date().toISOString();
+    timeoutHandle = setTimeout(() => {
+      if (reported) {
+        return;
+      }
+      finalize({
+        runId: runId,
+        scenario: scenario,
+        error: "timeout",
+        errorDetails: { trigger: trigger || null, startedAt: timeoutStartedAt }
+      });
+    }, args.timeoutSeconds * 1000);
+    console.log("Timeout armed:", `${args.timeoutSeconds}s`, trigger ? `(trigger=${trigger})` : "");
+  }
+
   function recordTelemetry(event) {
     if (!event || typeof event.type !== "string") {
       return;
@@ -272,6 +292,7 @@ async function main() {
       return;
     }
     if (parsedUrl.pathname === "/" || parsedUrl.pathname.startsWith("/harness.html")) {
+      armTimeoutIfNeeded("page");
       res.writeHead(200, { "content-type": "text/html" });
       res.end(html);
       return;
@@ -282,6 +303,7 @@ async function main() {
       return;
     }
     if (parsedUrl.pathname === "/api/health") {
+      armTimeoutIfNeeded("health");
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({
         ok: true,
@@ -298,6 +320,7 @@ async function main() {
       return;
     }
     if (parsedUrl.pathname === "/api/telemetry" && req.method === "POST") {
+      armTimeoutIfNeeded("telemetry");
       const raw = await readBody(req);
       let payload = null;
       try {
@@ -336,16 +359,6 @@ async function main() {
     }
     console.log("Nonce:", nonce);
     if (args.timeoutSeconds > 0 && !args.keepOpen) {
-      timeoutHandle = setTimeout(() => {
-        if (reported) {
-          return;
-        }
-        finalize({
-          runId: runId,
-          scenario: scenario,
-          error: "timeout"
-        });
-      }, args.timeoutSeconds * 1000);
       console.log("Timeout:", `${args.timeoutSeconds}s`);
     }
   });

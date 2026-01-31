@@ -43,13 +43,6 @@
 			remoteGlobalIDString = 6285AF992F1AFB45004C2F8B;
 			remoteInfo = "Laika Extension";
 		};
-		B6F0A2D5D4E5F60718293A7E /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 6285AF772F1AFB45004C2F8B /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 6285AF7E2F1AFB45004C2F8B;
-			remoteInfo = Laika;
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -277,7 +270,6 @@
 			buildRules = (
 			);
 			dependencies = (
-				B6F0A2D4D4E5F60718293A7D /* PBXTargetDependency */,
 			);
 			name = LaikaUITests;
 			productName = LaikaUITests;
@@ -426,11 +418,6 @@
 			isa = PBXTargetDependency;
 			target = 6285AF992F1AFB45004C2F8B /* Laika Extension */;
 			targetProxy = 6285AF9C2F1AFB45004C2F8B /* PBXContainerItemProxy */;
-		};
-		B6F0A2D4D4E5F60718293A7D /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 6285AF7E2F1AFB45004C2F8B /* Laika */;
-			targetProxy = B6F0A2D5D4E5F60718293A7E /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -770,7 +757,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.laika.LaikaUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = Laika;
 			};
 			name = Debug;
 		};
@@ -785,7 +771,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.laika.LaikaUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = Laika;
 			};
 			name = Release;
 		};
