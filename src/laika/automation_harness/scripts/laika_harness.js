@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const searchTools = require("../../extension/lib/search_tools");
 const calculateTools = require("../../extension/lib/calculate");
+const observeDefaults = require("../../extension/lib/observe_defaults");
 
 // Automation runs get throttled by Google frequently. Default to DuckDuckGo here,
 // while keeping the extension's default engine as Google.
@@ -30,38 +31,8 @@ const DETAIL_OBSERVE_DELAY_MS = 500;
 const SEARCH_OBSERVE_DELAY_MS = 1500;
 const EMPTY_OBSERVE_RETRY_DELAY_MS = 900;
 const EMPTY_OBSERVE_MAX_RETRIES = 1;
-const DEFAULT_OBSERVE_OPTIONS = {
-  maxChars: 12000,
-  maxElements: 160,
-  maxBlocks: 40,
-  maxPrimaryChars: 1600,
-  maxOutline: 80,
-  maxOutlineChars: 180,
-  maxItems: 30,
-  maxItemChars: 240,
-  maxComments: 24,
-  maxCommentChars: 360,
-  includeMarkdown: true,
-  captureMode: "auto",
-  captureMaxChars: 24000,
-  captureLinks: false
-};
-const DETAIL_OBSERVE_OPTIONS = {
-  maxChars: 16000,
-  maxElements: 200,
-  maxBlocks: 80,
-  maxPrimaryChars: 4000,
-  maxOutline: 120,
-  maxOutlineChars: 240,
-  maxItems: 60,
-  maxItemChars: 400,
-  maxComments: 40,
-  maxCommentChars: 600,
-  includeMarkdown: true,
-  captureMode: "auto",
-  captureMaxChars: 24000,
-  captureLinks: false
-};
+const DEFAULT_OBSERVE_OPTIONS = observeDefaults.optionsForDetail(false);
+const DETAIL_OBSERVE_OPTIONS = observeDefaults.optionsForDetail(true);
 
 function usage() {
   console.log(

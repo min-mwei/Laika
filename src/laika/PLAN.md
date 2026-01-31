@@ -214,6 +214,11 @@ Additional P0 actions (this iteration):
 - **MaxTokens override without reload (done):** keep model runners alive across per-request token changes; apply max token caps per request instead of reloading the model.
 - **Capture job lease reset (done):** requeue stale `running` capture jobs so pending sources do not get stuck indefinitely after crashes.
 - **Run cache LRU (done):** add a small LRU/TTL for `cachedListItemsByRun` to prevent unbounded growth.
+- **Observe defaults centralized (done):** share observe budgets across UI/agent/harness to avoid drift.
+- **Answer viewer durability (done):** open answers via stored chat events instead of ephemeral in-memory payloads.
+- **Fallback capture cleanup (done):** remove link lists and use paragraph-aware truncation for fallback markdown.
+- **Capture noise split (done):** separate noise tags vs selectors to avoid Turndown selector misuse.
+- **Collection answer ranking + summary fallback (done):** rank sources by question overlap and use per-source summaries to fit more sources into budget.
 
 ### Persistence boundaries (source of truth)
 

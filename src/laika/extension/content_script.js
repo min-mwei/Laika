@@ -3370,7 +3370,7 @@
   var DEFAULT_CAPTURE_MAX_CHARS = 24000;
   var MIN_CAPTURE_MAX_CHARS = 2000;
   var MAX_CAPTURE_MAX_CHARS = 120000;
-  var CAPTURE_NOISE_SELECTORS = [
+  var CAPTURE_NOISE_TAGS = [
     "style",
     "script",
     "noscript",
@@ -3386,6 +3386,11 @@
     "select",
     "textarea"
   ];
+  var CAPTURE_NOISE_SELECTORS = CAPTURE_NOISE_TAGS.concat([
+    "[role='navigation']",
+    "[role='banner']",
+    "[role='contentinfo']"
+  ]);
   var CAPTURE_NOISE_URL_PATTERNS = [
     /privacy/i,
     /terms/i,
@@ -3422,7 +3427,7 @@
         codeBlockStyle: "fenced"
       });
       turndownService.addRule("remove-noise", {
-        filter: CAPTURE_NOISE_SELECTORS,
+        filter: CAPTURE_NOISE_TAGS,
         replacement: function () {
           return "";
         }

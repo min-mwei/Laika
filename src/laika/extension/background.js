@@ -31,6 +31,12 @@ if (typeof self !== "undefined" && self.LaikaPlanValidator) {
 }
 try {
   if (typeof importScripts === "function") {
+    importScripts("lib/observe_defaults.js");
+  }
+} catch (error) {
+}
+try {
+  if (typeof importScripts === "function") {
     importScripts("lib/agent_runner.js");
   }
 } catch (error) {
@@ -267,78 +273,18 @@ var AUTOMATION_ALLOWED_HOSTS = {
   "localhost": true
 };
 
-var ANSWER_VIEWER_STORE = {};
-var ANSWER_VIEWER_TTL_MS = 10 * 60 * 1000;
-
-function pruneAnswerViewerStore() {
-  var now = Date.now();
-  Object.keys(ANSWER_VIEWER_STORE).forEach(function (token) {
-    var entry = ANSWER_VIEWER_STORE[token];
-    if (!entry || typeof entry.createdAt !== "number" || now - entry.createdAt > ANSWER_VIEWER_TTL_MS) {
-      delete ANSWER_VIEWER_STORE[token];
-    }
-  });
-}
-
-function storeAnswerPayload(payload, token) {
-  pruneAnswerViewerStore();
-  var storedToken = token;
-  if (!storedToken || typeof storedToken !== "string") {
-    storedToken = String(Date.now()) + "-" + Math.random().toString(16).slice(2);
-  }
-  ANSWER_VIEWER_STORE[storedToken] = { payload: payload, createdAt: Date.now() };
-  return storedToken;
-}
-
-function fetchAnswerPayload(token) {
-  pruneAnswerViewerStore();
-  if (!token || typeof token !== "string") {
-    return null;
-  }
-  var entry = ANSWER_VIEWER_STORE[token];
-  if (!entry) {
-    return null;
-  }
-  delete ANSWER_VIEWER_STORE[token];
-  return entry.payload;
-}
-
-function openAnswerViewer(payload, sender) {
-  var token = storeAnswerPayload(payload);
-  if (!browser || !browser.tabs || !browser.runtime || !browser.runtime.getURL) {
-    return Promise.resolve({ status: "error", error: "tabs_unavailable" });
-  }
-  var url = browser.runtime.getURL("answer_viewer.html") + "?token=" + encodeURIComponent(token);
-  var windowId = resolveOwnerWindowId(sender, null);
-  var createOptions = { url: url, active: true };
-  if (isNumericId(windowId)) {
-    createOptions.windowId = windowId;
-  }
-  return browser.tabs.create(createOptions).then(function () {
-    return { status: "ok", token: token };
-  }).catch(function () {
-    return { status: "error", error: "open_tab_failed" };
-  });
-}
-
-function openAnswerViewerPending(token, sender, params) {
-  if (!token || typeof token !== "string") {
-    return Promise.resolve({ status: "error", error: "invalid_token" });
+function openAnswerViewerById(collectionId, eventId, questionEventId, sender) {
+  if (!collectionId || !eventId) {
+    return Promise.resolve({ status: "error", error: "missing_ids" });
   }
   if (!browser || !browser.tabs || !browser.runtime || !browser.runtime.getURL) {
     return Promise.resolve({ status: "error", error: "tabs_unavailable" });
   }
-  var url = browser.runtime.getURL("answer_viewer.html") + "?token=" + encodeURIComponent(token);
-  if (params && typeof params === "object") {
-    if (typeof params.collectionId === "string" && params.collectionId) {
-      url += "&collectionId=" + encodeURIComponent(params.collectionId);
-    }
-    if (typeof params.eventId === "string" && params.eventId) {
-      url += "&eventId=" + encodeURIComponent(params.eventId);
-    }
-    if (typeof params.questionEventId === "string" && params.questionEventId) {
-      url += "&questionEventId=" + encodeURIComponent(params.questionEventId);
-    }
+  var url = browser.runtime.getURL("answer_viewer.html")
+    + "?collectionId=" + encodeURIComponent(collectionId)
+    + "&eventId=" + encodeURIComponent(eventId);
+  if (questionEventId) {
+    url += "&questionEventId=" + encodeURIComponent(questionEventId);
   }
   var windowId = resolveOwnerWindowId(sender, null);
   var createOptions = { url: url, active: true };
@@ -346,7 +292,7 @@ function openAnswerViewerPending(token, sender, params) {
     createOptions.windowId = windowId;
   }
   return browser.tabs.create(createOptions).then(function () {
-    return { status: "ok", token: token };
+    return { status: "ok" };
   }).catch(function () {
     return { status: "error", error: "open_tab_failed" };
   });
@@ -1355,15 +1301,6 @@ async function handleSourceCapture(args, sender, tabOverride) {
         markdown = fallback.markdown;
         truncated = fallback.truncated;
         title = observeResult.observation.title || title;
-        if (Array.isArray(observeResult.observation.items)) {
-          links = observeResult.observation.items.slice(0, 12).map(function (item) {
-            return {
-              url: item.url,
-              text: item.title || item.url || "",
-              context: item.snippet || ""
-            };
-          }).filter(function (item) { return item.url; });
-        }
       }
     } catch (error) {
     }
@@ -1941,9 +1878,82 @@ function boundCaptureMarkdown(markdown, maxChars) {
   };
 }
 
+function splitParagraphs(text) {
+  return String(text || "")
+    .split(/\n\s*\n/)
+    .map(function (paragraph) { return paragraph.trim(); })
+    .filter(function (paragraph) { return paragraph.length > 0; });
+}
+
+function boundCaptureMarkdownByParagraphs(markdown, maxChars) {
+  var text = String(markdown || "");
+  var total = text.length;
+  var limit = clampCaptureMaxChars(maxChars);
+  if (total <= limit) {
+    return { markdown: text, truncated: false, totalChars: total, headChars: total, tailChars: 0 };
+  }
+
+  var paragraphs = splitParagraphs(text);
+  if (paragraphs.length === 0) {
+    return boundCaptureMarkdown("", maxChars);
+  }
+
+  var headParas = [];
+  var headChars = 0;
+  for (var i = 0; i < paragraphs.length; i += 1) {
+    var candidate = (headParas.length ? "\n\n" : "") + paragraphs[i];
+    if (headChars + candidate.length > limit) {
+      break;
+    }
+    headParas.push(paragraphs[i]);
+    headChars += candidate.length;
+  }
+
+  if (headParas.length === paragraphs.length) {
+    var fullText = headParas.join("\n\n");
+    return { markdown: fullText, truncated: false, totalChars: total, headChars: fullText.length, tailChars: 0 };
+  }
+
+  var marker = "\n\n...\n\n[Truncated: captured first {head} chars and last {tail} chars]\n\n";
+  var overhead = marker.length + 10;
+  var headText = headParas.join("\n\n");
+  if (headText.length + overhead >= limit) {
+    var trimmedHead = headText.slice(0, Math.max(0, limit - overhead));
+    headText = trimmedHead;
+    headChars = trimmedHead.length;
+  }
+
+  var remaining = Math.max(0, limit - headText.length - overhead);
+  var tailParas = [];
+  var tailChars = 0;
+  for (var j = paragraphs.length - 1; j >= headParas.length; j -= 1) {
+    var tailCandidate = (tailParas.length ? "\n\n" : "") + paragraphs[j];
+    if (tailChars + tailCandidate.length > remaining) {
+      if (tailParas.length === 0 && remaining > 0) {
+        var snippet = paragraphs[j].slice(Math.max(0, paragraphs[j].length - remaining));
+        tailParas.unshift(snippet);
+        tailChars += snippet.length;
+      }
+      break;
+    }
+    tailParas.unshift(paragraphs[j]);
+    tailChars += tailCandidate.length;
+  }
+
+  var tailText = tailParas.join("\n\n");
+  var markerText = marker.replace("{head}", String(headText.length)).replace("{tail}", String(tailText.length));
+  return {
+    markdown: headText + markerText + tailText,
+    truncated: true,
+    totalChars: total,
+    headChars: headText.length,
+    tailChars: tailText.length
+  };
+}
+
 function buildFallbackMarkdown(observation, maxChars) {
   if (!observation || typeof observation !== "object") {
-    return boundCaptureMarkdown("", maxChars);
+    return boundCaptureMarkdownByParagraphs("", maxChars);
   }
   var lines = [];
   if (observation.title) {
@@ -1954,24 +1964,8 @@ function buildFallbackMarkdown(observation, maxChars) {
   } else if (observation.text) {
     lines.push(String(observation.text).trim());
   }
-  if (Array.isArray(observation.items) && observation.items.length > 0) {
-    lines.push("## Links");
-    var maxItems = Math.min(observation.items.length, 12);
-    for (var i = 0; i < maxItems; i += 1) {
-      var item = observation.items[i];
-      if (!item || !item.url) {
-        continue;
-      }
-      var title = item.title || item.url;
-      var line = "- [" + title + "](" + item.url + ")";
-      if (item.snippet) {
-        line += " — " + item.snippet;
-      }
-      lines.push(line);
-    }
-  }
   var markdown = lines.join("\n\n");
-  return boundCaptureMarkdown(markdown, maxChars);
+  return boundCaptureMarkdownByParagraphs(markdown, maxChars);
 }
 
 async function sendCollectionAction(action, payload) {
@@ -3351,41 +3345,12 @@ browser.runtime.onMessage.addListener(function (message, sender) {
     });
   }
   if (message.type === "laika.answer_viewer.open") {
-    if (!message.payload || typeof message.payload !== "object") {
-      return Promise.resolve({ status: "error", error: "invalid_payload" });
-    }
-    return openAnswerViewer(message.payload, sender);
-  }
-  if (message.type === "laika.answer_viewer.open_pending") {
-    return openAnswerViewerPending(message.token, sender, {
-      collectionId: message.collectionId,
-      eventId: message.eventId,
-      questionEventId: message.questionEventId
-    });
-  }
-  if (message.type === "laika.answer_viewer.store") {
-    if (!message.payload || typeof message.payload !== "object") {
-      return Promise.resolve({ status: "error", error: "invalid_payload" });
-    }
-    var token = storeAnswerPayload(message.payload);
-    return Promise.resolve({ status: "ok", token: token });
-  }
-  if (message.type === "laika.answer_viewer.fulfill") {
-    if (!message.payload || typeof message.payload !== "object") {
-      return Promise.resolve({ status: "error", error: "invalid_payload" });
-    }
-    if (!message.token || typeof message.token !== "string") {
-      return Promise.resolve({ status: "error", error: "missing_token" });
-    }
-    var storedToken = storeAnswerPayload(message.payload, message.token);
-    return Promise.resolve({ status: "ok", token: storedToken });
-  }
-  if (message.type === "laika.answer_viewer.get") {
-    var payload = fetchAnswerPayload(message.token);
-    if (!payload) {
-      return Promise.resolve({ status: "error", error: "not_found" });
-    }
-    return Promise.resolve({ status: "ok", payload: payload });
+    return openAnswerViewerById(
+      message.collectionId,
+      message.eventId,
+      message.questionEventId,
+      sender
+    );
   }
   if (message.type === "laika.collection.chat_event.get") {
     if (!message.collectionId || !message.eventId) {

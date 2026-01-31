@@ -100,31 +100,54 @@
     return rounded;
   }
 
-  var DEFAULT_OBSERVE_OPTIONS = {
-    maxChars: 12000,
-    maxElements: 160,
-    maxBlocks: 40,
-    maxPrimaryChars: 1600,
-    maxOutline: 80,
-    maxOutlineChars: 180,
-    maxItems: 30,
-    maxItemChars: 240,
-    maxComments: 28,
-    maxCommentChars: 360
-  };
+  var observeDefaults = null;
+  if (typeof self !== "undefined" && self.LaikaObserveDefaults) {
+    observeDefaults = self.LaikaObserveDefaults;
+  } else if (typeof require === "function") {
+    try {
+      observeDefaults = require("./observe_defaults");
+    } catch (error) {
+      observeDefaults = null;
+    }
+  }
 
-  var DETAIL_OBSERVE_OPTIONS = {
-    maxChars: 18000,
-    maxElements: 180,
-    maxBlocks: 60,
-    maxPrimaryChars: 2400,
-    maxOutline: 120,
-    maxOutlineChars: 220,
-    maxItems: 36,
-    maxItemChars: 260,
-    maxComments: 32,
-    maxCommentChars: 420
-  };
+  var DEFAULT_OBSERVE_OPTIONS = observeDefaults && observeDefaults.DEFAULT_OBSERVE_OPTIONS
+    ? observeDefaults.DEFAULT_OBSERVE_OPTIONS
+    : {
+      maxChars: 12000,
+      maxElements: 160,
+      maxBlocks: 40,
+      maxPrimaryChars: 1600,
+      maxOutline: 80,
+      maxOutlineChars: 180,
+      maxItems: 30,
+      maxItemChars: 240,
+      maxComments: 28,
+      maxCommentChars: 360,
+      includeMarkdown: true,
+      captureMode: "auto",
+      captureMaxChars: 24000,
+      captureLinks: false
+    };
+
+  var DETAIL_OBSERVE_OPTIONS = observeDefaults && observeDefaults.DETAIL_OBSERVE_OPTIONS
+    ? observeDefaults.DETAIL_OBSERVE_OPTIONS
+    : {
+      maxChars: 18000,
+      maxElements: 180,
+      maxBlocks: 60,
+      maxPrimaryChars: 2400,
+      maxOutline: 120,
+      maxOutlineChars: 220,
+      maxItems: 36,
+      maxItemChars: 260,
+      maxComments: 32,
+      maxCommentChars: 420,
+      includeMarkdown: true,
+      captureMode: "auto",
+      captureMaxChars: 24000,
+      captureLinks: false
+    };
 
   function isObservationEmpty(observation) {
     if (!observation) {

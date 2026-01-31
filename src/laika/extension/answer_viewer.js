@@ -32,26 +32,6 @@
     }
   }
 
-  function sleep(ms) {
-    return new Promise(function (resolve) {
-      window.setTimeout(resolve, ms);
-    });
-  }
-
-  async function fetchPayload(token) {
-    var response = await browser.runtime.sendMessage({
-      type: "laika.answer_viewer.get",
-      token: token
-    });
-    if (response && response.status === "ok" && response.payload) {
-      return { status: "ok", payload: response.payload };
-    }
-    if (response && response.error) {
-      return { status: "error", error: response.error };
-    }
-    return { status: "error", error: "unknown" };
-  }
-
   function buildSourcesList(citations) {
     if (!sourcesEl) {
       return;
@@ -150,28 +130,12 @@
       return;
     }
     var params = new URLSearchParams(window.location.search);
-    var token = params.get("token");
     var collectionId = params.get("collectionId");
     var eventId = params.get("eventId");
     var questionEventId = params.get("questionEventId");
-    var deadline = Date.now() + 60000;
     var payload = null;
     showPending("Preparing answer...");
-    if (token) {
-      while (Date.now() < deadline) {
-        var result = await fetchPayload(token);
-        if (result.status === "ok") {
-          payload = result.payload;
-          break;
-        }
-        if (result.error && result.error !== "not_found") {
-          showError("Answer not found or expired.");
-          return;
-        }
-        await sleep(1000);
-      }
-    }
-    if (!payload && collectionId && eventId) {
+    if (collectionId && eventId) {
       var fallback = await fetchFromCollection(collectionId, eventId, questionEventId);
       if (fallback.status === "ok") {
         payload = fallback.payload;

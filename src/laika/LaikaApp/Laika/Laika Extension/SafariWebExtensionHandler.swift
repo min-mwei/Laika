@@ -17,6 +17,15 @@ private let sharedCollections = CollectionStore()
 private let collectionContextMaxChars = 80_000
 private let collectionSourceMaxChars = 8_000
 private let collectionSummaryMaxSources = 12
+private let collectionStopwords: Set<String> = [
+    "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "can", "could",
+    "did", "do", "does", "for", "from", "had", "has", "have", "how", "if", "in",
+    "into", "is", "it", "its", "key", "like", "may", "might", "more", "most",
+    "of", "on", "or", "our", "out", "over", "so", "than", "that", "the", "their",
+    "them", "then", "there", "these", "this", "those", "to", "up", "was", "were",
+    "what", "when", "where", "which", "who", "why", "with", "without", "would",
+    "vs", "versus", "compare", "comparison", "difference", "differences", "between"
+]
 
 private actor NativeAgent {
     private var modelURL: URL?
@@ -474,12 +483,13 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                 guard !capturedSources.isEmpty else {
                     throw CollectionStoreError.invalidRequest("no_captured_sources")
                 }
-                let preparedQuestion = prepareCollectionQuestion(question, sources: capturedSources)
+                let rankedSources = rankSourcesForQuestion(question, sources: capturedSources)
+                let preparedQuestion = prepareCollectionQuestion(question, sources: rankedSources)
                 let runId = "collection:\(payload.collectionId)"
                 let turn = max(1, (try await sharedCollections.listChatEvents(collectionId: payload.collectionId, limit: 200).count + 1))
                 let (request, logContext, citationMap) = buildCollectionAnswerRequest(
                     collection: collection,
-                    sources: capturedSources,
+                    sources: rankedSources,
                     question: preparedQuestion,
                     runId: runId,
                     turn: turn
@@ -494,12 +504,12 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                         "collectionId": .string(payload.collectionId),
                         "questionPreview": .string(LaikaLogger.preview(question, maxChars: 200)),
                         "preparedQuestionPreview": .string(LaikaLogger.preview(preparedQuestion, maxChars: 200)),
-                        "sourceIds": .array(capturedSources.prefix(12).map { .string($0.id) }),
-                        "sourceTitles": .array(capturedSources.prefix(12).map {
+                        "sourceIds": .array(rankedSources.prefix(12).map { .string($0.id) }),
+                        "sourceTitles": .array(rankedSources.prefix(12).map {
                             let title = $0.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                             return .string(LaikaLogger.preview(title.isEmpty ? $0.url : title, maxChars: 120))
                         }),
-                        "sourceCount": .number(Double(capturedSources.count)),
+                        "sourceCount": .number(Double(rankedSources.count)),
                         "contextChars": .number(Double(logContext.contextChars))
                     ]
                 )
@@ -669,7 +679,7 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             return trimmed
         }
         if !isSummaryQuestion(trimmed) {
-            return trimmed
+            return trimmed + "\n\nCite each source you rely on. If sources disagree, call it out explicitly."
         }
         let titles = sources.prefix(collectionSummaryMaxSources).map { source in
             let raw = source.title?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -691,6 +701,62 @@ Each bullet must cite that source. If a source adds no new info, still include i
             return intro + "\nOriginal request: " + trimmed
         }
         return intro + "\nSource titles:\n" + bulletList + "\n\nOriginal request: " + trimmed
+    }
+
+    private func tokenizeQuestion(_ question: String) -> [String] {
+        let lowered = question.lowercased()
+        let tokens = lowered.split { character in
+            !character.isLetter && !character.isNumber
+        }.map { String($0) }
+        var seen: Set<String> = []
+        var result: [String] = []
+        for token in tokens {
+            guard token.count >= 3, !collectionStopwords.contains(token) else {
+                continue
+            }
+            if seen.contains(token) {
+                continue
+            }
+            seen.insert(token)
+            result.append(token)
+        }
+        return result
+    }
+
+    private func rankSourcesForQuestion(_ question: String, sources: [SourceSnapshot]) -> [SourceSnapshot] {
+        let tokens = tokenizeQuestion(question)
+        guard !tokens.isEmpty else {
+            return sources.sorted { lhs, rhs in
+                (lhs.capturedAtMs ?? 0) > (rhs.capturedAtMs ?? 0)
+            }
+        }
+        return sources.sorted { lhs, rhs in
+            let lhsScore = relevanceScore(tokens: tokens, source: lhs)
+            let rhsScore = relevanceScore(tokens: tokens, source: rhs)
+            if lhsScore != rhsScore {
+                return lhsScore > rhsScore
+            }
+            return (lhs.capturedAtMs ?? 0) > (rhs.capturedAtMs ?? 0)
+        }
+    }
+
+    private func relevanceScore(tokens: [String], source: SourceSnapshot) -> Int {
+        var score = 0
+        let title = (source.title ?? "").lowercased()
+        let url = source.url.lowercased()
+        let sample = source.captureMarkdown.prefix(800).lowercased()
+        for token in tokens {
+            if title.contains(token) {
+                score += 4
+            }
+            if url.contains(token) {
+                score += 1
+            }
+            if sample.contains(token) {
+                score += 2
+            }
+        }
+        return score
     }
 
     private func prepareCoverageRepairQuestion(
@@ -855,27 +921,65 @@ Missing sources to add:
         var contextChars = 0
 
         var includedSources: [SourceSnapshot] = []
+        var summaryOnlyCount = 0
         for source in sources {
             let trimmed = source.captureMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
                 continue
             }
             let boundedMarkdown = TextUtils.truncate(trimmed, maxChars: collectionSourceMaxChars)
-            if !includedSources.isEmpty && contextChars + boundedMarkdown.count > collectionContextMaxChars {
+            var chosenMarkdown = boundedMarkdown
+            var summaryOnly = false
+            let remainingBudget = collectionContextMaxChars - contextChars
+            if remainingBudget <= 0 {
                 break
             }
+            if chosenMarkdown.count > remainingBudget {
+                if let summary = source.captureSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !summary.isEmpty {
+                    let trimmedSummary = TextUtils.truncate(summary, maxChars: min(collectionSourceMaxChars, 2000))
+                    let summaryMarkdown = "Summary:\n" + trimmedSummary
+                    if summaryMarkdown.count <= remainingBudget {
+                        chosenMarkdown = summaryMarkdown
+                        summaryOnly = true
+                    } else if includedSources.isEmpty {
+                        let forced = TextUtils.truncate(summaryMarkdown, maxChars: max(400, remainingBudget))
+                        chosenMarkdown = forced
+                        summaryOnly = true
+                    } else {
+                        continue
+                    }
+                } else if includedSources.isEmpty {
+                    chosenMarkdown = TextUtils.truncate(chosenMarkdown, maxChars: remainingBudget)
+                } else {
+                    continue
+                }
+            }
             citationMap[source.id] = source.url
-            contextChars += boundedMarkdown.count
+            contextChars += chosenMarkdown.count
             includedSources.append(source)
-            documents.append(collectionSourceDocument(collection: collection, source: source, markdown: boundedMarkdown))
+            if summaryOnly {
+                summaryOnlyCount += 1
+            }
+            documents.append(collectionSourceDocument(
+                collection: collection,
+                source: source,
+                markdown: chosenMarkdown,
+                summaryOnly: summaryOnly
+            ))
         }
 
+        var contextNote = includedSources.count < sources.count
+            ? "Context trimmed to \(includedSources.count) sources to fit budget."
+            : nil
+        if summaryOnlyCount > 0 {
+            let summaryNote = "\(summaryOnlyCount) source(s) summarized to fit budget."
+            contextNote = contextNote == nil ? summaryNote : "\(contextNote!) \(summaryNote)"
+        }
         let indexDoc = collectionIndexDocument(
             collection: collection,
             sources: includedSources,
-            contextNote: includedSources.count < sources.count
-                ? "Context trimmed to \(includedSources.count) sources to fit budget."
-                : nil
+            contextNote: contextNote
         )
         documents.insert(indexDoc, at: 0)
 
@@ -924,7 +1028,8 @@ Missing sources to add:
     private func collectionSourceDocument(
         collection: CollectionRecord,
         source: SourceSnapshot,
-        markdown: String? = nil
+        markdown: String? = nil,
+        summaryOnly: Bool = false
     ) -> LLMCPDocument {
         let body = markdown ?? source.captureMarkdown
         var content: [String: JSONValue] = [
@@ -939,6 +1044,9 @@ Missing sources to add:
         }
         if let capturedAt = source.capturedAtMs, let iso = isoString(fromMs: capturedAt) {
             content["captured_at"] = .string(iso)
+        }
+        if summaryOnly {
+            content["summary_only"] = .bool(true)
         }
         if !source.extractedLinks.isEmpty {
             let links = source.extractedLinks.map { link -> JSONValue in

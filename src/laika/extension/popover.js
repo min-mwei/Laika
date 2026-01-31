@@ -73,39 +73,44 @@ var MESSAGE_FORMAT_MARKDOWN = "markdown";
 var markdownRenderer = null;
 
 var MAX_AGENT_STEPS = 6;
-var DEFAULT_OBSERVE_OPTIONS = {
-  maxChars: 12000,
-  maxElements: 160,
-  maxBlocks: 40,
-  maxPrimaryChars: 1600,
-  maxOutline: 80,
-  maxOutlineChars: 180,
-  maxItems: 30,
-  maxItemChars: 240,
-  maxComments: 28,
-  maxCommentChars: 360,
-  includeMarkdown: true,
-  captureMode: "auto",
-  captureMaxChars: 24000,
-  captureLinks: false
-};
+var observeDefaults = typeof window !== "undefined" ? window.LaikaObserveDefaults : null;
+var DEFAULT_OBSERVE_OPTIONS = observeDefaults && observeDefaults.DEFAULT_OBSERVE_OPTIONS
+  ? observeDefaults.cloneOptions(observeDefaults.DEFAULT_OBSERVE_OPTIONS)
+  : {
+    maxChars: 12000,
+    maxElements: 160,
+    maxBlocks: 40,
+    maxPrimaryChars: 1600,
+    maxOutline: 80,
+    maxOutlineChars: 180,
+    maxItems: 30,
+    maxItemChars: 240,
+    maxComments: 28,
+    maxCommentChars: 360,
+    includeMarkdown: true,
+    captureMode: "auto",
+    captureMaxChars: 24000,
+    captureLinks: false
+  };
 
-var DETAIL_OBSERVE_OPTIONS = {
-  maxChars: 18000,
-  maxElements: 180,
-  maxBlocks: 60,
-  maxPrimaryChars: 2400,
-  maxOutline: 120,
-  maxOutlineChars: 220,
-  maxItems: 36,
-  maxItemChars: 260,
-  maxComments: 32,
-  maxCommentChars: 420,
-  includeMarkdown: true,
-  captureMode: "auto",
-  captureMaxChars: 24000,
-  captureLinks: false
-};
+var DETAIL_OBSERVE_OPTIONS = observeDefaults && observeDefaults.DETAIL_OBSERVE_OPTIONS
+  ? observeDefaults.cloneOptions(observeDefaults.DETAIL_OBSERVE_OPTIONS)
+  : {
+    maxChars: 18000,
+    maxElements: 180,
+    maxBlocks: 60,
+    maxPrimaryChars: 2400,
+    maxOutline: 120,
+    maxOutlineChars: 220,
+    maxItems: 36,
+    maxItemChars: 260,
+    maxComments: 32,
+    maxCommentChars: 420,
+    includeMarkdown: true,
+    captureMode: "auto",
+    captureMaxChars: 24000,
+    captureLinks: false
+  };
 
 function logDebug(text) {
   if (typeof console !== "undefined" && console.debug) {
@@ -1631,42 +1636,33 @@ function getCollectionTitle(collectionId) {
   return "";
 }
 
-function generateAnswerViewerToken() {
-  return "ans_" + String(Date.now()) + "-" + Math.random().toString(16).slice(2);
-}
-
-async function openAnswerViewerTab(token, options) {
-  if (!token || typeof token !== "string") {
+async function openAnswerViewerByEvent(options) {
+  if (!browser || !browser.runtime || !browser.runtime.sendMessage) {
     return false;
   }
-  if (!browser || !browser.runtime || !browser.runtime.sendMessage) {
+  if (!options || !options.collectionId || !options.eventId) {
     return false;
   }
   try {
     var response = await browser.runtime.sendMessage({
-      type: "laika.answer_viewer.open_pending",
-      token: token,
-      collectionId: options && options.collectionId ? options.collectionId : null,
-      eventId: options && options.eventId ? options.eventId : null,
-      questionEventId: options && options.questionEventId ? options.questionEventId : null
+      type: "laika.answer_viewer.open",
+      collectionId: options.collectionId,
+      eventId: options.eventId,
+      questionEventId: options.questionEventId || null
     });
     if (response && response.status === "ok") {
       return true;
     }
   } catch (error) {
-    logDebug("open pending viewer failed: " + String(error && error.message ? error.message : error));
+    logDebug("open viewer failed: " + String(error && error.message ? error.message : error));
   }
   if (!browser.runtime.getURL) {
     return false;
   }
-  var viewerUrl = browser.runtime.getURL("answer_viewer.html") + "?token=" + encodeURIComponent(token);
-  if (options && options.collectionId) {
-    viewerUrl += "&collectionId=" + encodeURIComponent(options.collectionId);
-  }
-  if (options && options.eventId) {
-    viewerUrl += "&eventId=" + encodeURIComponent(options.eventId);
-  }
-  if (options && options.questionEventId) {
+  var viewerUrl = browser.runtime.getURL("answer_viewer.html")
+    + "?collectionId=" + encodeURIComponent(options.collectionId)
+    + "&eventId=" + encodeURIComponent(options.eventId);
+  if (options.questionEventId) {
     viewerUrl += "&questionEventId=" + encodeURIComponent(options.questionEventId);
   }
   if (browser.tabs && browser.tabs.create) {
@@ -1688,59 +1684,15 @@ async function openAnswerViewerTab(token, options) {
   return false;
 }
 
-async function fulfillAnswerViewer(token, payload) {
-  if (!token || typeof token !== "string") {
-    return false;
-  }
-  if (!payload || typeof payload !== "object") {
-    return false;
-  }
-  if (!browser || !browser.runtime || !browser.runtime.sendMessage) {
-    return false;
-  }
-  try {
-    var response = await browser.runtime.sendMessage({
-      type: "laika.answer_viewer.fulfill",
-      token: token,
-      payload: payload
-    });
-    return response && response.status === "ok";
-  } catch (error) {
-    logDebug("fulfill answer viewer failed: " + String(error && error.message ? error.message : error));
-    return false;
-  }
-}
-
 async function openAnswerViewer(payload) {
   if (!payload || typeof payload !== "object") {
     return;
   }
-  if (!browser || !browser.runtime || !browser.runtime.sendMessage) {
-    return;
-  }
-  try {
-    var response = await browser.runtime.sendMessage({
-      type: "laika.answer_viewer.open",
-      payload: payload
-    });
-    if (response && response.status === "ok") {
-      return;
-    }
-    if (!browser.tabs || !browser.runtime.getURL) {
-      return;
-    }
-    var fallback = await browser.runtime.sendMessage({
-      type: "laika.answer_viewer.store",
-      payload: payload
-    });
-    if (!fallback || fallback.status !== "ok" || !fallback.token) {
-      return;
-    }
-    var viewerUrl = browser.runtime.getURL("answer_viewer.html") + "?token=" + encodeURIComponent(fallback.token);
-    await browser.tabs.create({ url: viewerUrl, active: true });
-  } catch (error) {
-    logDebug("open answer viewer failed: " + String(error && error.message ? error.message : error));
-  }
+  await openAnswerViewerByEvent({
+    collectionId: payload.collectionId,
+    eventId: payload.eventId,
+    questionEventId: payload.questionEventId
+  });
 }
 
 async function sendCollectionAnswer(question) {
@@ -1748,11 +1700,6 @@ async function sendCollectionAnswer(question) {
   if (!collectionId) {
     appendMessage("system", "Create a collection first.", { save: false });
     return;
-  }
-  var viewerToken = generateAnswerViewerToken();
-  var viewerOpened = await openAnswerViewerTab(viewerToken, { collectionId: collectionId });
-  if (!viewerOpened) {
-    viewerToken = null;
   }
   await loadMaxTokens();
   var response = await sendCollectionMessage("answer", {
@@ -1782,14 +1729,6 @@ async function sendCollectionAnswer(question) {
     eventId: answerEventId,
     questionEventId: questionEventId
   };
-  if (viewerToken) {
-    var delivered = await fulfillAnswerViewer(viewerToken, payload);
-    if (!delivered) {
-      logDebug("answer viewer delivery failed; falling back to inline open.");
-      await openAnswerViewer(payload);
-    }
-    return;
-  }
   await openAnswerViewer(payload);
 }
 
