@@ -29,6 +29,14 @@ public enum CaptureStatus: String, Codable, Sendable {
     case failed
 }
 
+public enum CaptureJobStatus: String, Codable, Sendable {
+    case queued
+    case running
+    case succeeded
+    case failed
+    case cancelled
+}
+
 public struct CollectionRecord: Codable, Equatable, Sendable {
     public let id: String
     public let title: String
@@ -45,6 +53,8 @@ public struct SourceRecord: Codable, Equatable, Sendable {
     public let title: String?
     public let captureStatus: CaptureStatus
     public let captureError: String?
+    public let captureJobStatus: CaptureJobStatus?
+    public let captureJobUpdatedAtMs: Int64?
     public let addedAtMs: Int64
     public let capturedAtMs: Int64?
     public let updatedAtMs: Int64
@@ -690,6 +700,8 @@ public actor CollectionStore {
                     title: sourceInput.title,
                     captureStatus: .pending,
                     captureError: nil,
+                    captureJobStatus: .queued,
+                    captureJobUpdatedAtMs: nowMs,
                     addedAtMs: nowMs,
                     capturedAtMs: nil,
                     updatedAtMs: nowMs
@@ -729,6 +741,8 @@ public actor CollectionStore {
                     title: sourceInput.title,
                     captureStatus: .captured,
                     captureError: nil,
+                    captureJobStatus: nil,
+                    captureJobUpdatedAtMs: nil,
                     addedAtMs: nowMs,
                     capturedAtMs: nowMs,
                     updatedAtMs: nowMs
@@ -908,10 +922,15 @@ public actor CollectionStore {
 
     private func fetchSources(collectionId: String, db: SQLiteDatabase) throws -> [SourceRecord] {
         let querySQL = """
-        SELECT id, kind, url, title, capture_status, capture_error, added_at_ms, captured_at_ms, updated_at_ms
-        FROM sources
-        WHERE collection_id = ?
-        ORDER BY added_at_ms DESC;
+        SELECT s.id, s.kind, s.url, s.title,
+               s.capture_status, s.capture_error,
+               s.added_at_ms, s.captured_at_ms, s.updated_at_ms,
+               cj.status, cj.updated_at_ms
+        FROM sources s
+        LEFT JOIN capture_jobs cj
+          ON cj.source_id = s.id AND cj.status IN ('queued', 'running')
+        WHERE s.collection_id = ?
+        ORDER BY s.added_at_ms DESC;
         """
         let statement = try db.prepare(querySQL)
         defer { sqlite3_finalize(statement) }
@@ -927,8 +946,11 @@ public actor CollectionStore {
             let addedAt = sqlite3_column_int64(statement, 6)
             let capturedAt = sqlite3_column_type(statement, 7) == SQLITE_NULL ? nil : sqlite3_column_int64(statement, 7)
             let updatedAt = sqlite3_column_int64(statement, 8)
+            let jobStatusRaw = db.columnOptionalText(statement, index: 9)
+            let jobUpdatedAt = sqlite3_column_type(statement, 10) == SQLITE_NULL ? nil : sqlite3_column_int64(statement, 10)
             let kind = SourceKind(rawValue: kindRaw) ?? .url
             let status = CaptureStatus(rawValue: statusRaw) ?? .pending
+            let jobStatus = jobStatusRaw.flatMap { CaptureJobStatus(rawValue: $0) }
             sources.append(SourceRecord(
                 id: id,
                 collectionId: collectionId,
@@ -937,6 +959,8 @@ public actor CollectionStore {
                 title: title,
                 captureStatus: status,
                 captureError: captureError,
+                captureJobStatus: jobStatus,
+                captureJobUpdatedAtMs: jobUpdatedAt,
                 addedAtMs: addedAt,
                 capturedAtMs: capturedAt,
                 updatedAtMs: updatedAt

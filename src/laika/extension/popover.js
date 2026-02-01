@@ -396,6 +396,24 @@ function normalizeCaptureStatus(source) {
   return source.captureStatus;
 }
 
+function displayCaptureStatus(source) {
+  var status = normalizeCaptureStatus(source);
+  if (status === "pending") {
+    var jobStatus = source && source.captureJobStatus;
+    if (jobStatus === "running") {
+      return "capturing";
+    }
+    if (jobStatus === "queued") {
+      return "queued";
+    }
+  }
+  return status;
+}
+
+function isPendingStatus(status) {
+  return status === "pending" || status === "queued" || status === "capturing";
+}
+
 function summarizeSources(list) {
   var summary = {
     total: 0,
@@ -409,15 +427,15 @@ function summarizeSources(list) {
   }
   summary.total = list.length;
   list.forEach(function (source) {
-    var status = normalizeCaptureStatus(source);
+    var status = displayCaptureStatus(source);
     if (status === "captured") {
       summary.captured += 1;
     } else if (status === "failed") {
       summary.failed += 1;
-    } else {
+    } else if (isPendingStatus(status)) {
       summary.pending += 1;
     }
-    if (source && source.kind === "url" && status === "pending") {
+    if (source && source.kind === "url" && isPendingStatus(status)) {
       summary.pendingUrls += 1;
     }
   });
@@ -518,7 +536,7 @@ function renderSources() {
     var meta = document.createElement("div");
     meta.className = "source-meta";
     var badge = document.createElement("span");
-    var status = normalizeCaptureStatus(source);
+    var status = displayCaptureStatus(source);
     badge.className = "badge " + status;
     badge.textContent = status;
     meta.appendChild(badge);

@@ -220,6 +220,18 @@ Additional P0 actions (this iteration):
 - **Capture noise split (done):** separate noise tags vs selectors to avoid Turndown selector misuse.
 - **Collection answer ranking + summary fallback (done):** rank sources by question overlap and use per-source summaries to fit more sources into budget.
 
+### Feedback integration (2026-01-31 continued)
+
+Immediate P0 actions (this iteration):
+- **Long-page chunk sampling (done):** replace head+tail truncation with head + evenly-spaced mid chunks + tail to preserve middle coverage.
+- **Markdown citations block (done):** require a deterministic `---CITATIONS---` block for markdown answers and parse it into `assistant.citations`.
+- **Navigation tool tab identity (done):** return `tabId` (and `url`) from `browser.navigate/back/forward/refresh` and standardize error details.
+- **Focus-once readiness (done):** only focus the newly created tab once during readiness retries to reduce flake.
+- **Capture status clarity (done):** surface capture job state (queued/running) so “pending” is not ambiguous.
+- **Capture error taxonomy (done):** ensure capture failures always return `errorDetails` with stable `code` and `stage`.
+- **Markdown postprocess module + tests (done):** move post-process helpers to a shared module and add unit tests.
+- **Fixture-based capture tests (done):** add a Playwright-based harness that runs capture on HTML fixtures and asserts key content is preserved.
+
 ### Persistence boundaries (source of truth)
 
 P0 decision: **native SQLite is the source of truth** for user data.

@@ -26,7 +26,9 @@
     NOT_FOUND: "NOT_FOUND",
     NOT_INTERACTABLE: "NOT_INTERACTABLE",
     DISABLED: "DISABLED",
-    BLOCKED_BY_OVERLAY: "BLOCKED_BY_OVERLAY"
+    BLOCKED_BY_OVERLAY: "BLOCKED_BY_OVERLAY",
+    CAPTURE_FAILED: "CAPTURE_FAILED",
+    CAPTURE_EMPTY: "CAPTURE_EMPTY"
   };
 
   var ObservationSignal = {
@@ -4106,6 +4108,25 @@
     return joined.trim();
   }
 
+  var markdownPostprocess = (typeof window !== "undefined" && window.LaikaMarkdownPostprocess)
+    ? window.LaikaMarkdownPostprocess
+    : null;
+  if (markdownPostprocess && typeof markdownPostprocess.postProcessMarkdown === "function") {
+    if (typeof markdownPostprocess.isFenceLine === "function") {
+      isFenceLine = markdownPostprocess.isFenceLine;
+    }
+    if (typeof markdownPostprocess.fenceMarkerFromLine === "function") {
+      fenceMarkerFromLine = markdownPostprocess.fenceMarkerFromLine;
+    }
+    if (typeof markdownPostprocess.splitLongLine === "function") {
+      splitLongLine = markdownPostprocess.splitLongLine;
+    }
+    if (typeof markdownPostprocess.splitLongParagraphs === "function") {
+      splitLongParagraphs = markdownPostprocess.splitLongParagraphs;
+    }
+    postProcessMarkdown = markdownPostprocess.postProcessMarkdown;
+  }
+
   function splitMarkdownBlocks(markdown) {
     var lines = String(markdown || "").split(/\r?\n/);
     var blocks = [];
@@ -4173,23 +4194,10 @@
     return stack;
   }
 
-  function chunkMarkdown(markdown, maxChars) {
-    var text = String(markdown || "").trim();
-    var total = text.length;
-    var limit = clampCaptureMaxChars(maxChars);
-    if (!text) {
-      return { markdown: "", chunks: [], truncated: false, totalChars: 0, chunkCount: 0 };
-    }
-    if (total <= limit) {
-      return { markdown: text, chunks: [text], truncated: false, totalChars: total, chunkCount: 1 };
-    }
-    var chunkSize = Math.min(8000, Math.max(2000, Math.floor(limit / 6)));
-    var blocks = splitMarkdownBlocks(text);
+  function buildMarkdownChunks(blocks, chunkSize) {
     var chunks = [];
     var current = "";
     var headingStack = [];
-    var remaining = limit;
-    var truncated = false;
     for (var i = 0; i < blocks.length; i += 1) {
       var blockText = blocks[i].text || "";
       var trimmed = blockText.trim();
@@ -4206,11 +4214,6 @@
       var candidate = current ? current + "\n\n" + prefix + blockText : prefix + blockText;
       if (current && candidate.length > chunkSize) {
         chunks.push(current);
-        remaining -= current.length;
-        if (remaining <= 0) {
-          truncated = true;
-          break;
-        }
         current = "";
         prefix = "";
         if (headingStack.length && !trimmed.startsWith("#")) {
@@ -4218,45 +4221,102 @@
         }
         candidate = prefix + blockText;
       }
-      if (candidate.length > remaining) {
-        if (current) {
-          var chunkToAdd = current.length > remaining ? current.slice(0, Math.max(0, remaining)) : current;
-          if (chunkToAdd) {
-            chunks.push(chunkToAdd);
-            remaining -= chunkToAdd.length;
-          }
-        }
-        truncated = true;
-        break;
-      }
       current = candidate;
     }
-    if (!truncated && current) {
+    if (current) {
       chunks.push(current);
     }
-    if (chunks.length === 0) {
-      var slice = text.slice(0, Math.min(limit, text.length));
-      chunks = [slice];
-      truncated = true;
+    return chunks;
+  }
+
+  function sampleChunkIndices(totalChunks, targetCount) {
+    if (totalChunks <= targetCount) {
+      var all = [];
+      for (var i = 0; i < totalChunks; i += 1) {
+        all.push(i);
+      }
+      return all;
     }
-    if (truncated && chunks.length > 1) {
-      var lastSize = chunks[chunks.length - 1].length;
-      if (lastSize > 0) {
-        var tailStart = Math.max(0, text.length - lastSize);
-        var tailSlice = text.slice(tailStart);
-        if (tailSlice) {
-          chunks[chunks.length - 1] = tailSlice;
-        }
+    var indices = [0];
+    var middleCount = Math.max(0, targetCount - 2);
+    if (middleCount > 0) {
+      var span = totalChunks - 1;
+      var step = span / (middleCount + 1);
+      for (var j = 1; j <= middleCount; j += 1) {
+        var idx = Math.round(step * j);
+        idx = Math.max(1, Math.min(totalChunks - 2, idx));
+        indices.push(idx);
       }
     }
-    if (truncated) {
-      chunks[chunks.length - 1] = chunks[chunks.length - 1] + "\n\n[Truncated: captured partial content]";
+    indices.push(totalChunks - 1);
+    var seen = {};
+    var unique = [];
+    indices.sort(function (a, b) { return a - b; });
+    for (var k = 0; k < indices.length; k += 1) {
+      var value = indices[k];
+      if (!seen[value]) {
+        seen[value] = true;
+        unique.push(value);
+      }
     }
+    return unique;
+  }
+
+  function chunkMarkdown(markdown, maxChars) {
+    var text = String(markdown || "").trim();
+    var total = text.length;
+    var limit = clampCaptureMaxChars(maxChars);
+    if (!text) {
+      return { markdown: "", chunks: [], truncated: false, totalChars: 0, chunkCount: 0 };
+    }
+    if (total <= limit) {
+      return { markdown: text, chunks: [text], truncated: false, totalChars: total, chunkCount: 1 };
+    }
+    var chunkSize = Math.min(8000, Math.max(2000, Math.floor(limit / 6)));
+    var blocks = splitMarkdownBlocks(text);
+    var allChunks = buildMarkdownChunks(blocks, chunkSize);
+    if (allChunks.length === 0) {
+      var slice = text.slice(0, Math.min(limit, text.length));
+      return {
+        markdown: slice,
+        chunks: [slice],
+        truncated: true,
+        totalChars: total,
+        chunkCount: 1
+      };
+    }
+    var targetCount = Math.max(2, Math.floor(limit / chunkSize));
+    targetCount = Math.max(targetCount, 3);
+    targetCount = Math.min(allChunks.length, targetCount);
+    var indices = sampleChunkIndices(allChunks.length, targetCount);
+    var remaining = limit;
+    var chunks = [];
+    for (var i = 0; i < indices.length; i += 1) {
+      var chunk = allChunks[indices[i]];
+      if (!chunk) {
+        continue;
+      }
+      if (remaining <= 0) {
+        break;
+      }
+      if (chunk.length > remaining) {
+        chunk = chunk.slice(0, remaining);
+      }
+      if (chunk) {
+        chunks.push(chunk);
+        remaining -= chunk.length;
+      }
+    }
+    if (chunks.length === 0) {
+      var fallback = text.slice(0, Math.min(limit, text.length));
+      chunks = [fallback];
+    }
+    chunks[chunks.length - 1] = chunks[chunks.length - 1] + "\n\n[Truncated: captured partial content]";
     var joined = chunks.join("\n\n");
     return {
       markdown: joined,
       chunks: chunks,
-      truncated: truncated,
+      truncated: true,
       totalChars: total,
       chunkCount: chunks.length
     };
@@ -4962,7 +5022,7 @@
         try {
           return Promise.resolve(capturePage(message.options || {}));
         } catch (error) {
-          return Promise.resolve({ status: "error", error: "capture_failed" });
+          return Promise.resolve({ status: "error", error: ToolErrorCode.CAPTURE_FAILED });
         }
       }
       if (message.type === "laika.tool") {

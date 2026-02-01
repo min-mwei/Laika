@@ -264,7 +264,9 @@ var ToolErrorCode = {
   REFRESH_FAILED: "REFRESH_FAILED",
   RUNTIME_UNAVAILABLE: "RUNTIME_UNAVAILABLE",
   SEARCH_UNAVAILABLE: "SEARCH_UNAVAILABLE",
-  SEARCH_FAILED: "SEARCH_FAILED"
+  SEARCH_FAILED: "SEARCH_FAILED",
+  CAPTURE_FAILED: "CAPTURE_FAILED",
+  CAPTURE_EMPTY: "CAPTURE_EMPTY"
 };
 
 var NATIVE_APP_ID = "com.laika.Laika";
@@ -370,6 +372,7 @@ var CONTENT_SCRIPT_FILES = [
   "lib/text_utils.js",
   "lib/vendor/readability.js",
   "lib/vendor/turndown.js",
+  "lib/markdown_postprocess.js",
   "content_script.js"
 ];
 
@@ -973,16 +976,19 @@ async function waitForContentScript(tabId, options) {
     ? Math.floor(opts.pingAttempts)
     : 2;
   var shouldFocus = opts.focus === true;
+  var didFocus = false;
   var allowInject = opts.allowInject !== false;
   var deadline = Date.now() + totalMs;
   while (Date.now() < deadline) {
-    if (shouldFocus && browser.tabs && browser.tabs.get) {
+    if (shouldFocus && !didFocus && browser.tabs && browser.tabs.get) {
       try {
         var tab = await browser.tabs.get(tabId);
         if (tab) {
           await focusTab(tab);
+          didFocus = true;
         }
       } catch (error) {
+        didFocus = true;
       }
     }
     try {
@@ -1034,7 +1040,9 @@ async function ensureTabReadyAfterOpen(tabId, url, createOptions, options) {
     ? Math.floor(opts.readyTimeoutMs)
     : TAB_OPEN_READY_TOTAL_MS;
   var focus = typeof opts.focus === "boolean" ? opts.focus : !(createOptions && createOptions.active === false);
-  var ready = await waitForContentScript(tabId, { totalMs: totalMs, focus: focus });
+  var focusOnce = focus;
+  var ready = await waitForContentScript(tabId, { totalMs: totalMs, focus: focusOnce });
+  focusOnce = false;
   var attempts = 1;
   var reloaded = false;
   var reopened = false;
@@ -1044,7 +1052,7 @@ async function ensureTabReadyAfterOpen(tabId, url, createOptions, options) {
       await browser.tabs.reload(finalTabId);
       reloaded = true;
       attempts += 1;
-      ready = await waitForContentScript(finalTabId, { totalMs: totalMs, focus: focus });
+      ready = await waitForContentScript(finalTabId, { totalMs: totalMs, focus: focusOnce });
     } catch (error) {
     }
   }
@@ -1060,7 +1068,7 @@ async function ensureTabReadyAfterOpen(tabId, url, createOptions, options) {
         finalTabId = reopenedTab.id;
         reopened = true;
         attempts += 1;
-        ready = await waitForContentScript(finalTabId, { totalMs: totalMs, focus: focus });
+        ready = await waitForContentScript(finalTabId, { totalMs: totalMs, focus: focusOnce });
         if (opts.closeOnReopen !== false && browser.tabs && browser.tabs.remove && isNumericId(previousTabId)) {
           try {
             await browser.tabs.remove(previousTabId);
@@ -1271,7 +1279,10 @@ async function handleSourceCapture(args, sender, tabOverride) {
       { allowInject: true, waitForReady: true, timeoutMs: CAPTURE_MESSAGE_TIMEOUT_MS, attempts: 2 }
     );
   } catch (error) {
-    captureResult = { status: "error", error: error && error.code ? error.code : "capture_failed" };
+    captureResult = {
+      status: "error",
+      error: normalizeCaptureError(error && error.code ? error.code : "capture_failed")
+    };
   }
 
   var markdown = null;
@@ -1282,7 +1293,7 @@ async function handleSourceCapture(args, sender, tabOverride) {
     markdown = captureResult.markdown;
     if (!markdown || markdown.trim().length < 80) {
       markdown = null;
-      captureResult.error = captureResult.error || "capture_empty";
+      captureResult.error = captureResult.error || ToolErrorCode.CAPTURE_EMPTY;
     }
     title = typeof captureResult.title === "string" ? captureResult.title : "";
     truncated = !!captureResult.truncated;
@@ -1314,16 +1325,21 @@ async function handleSourceCapture(args, sender, tabOverride) {
   }
 
   if (!markdown) {
+    var normalizedError = normalizeCaptureError(captureResult && captureResult.error);
     var failResult = await sendCaptureUpdate({
       collectionId: collectionId,
       url: safeUrl,
       status: "failed",
-      error: captureResult && captureResult.error ? captureResult.error : "capture_failed"
+      error: normalizedError
     });
     if (failResult.status !== "ok") {
       return failResult;
     }
-    return { status: "error", error: captureResult && captureResult.error ? captureResult.error : "capture_failed" };
+    return {
+      status: "error",
+      error: normalizedError,
+      errorDetails: captureErrorDetails(normalizedError, safeUrl)
+    };
   }
 
   var updateResult = await sendCaptureUpdate({
@@ -1612,6 +1628,25 @@ async function tabExists(tabId) {
   }
 }
 
+async function getTabSnapshot(tabId) {
+  if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.get) {
+    return null;
+  }
+  try {
+    return await browser.tabs.get(tabId);
+  } catch (error) {
+    return null;
+  }
+}
+
+function buildNavigationResponse(tabId, snapshot) {
+  var response = { status: "ok", tabId: tabId };
+  if (snapshot && snapshot.url) {
+    response.url = snapshot.url;
+  }
+  return response;
+}
+
 async function getTabWindowId(tabId) {
   if (!isNumericId(tabId) || !browser.tabs || !browser.tabs.get) {
     return null;
@@ -1876,6 +1911,29 @@ function boundCaptureMarkdown(markdown, maxChars) {
     headChars: head,
     tailChars: tail
   };
+}
+
+function normalizeCaptureError(error) {
+  if (!error) {
+    return ToolErrorCode.CAPTURE_FAILED;
+  }
+  var normalized = String(error);
+  var lower = normalized.toLowerCase();
+  if (lower === "capture_empty") {
+    return ToolErrorCode.CAPTURE_EMPTY;
+  }
+  if (lower === "capture_failed") {
+    return ToolErrorCode.CAPTURE_FAILED;
+  }
+  return normalized;
+}
+
+function captureErrorDetails(code, url) {
+  var details = { stage: "capture", code: code };
+  if (url) {
+    details.url = url;
+  }
+  return details;
 }
 
 function splitParagraphs(text) {
@@ -2521,7 +2579,7 @@ async function handleTool(toolName, args, sender, tabOverride) {
         return {
           status: "error",
           error: ToolErrorCode.NO_CONTEXT,
-          errorDetails: { code: "host_permission_missing", url: navigateUrl }
+          errorDetails: { code: "host_permission_missing", url: navigateUrl, tabId: tabId }
         };
       }
     }
@@ -2535,13 +2593,21 @@ async function handleTool(toolName, args, sender, tabOverride) {
           return {
             status: "error",
             error: ToolErrorCode.NO_CONTEXT,
-            errorDetails: { code: "no_content_script", url: navigateUrl }
+            errorDetails: { code: "no_content_script", url: navigateUrl, tabId: tabId }
           };
         }
       }
-      return { status: "ok" };
+      var snapshot = await getTabSnapshot(tabId);
+      if (!snapshot) {
+        return buildNavigationResponse(tabId, { url: navigateUrl });
+      }
+      return buildNavigationResponse(tabId, snapshot);
     } catch (error) {
-      return { status: "error", error: ToolErrorCode.NAVIGATION_FAILED };
+      return {
+        status: "error",
+        error: ToolErrorCode.NAVIGATION_FAILED,
+        errorDetails: { code: "navigation_failed", url: navigateUrl, tabId: tabId }
+      };
     }
   }
   if (toolName === "browser.back") {
@@ -2552,20 +2618,14 @@ async function handleTool(toolName, args, sender, tabOverride) {
     try {
       await browser.tabs.goBack(tabId);
       if (waitBackReady) {
-        var snapshot = null;
-        if (browser.tabs && browser.tabs.get) {
-          try {
-            snapshot = await browser.tabs.get(tabId);
-          } catch (error) {
-          }
-        }
+        var snapshot = await getTabSnapshot(tabId);
         if (snapshot && snapshot.url) {
           var backAllowed = await hasHostPermission(snapshot.url);
           if (!backAllowed) {
             return {
               status: "error",
               error: ToolErrorCode.NO_CONTEXT,
-              errorDetails: { code: "host_permission_missing", url: snapshot.url }
+              errorDetails: { code: "host_permission_missing", url: snapshot.url, tabId: tabId }
             };
           }
         }
@@ -2576,11 +2636,14 @@ async function handleTool(toolName, args, sender, tabOverride) {
           return {
             status: "error",
             error: ToolErrorCode.NO_CONTEXT,
-            errorDetails: { code: "no_content_script" }
+            errorDetails: { code: "no_content_script", tabId: tabId }
           };
         }
+        var finalSnapshot = await getTabSnapshot(tabId);
+        return buildNavigationResponse(tabId, finalSnapshot || snapshot);
       }
-      return { status: "ok" };
+      var backSnapshot = await getTabSnapshot(tabId);
+      return buildNavigationResponse(tabId, backSnapshot);
     } catch (error) {
       return { status: "error", error: ToolErrorCode.BACK_FAILED };
     }
@@ -2593,20 +2656,14 @@ async function handleTool(toolName, args, sender, tabOverride) {
     try {
       await browser.tabs.goForward(tabId);
       if (waitForwardReady) {
-        var forwardSnapshot = null;
-        if (browser.tabs && browser.tabs.get) {
-          try {
-            forwardSnapshot = await browser.tabs.get(tabId);
-          } catch (error) {
-          }
-        }
+        var forwardSnapshot = await getTabSnapshot(tabId);
         if (forwardSnapshot && forwardSnapshot.url) {
           var forwardAllowed = await hasHostPermission(forwardSnapshot.url);
           if (!forwardAllowed) {
             return {
               status: "error",
               error: ToolErrorCode.NO_CONTEXT,
-              errorDetails: { code: "host_permission_missing", url: forwardSnapshot.url }
+              errorDetails: { code: "host_permission_missing", url: forwardSnapshot.url, tabId: tabId }
             };
           }
         }
@@ -2617,11 +2674,14 @@ async function handleTool(toolName, args, sender, tabOverride) {
           return {
             status: "error",
             error: ToolErrorCode.NO_CONTEXT,
-            errorDetails: { code: "no_content_script" }
+            errorDetails: { code: "no_content_script", tabId: tabId }
           };
         }
+        var finalForward = await getTabSnapshot(tabId);
+        return buildNavigationResponse(tabId, finalForward || forwardSnapshot);
       }
-      return { status: "ok" };
+      var forwardSnapshotFinal = await getTabSnapshot(tabId);
+      return buildNavigationResponse(tabId, forwardSnapshotFinal);
     } catch (error) {
       return { status: "error", error: ToolErrorCode.FORWARD_FAILED };
     }
@@ -2634,20 +2694,14 @@ async function handleTool(toolName, args, sender, tabOverride) {
     try {
       await browser.tabs.reload(tabId);
       if (waitRefreshReady) {
-        var refreshSnapshot = null;
-        if (browser.tabs && browser.tabs.get) {
-          try {
-            refreshSnapshot = await browser.tabs.get(tabId);
-          } catch (error) {
-          }
-        }
+        var refreshSnapshot = await getTabSnapshot(tabId);
         if (refreshSnapshot && refreshSnapshot.url) {
           var refreshAllowed = await hasHostPermission(refreshSnapshot.url);
           if (!refreshAllowed) {
             return {
               status: "error",
               error: ToolErrorCode.NO_CONTEXT,
-              errorDetails: { code: "host_permission_missing", url: refreshSnapshot.url }
+              errorDetails: { code: "host_permission_missing", url: refreshSnapshot.url, tabId: tabId }
             };
           }
         }
@@ -2658,11 +2712,14 @@ async function handleTool(toolName, args, sender, tabOverride) {
           return {
             status: "error",
             error: ToolErrorCode.NO_CONTEXT,
-            errorDetails: { code: "no_content_script" }
+            errorDetails: { code: "no_content_script", tabId: tabId }
           };
         }
+        var finalRefresh = await getTabSnapshot(tabId);
+        return buildNavigationResponse(tabId, finalRefresh || refreshSnapshot);
       }
-      return { status: "ok" };
+      var refreshSnapshotFinal = await getTabSnapshot(tabId);
+      return buildNavigationResponse(tabId, refreshSnapshotFinal);
     } catch (error) {
       return { status: "error", error: ToolErrorCode.REFRESH_FAILED };
     }

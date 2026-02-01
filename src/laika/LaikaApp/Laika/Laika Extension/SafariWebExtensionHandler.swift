@@ -1179,6 +1179,12 @@ Missing sources to add:
         if let captureError = record.captureError, !captureError.isEmpty {
             payload["captureError"] = captureError
         }
+        if let captureJobStatus = record.captureJobStatus {
+            payload["captureJobStatus"] = captureJobStatus.rawValue
+        }
+        if let captureJobUpdatedAtMs = record.captureJobUpdatedAtMs {
+            payload["captureJobUpdatedAtMs"] = captureJobUpdatedAtMs
+        }
         return payload
     }
 
