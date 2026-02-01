@@ -100,7 +100,8 @@ public enum ToolSchemaValidator {
         case .sourceCapture:
             let valid = validate(arguments: arguments, required: ["collectionId": .string, "url": .string], optional: [
                 "mode": .string,
-                "maxChars": .number
+                "maxChars": .number,
+                "captureLinks": .bool
             ])
             if !valid || !hasNonEmptyString(arguments, key: "collectionId") || !hasNonEmptyString(arguments, key: "url") {
                 return false

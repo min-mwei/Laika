@@ -1262,6 +1262,7 @@ async function handleSourceCapture(args, sender, tabOverride) {
   }
   var mode = normalizeCaptureMode(args && args.mode);
   var maxChars = clampCaptureMaxChars(args && args.maxChars);
+  var captureLinks = !!(args && args.captureLinks === true);
   var captureTab = await resolveCaptureTab(safeUrl, sender, tabOverride);
   if (!captureTab || captureTab.status !== "ok") {
     return { status: "error", error: captureTab && captureTab.error ? captureTab.error : ToolErrorCode.NO_TARGET_TAB };
@@ -1275,7 +1276,7 @@ async function handleSourceCapture(args, sender, tabOverride) {
   try {
     captureResult = await sendTabMessageWithTimeout(
       tabId,
-      { type: "laika.capture", options: { mode: mode, maxChars: maxChars, captureLinks: true } },
+      { type: "laika.capture", options: { mode: mode, maxChars: maxChars, captureLinks: captureLinks } },
       { allowInject: true, waitForReady: true, timeoutMs: CAPTURE_MESSAGE_TIMEOUT_MS, attempts: 2 }
     );
   } catch (error) {

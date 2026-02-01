@@ -129,7 +129,8 @@
       },
       "optional": {
         "mode": "string",
-        "maxChars": "number"
+        "maxChars": "number",
+        "captureLinks": "bool"
       }
     }
   }

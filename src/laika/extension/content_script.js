@@ -3184,11 +3184,25 @@
     var captureResult = null;
     if (options && options.includeMarkdown) {
       try {
+        var captureMode = options.captureMode;
+        if (captureMode === "auto") {
+          captureMode = resolveAutoCaptureMode({
+            searchRoot: !!searchRoot,
+            listRoot: !!listRoot,
+            itemsCount: items.length,
+            primaryChars: primary && primary.text ? primary.text.length : 0,
+            textChars: text.length,
+            signals: signals
+          });
+        }
         captureResult = capturePage({
-          mode: options.captureMode,
+          mode: captureMode,
           maxChars: options.captureMaxChars,
           captureLinks: options.captureLinks
         });
+        if (debugInfo) {
+          debugInfo.captureMode = captureMode || options.captureMode || null;
+        }
       } catch (error) {
         captureResult = null;
       }
@@ -3232,6 +3246,25 @@
       }
     }
     return { status: "ok", observation: observeDom(options || {}) };
+  }
+
+  function resolveAutoCaptureMode(state) {
+    if (!state) {
+      return "article";
+    }
+    if (state.searchRoot || state.listRoot) {
+      return "list";
+    }
+    if (state.itemsCount >= 8 && state.primaryChars < 1400) {
+      return "list";
+    }
+    if (state.signals && state.signals.indexOf(ObservationSignal.SPARSE_TEXT) >= 0 && state.itemsCount > 0) {
+      return "list";
+    }
+    if (state.textChars < 800 && state.itemsCount >= 4) {
+      return "list";
+    }
+    return "article";
   }
 
   function highlightElement(element) {

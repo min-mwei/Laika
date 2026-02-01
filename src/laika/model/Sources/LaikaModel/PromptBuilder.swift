@@ -290,7 +290,7 @@ Tools:
         lines.append("# Task")
         lines.append(taskLine(for: request.input.task))
 
-        if request.input.task.name == "collection.answer" {
+        if shouldRequireCitationsBlock(request: request) {
             lines.append("")
             lines.append("# Output Requirements")
             lines.append("End with a citations block containing one JSON object per source used:")
@@ -310,6 +310,15 @@ Tools:
             }
         }
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func shouldRequireCitationsBlock(request: LLMCPRequest) -> Bool {
+        guard request.output.format == "markdown" else {
+            return false
+        }
+        return request.context.documents.contains { document in
+            document.kind == "collection.source.v1" || document.kind == "collection.index.v1"
+        }
     }
 
     static func userPrompt(request: LLMCPRequest, runId: String? = nil, step: Int? = nil, maxSteps: Int? = nil) -> String {

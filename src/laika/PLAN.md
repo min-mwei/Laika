@@ -232,6 +232,15 @@ Immediate P0 actions (this iteration):
 - **Markdown postprocess module + tests (done):** move post-process helpers to a shared module and add unit tests.
 - **Fixture-based capture tests (done):** add a Playwright-based harness that runs capture on HTML fixtures and asserts key content is preserved.
 
+### Feedback integration (2026-02-01)
+
+Immediate P0 actions (this iteration):
+- **Citations block reachability (done):** require the `---CITATIONS---` block whenever a collection-scoped markdown answer is requested (not just `collection.answer`), and add a unit test that exercises the prompt + parser.
+- **Auto capture mode (done):** when `captureMode="auto"` and markdown is requested, pick list/article mode based on the already-computed observation shape before running Readability.
+- **Optional link extraction (done):** default `source.capture` to `captureLinks=false` and only enable when explicitly requested.
+- **Long-page coverage test (done):** add a fixture assertion that fails under head+tail truncation and passes under head+mid+tail sampling.
+- **Plan consistency (done):** update “Capture limits” to reflect the actual sampling/marker behavior for content-script capture vs fallback.
+
 ### Persistence boundaries (source of truth)
 
 P0 decision: **native SQLite is the source of truth** for user data.
@@ -271,8 +280,13 @@ Indexing (SQLite):
 P0 capture contract:
 - Store bounded **Markdown** per source: `captureMarkdown`.
 - Default cap: `maxMarkdownChars = 24_000` (tunable).
-- Truncation strategy: keep head + tail and insert an explicit truncation marker:
-  - `...\\n\\n[Truncated: captured first N chars and last M chars]`
+- Truncation strategy (content-script capture):
+  - Sample **head + evenly-spaced mid chunks + tail** within the budget.
+  - Append a generic marker that does **not** imply first/last coverage:
+    - `[Truncated: captured partial content]`
+- Fallback truncation (background observe fallback):
+  - Keep head + tail and insert:
+    - `...\\n\\n[Truncated: captured first N chars and last M chars]`
 - Optional chunking (if needed for large sources):
   - `chunkSize = 8_000`, `maxChunks = 6` (stored as separate rows or a side table).
 

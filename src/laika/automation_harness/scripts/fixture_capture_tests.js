@@ -16,6 +16,10 @@ const FIXTURES = [
   {
     file: "techmeme_maia_thread.html",
     expects: ["Maia 200"]
+  },
+  {
+    file: "long_page_fixture.html",
+    expects: ["HEAD SENTINEL UNIQUE", "MIDPOINT SENTINEL UNIQUE", "TAIL SENTINEL UNIQUE"]
   }
 ];
 

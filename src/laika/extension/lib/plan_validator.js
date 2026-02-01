@@ -62,7 +62,7 @@
     "collection.list_sources": { required: { collectionId: "string" }, optional: {} },
     "source.capture": {
       required: { collectionId: "string", url: "string" },
-      optional: { mode: "string", maxChars: "number" }
+      optional: { mode: "string", maxChars: "number", captureLinks: "bool" }
     },
     "source.refresh": { required: { sourceId: "string" }, optional: {} },
     "transform.list_types": { required: {}, optional: {} },
